@@ -3,6 +3,7 @@
 #include "..\core\Config.h"
 #include "..\core\I18n.h"
 #include "..\core\ShellUtils.h"
+#include "..\core\DropTarget.h"
 
 static const wchar_t* LINKSBAR_CLASS = L"NeoMDIE_LinksBar";
 
@@ -10,6 +11,11 @@ LinksBar::LinksBar() {
 }
 
 LinksBar::~LinksBar() {
+    if (m_pDropTarget && m_hwnd) {
+        RevokeDragDrop(m_hwnd);
+        m_pDropTarget->Release();
+        m_pDropTarget = nullptr;
+    }
 }
 
 HWND LinksBar::Create(HWND hwndParent, int id) {
@@ -29,6 +35,19 @@ HWND LinksBar::Create(HWND hwndParent, int id) {
         0, 0, 800, 28,
         hwndParent, (HMENU)(INT_PTR)id, hInst, this
     );
+
+    DragAcceptFiles(m_hwnd, TRUE);
+
+    m_pDropTarget = new DropTarget(m_hwnd, [](POINT, bool& outSub) -> std::wstring {
+        outSub = false;
+        return L"";
+    });
+    m_pDropTarget->onFilesDropped = [this](const std::wstring&, const std::vector<std::wstring>& files, bool) {
+        for (const auto& f : files) {
+            AddLink(L"", f);
+        }
+    };
+    RegisterDragDrop(m_hwnd, m_pDropTarget);
 
     LoadLinks();
     return m_hwnd;
@@ -182,30 +201,22 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             curX += itemW + Theme::Get().Scale(4, hwnd);
         }
 
-        // Draw [+] add link button
-        int addW = Theme::Get().Scale(26, hwnd);
-        m_btnAddRect = { curX, Theme::Get().Scale(2, hwnd), curX + addW, rc.bottom - Theme::Get().Scale(3, hwnd) };
-        if (m_hoverAdd) {
-            HBRUSH hbrHover = Theme::Get().BrushHover();
-            HPEN hPen = Theme::Get().PenBorder();
-            HGDIOBJ oldBr = SelectObject(hdc, hbrHover);
-            HGDIOBJ oldP = SelectObject(hdc, hPen);
-            RoundRect(hdc, m_btnAddRect.left, m_btnAddRect.top, m_btnAddRect.right, m_btnAddRect.bottom, 4, 4);
-            SelectObject(hdc, oldP);
-            SelectObject(hdc, oldBr);
-        }
-        HFONT hMdlFont = CreateFontW(-Theme::Get().Scale(15, hwnd), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                                     L"Segoe MDL2 Assets");
-        HGDIOBJ oldMdl = SelectObject(hdc, hMdlFont);
-        SetTextColor(hdc, Theme::Get().ClrAccent());
-        DrawTextW(hdc, L"\uE710", -1, &m_btnAddRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        SelectObject(hdc, oldMdl);
-        DeleteObject(hMdlFont);
-
         SelectObject(hdc, oldFont);
         EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_DROPFILES: {
+        HDROP hDrop = (HDROP)wParam;
+        UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+        for (UINT i = 0; i < count; ++i) {
+            wchar_t filePath[MAX_PATH];
+            if (DragQueryFileW(hDrop, i, filePath, MAX_PATH)) {
+                AddLink(L"", filePath);
+            }
+        }
+        DragFinish(hDrop);
+        InvalidateRect(hwnd, nullptr, TRUE);
         return 0;
     }
 
@@ -221,11 +232,8 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
         }
 
-        bool newHoverAdd = PtInRect(&m_btnAddRect, { x, y }) != FALSE;
-
-        if (newHover != m_hoverIndex || newHoverAdd != m_hoverAdd) {
+        if (newHover != m_hoverIndex) {
             m_hoverIndex = newHover;
-            m_hoverAdd = newHoverAdd;
             InvalidateRect(hwnd, nullptr, FALSE);
 
             TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
@@ -236,7 +244,6 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     case WM_MOUSELEAVE: {
         m_hoverIndex = -1;
-        m_hoverAdd = false;
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
@@ -254,12 +261,6 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
                 return 0;
             }
-        }
-
-        if (PtInRect(&m_btnAddRect, { x, y })) {
-            // Trigger add current
-            SendMessageW(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(9901, 0), 0);
-            return 0;
         }
         return 0;
     }

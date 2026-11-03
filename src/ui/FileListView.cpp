@@ -859,6 +859,17 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         pThis->OnItemRightClicked(ptScreen);
         return 0;
     }
+    case WM_XBUTTONUP: {
+        WORD btn = GET_XBUTTON_WPARAM(wParam);
+        if (btn == XBUTTON1) {
+            pThis->GoBack();
+            return TRUE;
+        } else if (btn == XBUTTON2) {
+            pThis->GoForward();
+            return TRUE;
+        }
+        break;
+    }
     case WM_KEYDOWN: {
         bool ctrl = (GetKeyState(VK_CONTROL) < 0);
         bool shift = (GetKeyState(VK_SHIFT) < 0);

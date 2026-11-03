@@ -231,92 +231,28 @@ void MainWindow::BuildMenu() {
                 ID_VIEW_CALC_FOLDER_SIZE, I18n::Get().T(StringId::MenuCalcFolderSize));
     AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hViewMenu, I18n::Get().T(StringId::MenuView));
 
-    // 4. 收藏 (A) Favorites Menu
-    HMENU hFavMenu = CreatePopupMenu();
-    AppendMenuW(hFavMenu, MF_STRING, ID_FAVORITES_ADD, I18n::Get().T(StringId::MenuAddFavorites));
-    AppendMenuW(hFavMenu, MF_STRING, ID_FAVORITES_MANAGE, I18n::Get().T(StringId::MenuManageFavorites));
-    AppendMenuW(hFavMenu, MF_SEPARATOR, 0, nullptr);
+    // 4. 工具 (T) Tools Menu
+    HMENU hToolsMenu = CreatePopupMenu();
+    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_OPEN_CMD, isZh ? L"打开命令行 CMD(&C)\tCtrl+Shift+C" : L"Command Prompt CMD(&C)\tCtrl+Shift+C");
+    AppendMenuW(hToolsMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_SETTINGS, isZh ? L"选项与设置(&S)..." : L"Options & Settings(&S)...");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hToolsMenu, I18n::Get().T(StringId::MenuTools));
 
-    AppendMenuW(hFavMenu, MF_STRING, ID_FAV_THIS_PC, I18n::Get().T(StringId::ThisPC));
-    AppendMenuW(hFavMenu, MF_STRING, ID_FAV_DESKTOP, I18n::Get().T(StringId::Desktop));
-    AppendMenuW(hFavMenu, MF_STRING, ID_FAV_DOWNLOADS, I18n::Get().T(StringId::Downloads));
-    AppendMenuW(hFavMenu, MF_STRING, ID_FAV_DOCUMENTS, I18n::Get().T(StringId::Documents));
-    AppendMenuW(hFavMenu, MF_STRING, ID_FAV_PICTURES, I18n::Get().T(StringId::Pictures));
-    AppendMenuW(hFavMenu, MF_STRING, ID_FAV_USER_PROFILE, isZh ? L"用户主目录(&U)" : L"User Profile(&U)");
-    AppendMenuW(hFavMenu, MF_SEPARATOR, 0, nullptr);
-
-    HMENU hDrivesSubmenu = CreatePopupMenu();
-    DWORD driveMask = GetLogicalDrives();
-    m_menuDrives.clear();
-    for (int i = 0; i < 26; ++i) {
-        if (driveMask & (1 << i)) {
-            wchar_t rootPath[4] = { (wchar_t)(L'A' + i), L':', L'\\', 0 };
-            wchar_t volName[MAX_PATH] = { 0 };
-            GetVolumeInformationW(rootPath, volName, MAX_PATH, nullptr, nullptr, nullptr, nullptr, 0);
-            std::wstring label = rootPath;
-            if (volName[0]) {
-                label = std::wstring(volName) + L" (" + rootPath[0] + L":)";
-            } else {
-                UINT type = GetDriveTypeW(rootPath);
-                if (type == DRIVE_CDROM) label = isZh ? (L"光驱 (" + std::wstring(1, rootPath[0]) + L":)") : (L"CD/DVD Drive (" + std::wstring(1, rootPath[0]) + L":)");
-                else if (type == DRIVE_REMOVABLE) label = isZh ? (L"可移动磁盘 (" + std::wstring(1, rootPath[0]) + L":)") : (L"Removable Disk (" + std::wstring(1, rootPath[0]) + L":)");
-                else label = isZh ? (L"本地磁盘 (" + std::wstring(1, rootPath[0]) + L":)") : (L"Local Disk (" + std::wstring(1, rootPath[0]) + L":)");
-            }
-            UINT driveCmdId = ID_FAV_DRIVE_START + (UINT)m_menuDrives.size();
-            m_menuDrives.push_back(rootPath);
-            AppendMenuW(hDrivesSubmenu, MF_STRING, driveCmdId, label.c_str());
-        }
-    }
-    AppendMenuW(hFavMenu, MF_POPUP, (UINT_PTR)hDrivesSubmenu, isZh ? L"本地磁盘与驱动器(&D)" : L"Drives & Volumes(&D)");
-
-    m_menuFavLinks.clear();
-    const auto& links = m_linksBar.GetLinks();
-    if (!links.empty()) {
-        AppendMenuW(hFavMenu, MF_SEPARATOR, 0, nullptr);
-        for (const auto& lk : links) {
-            UINT favCmdId = ID_FAV_ITEM_START + (UINT)m_menuFavLinks.size();
-            m_menuFavLinks.push_back(lk.path);
-            AppendMenuW(hFavMenu, MF_STRING, favCmdId, lk.name.c_str());
-        }
-    }
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hFavMenu, I18n::Get().T(StringId::MenuFavorites));
-
-    // 5. 转到 (G) Go Menu
-    HMENU hGoMenu = CreatePopupMenu();
-    AppendMenuW(hGoMenu, MF_STRING, ID_NAV_BACK, I18n::Get().T(StringId::MenuBack));
-    AppendMenuW(hGoMenu, MF_STRING, ID_NAV_FORWARD, I18n::Get().T(StringId::MenuForward));
-    AppendMenuW(hGoMenu, MF_STRING, ID_NAV_UP, I18n::Get().T(StringId::MenuUp));
-    AppendMenuW(hGoMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hGoMenu, MF_STRING, ID_NAV_HOME, I18n::Get().T(StringId::MenuAddressBar));
-    AppendMenuW(hGoMenu, MF_SEPARATOR, 0, nullptr);
-
-    HMENU hHistSubmenu = CreatePopupMenu();
-    if (m_historyPaths.empty()) {
-        AppendMenuW(hHistSubmenu, MF_STRING | MF_GRAYED, 0, isZh ? L"(无历史记录)" : L"(No History)");
-    } else {
-        for (size_t i = 0; i < m_historyPaths.size(); ++i) {
-            UINT histCmdId = ID_HISTORY_START + (UINT)i;
-            AppendMenuW(hHistSubmenu, MF_STRING, histCmdId, m_historyPaths[i].c_str());
-        }
-    }
-    AppendMenuW(hGoMenu, MF_POPUP, (UINT_PTR)hHistSubmenu, isZh ? L"历史记录(&H)" : L"History(&H)");
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hGoMenu, I18n::Get().T(StringId::MenuGo));
-
-    // 6. 标签页 (B) Tabs Menu
-    HMENU hTabsMenu = CreatePopupMenu();
-    AppendMenuW(hTabsMenu, MF_STRING, ID_FILE_NEW_TAB, I18n::Get().T(StringId::MenuNewTab));
-    AppendMenuW(hTabsMenu, MF_STRING, ID_FILE_DUPLICATE_TAB, I18n::Get().T(StringId::MenuDuplicateTab));
-    AppendMenuW(hTabsMenu, MF_STRING | (isPinned ? MF_CHECKED : MF_UNCHECKED),
-                ID_FILE_PIN_TAB, isPinned ? I18n::Get().T(StringId::MenuUnpinTab) : I18n::Get().T(StringId::MenuPinTab));
-    AppendMenuW(hTabsMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hTabsMenu, MF_STRING, ID_FILE_REOPEN_CLOSED_TAB, I18n::Get().T(StringId::MenuReopenClosedTab));
-    AppendMenuW(hTabsMenu, MF_STRING, ID_FILE_CLOSE_TAB, I18n::Get().T(StringId::MenuCloseTab));
-    AppendMenuW(hTabsMenu, MF_STRING, ID_FILE_CLOSE_OTHER_TABS, I18n::Get().T(StringId::MenuCloseOtherTabs));
-    AppendMenuW(hTabsMenu, MF_STRING, ID_FILE_CLOSE_ALL_TABS, I18n::Get().T(StringId::MenuCloseAllTabs));
-    AppendMenuW(hTabsMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hTabsMenu, MF_STRING, ID_TAB_NEXT, I18n::Get().T(StringId::MenuNextTab));
-    AppendMenuW(hTabsMenu, MF_STRING, ID_TAB_PREV, I18n::Get().T(StringId::MenuPrevTab));
-    AppendMenuW(hTabsMenu, MF_SEPARATOR, 0, nullptr);
+    // 5. 窗口 (W) Window Menu
+    HMENU hWindowMenu = CreatePopupMenu();
+    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_NEW_TAB, isZh ? L"新建标签页(&T)\tCtrl+T" : L"New Tab(&T)\tCtrl+T");
+    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_DUPLICATE_TAB, isZh ? L"复制当前标签页(&D)\tCtrl+K" : L"Duplicate Tab(&D)\tCtrl+K");
+    AppendMenuW(hWindowMenu, MF_STRING | (isPinned ? MF_CHECKED : MF_UNCHECKED),
+                ID_FILE_PIN_TAB, isPinned ? (isZh ? L"解锁当前标签页(&P)" : L"Unpin Tab(&P)") : (isZh ? L"锁定当前标签页(&P)" : L"Pin Tab(&P)"));
+    AppendMenuW(hWindowMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_REOPEN_CLOSED_TAB, isZh ? L"恢复关闭的标签页(&R)\tCtrl+Shift+T" : L"Reopen Closed Tab(&R)\tCtrl+Shift+T");
+    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_CLOSE_TAB, isZh ? L"关闭当前标签页(&W)\tCtrl+W" : L"Close Current Tab(&W)\tCtrl+W");
+    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_CLOSE_OTHER_TABS, isZh ? L"关闭其他标签页(&O)" : L"Close Other Tabs(&O)");
+    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_CLOSE_ALL_TABS, isZh ? L"关闭所有标签页(&A)" : L"Close All Tabs(&A)");
+    AppendMenuW(hWindowMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hWindowMenu, MF_STRING, ID_TAB_NEXT, isZh ? L"下一个标签页(&N)\tCtrl+Tab" : L"Next Tab(&N)\tCtrl+Tab");
+    AppendMenuW(hWindowMenu, MF_STRING, ID_TAB_PREV, isZh ? L"上一个标签页(&P)\tCtrl+Shift+Tab" : L"Previous Tab(&P)\tCtrl+Shift+Tab");
+    AppendMenuW(hWindowMenu, MF_SEPARATOR, 0, nullptr);
 
     const auto& allTabs = m_tabBar.GetTabs();
     int activeIdx = m_tabBar.GetActiveIndex();
@@ -324,32 +260,16 @@ void MainWindow::BuildMenu() {
         UINT tabCmdId = ID_TAB_ITEM_START + (UINT)i;
         std::wstring title = allTabs[i].title.empty() ? allTabs[i].path : allTabs[i].title;
         std::wstring itemLabel = std::to_wstring(i + 1) + L" " + title;
-        AppendMenuW(hTabsMenu, MF_STRING | (i == (size_t)activeIdx ? MF_CHECKED : MF_UNCHECKED), tabCmdId, itemLabel.c_str());
+        AppendMenuW(hWindowMenu, MF_STRING | (i == (size_t)activeIdx ? MF_CHECKED : MF_UNCHECKED), tabCmdId, itemLabel.c_str());
     }
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hTabsMenu, I18n::Get().T(StringId::MenuTabs));
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hWindowMenu, isZh ? L"窗口(&W)" : L"Window(&W)");
 
-    // 7. 工具 (T) Tools Menu
-    HMENU hToolsMenu = CreatePopupMenu();
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_OPEN_TERMINAL, I18n::Get().T(StringId::MenuTerminal));
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_OPEN_POWERSHELL, I18n::Get().T(StringId::MenuPowerShell));
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_OPEN_CMD, I18n::Get().T(StringId::MenuCmd));
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_OPEN_VSCODE, I18n::Get().T(StringId::MenuVSCode));
-    AppendMenuW(hToolsMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_RELOAD_SCRIPTS, I18n::Get().T(StringId::MenuReloadScripts));
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_SCRIPT_CONSOLE, I18n::Get().T(StringId::MenuScriptConsole));
-    AppendMenuW(hToolsMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_SETTINGS, isZh ? L"选项与设置(&S)..." : L"Options & Settings(&S)...");
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hToolsMenu, I18n::Get().T(StringId::MenuTools));
-
-    // 8. 帮助 (H) Help Menu
+    // 6. 帮助 (H) Help Menu
     HMENU hHelpMenu = CreatePopupMenu();
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_SHORTCUTS, I18n::Get().T(StringId::MenuHelpShortcuts));
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_GESTURES, I18n::Get().T(StringId::MenuHelpGestures));
+    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_SHORTCUTS, isZh ? L"快捷键帮助(&K)" : L"Keyboard Shortcuts(&K)");
+    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_GESTURES, isZh ? L"鼠标手势指南(&G)" : L"Mouse Gestures(&G)");
     AppendMenuW(hHelpMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_MDIE_HOMEPAGE, I18n::Get().T(StringId::MenuHelpMdieHome));
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_GITHUB, I18n::Get().T(StringId::MenuHelpGitHub));
-    AppendMenuW(hHelpMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_ABOUT, I18n::Get().T(StringId::MenuAbout));
+    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_ABOUT, isZh ? L"关于 NeoMDIE(&A)" : L"About NeoMDIE(&A)");
     AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hHelpMenu, I18n::Get().T(StringId::MenuHelp));
 
     SetMenu(m_hwnd, hMenuBar);
@@ -392,9 +312,9 @@ void MainWindow::CreateControls() {
     m_hwndBtnUp      = createBtn(L"\uE74A", IDC_BTN_UP);
     m_hwndBtnRefresh = createBtn(L"\uE72C", IDC_BTN_REFRESH);
     m_hwndBtnNewTab  = createBtn(L"\uE710", IDC_BTN_NEWTAB);
-    m_hwndBtnTree    = createBtn(L"\uE8A7", IDC_BTN_TREE);
-    m_hwndBtnSplit   = createBtn(L"\uE740", IDC_BTN_SPLIT);
-    m_hwndBtnPreview = createBtn(L"\uE896", IDC_BTN_PREVIEW);
+    m_hwndBtnTree    = createBtn(L"\uE8A9", IDC_BTN_TREE);
+    m_hwndBtnSplit   = createBtn(L"\uE784", IDC_BTN_SPLIT);
+    m_hwndBtnPreview = createBtn(L"\uE8FF", IDC_BTN_PREVIEW);
 
     // Tooltips
     m_hwndTooltip = CreateWindowExW(
@@ -676,6 +596,12 @@ void MainWindow::CreateControls() {
             }
         }
     };
+
+    m_multiPane.onLayoutChanged = [this](PaneLayout layout) {
+        Config::Get().paneLayout = (int)layout;
+        BuildMenu();
+        if (m_hwndBtnSplit) InvalidateRect(m_hwndBtnSplit, nullptr, TRUE);
+    };
 }
 
 void MainWindow::LayoutAll() {
@@ -868,6 +794,7 @@ void MainWindow::SetLayout(PaneLayout layout) {
     Config::Get().Save();
     BuildMenu();
     LayoutAll();
+    if (m_hwndBtnSplit) InvalidateRect(m_hwndBtnSplit, nullptr, TRUE);
 }
 
 void MainWindow::ShowLayoutMenu(POINT ptScreen) {
@@ -904,6 +831,7 @@ void MainWindow::ToggleTree() {
     ShowWindow(m_tree.GetHwnd(), m_treeVisible ? SW_SHOW : SW_HIDE);
     BuildMenu();
     LayoutAll();
+    if (m_hwndBtnTree) InvalidateRect(m_hwndBtnTree, nullptr, TRUE);
 }
 
 void MainWindow::ToggleLinksBar() {
@@ -949,6 +877,7 @@ void MainWindow::TogglePreview() {
     }
     BuildMenu();
     LayoutAll();
+    if (m_hwndBtnPreview) InvalidateRect(m_hwndBtnPreview, nullptr, TRUE);
 }
 
 void MainWindow::OnCommand(UINT cmdId) {
@@ -1350,6 +1279,65 @@ void MainWindow::OnCommand(UINT cmdId) {
     }
 }
 
+void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
+    HDC hdc = pdis->hDC;
+    RECT rc = pdis->rcItem;
+
+    bool isHot = s_btnHoverMap[pdis->hwndItem];
+    bool isSelected = (pdis->itemState & ODS_SELECTED) != 0;
+    bool isDisabled = (pdis->itemState & ODS_DISABLED) != 0;
+    UINT btnId = pdis->CtlID;
+
+    bool isActiveToggle = false;
+    if (btnId == IDC_BTN_TREE && m_treeVisible) isActiveToggle = true;
+    else if (btnId == IDC_BTN_SPLIT && (m_multiPane.GetLayout() != PaneLayout::Single)) isActiveToggle = true;
+    else if (btnId == IDC_BTN_PREVIEW && m_previewVisible) isActiveToggle = true;
+
+    FillRect(hdc, &rc, Theme::Get().BrushSurface());
+
+    RECT rcBtn = { rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1 };
+    if (isSelected) {
+        HBRUSH hbrPressed = Theme::Get().BrushSelected();
+        HPEN hPen = Theme::Get().PenBorder();
+        HGDIOBJ oldBrush = SelectObject(hdc, hbrPressed);
+        HGDIOBJ oldPen = SelectObject(hdc, hPen);
+        RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, 6, 6);
+        SelectObject(hdc, oldPen);
+        SelectObject(hdc, oldBrush);
+    } else if (isActiveToggle || isHot) {
+        HBRUSH hbrHover = isActiveToggle ? Theme::Get().BrushSelected() : Theme::Get().BrushHover();
+        HPEN hPen = isActiveToggle ? CreatePen(PS_SOLID, 1, Theme::Get().ClrAccent()) : Theme::Get().PenBorder();
+        HGDIOBJ oldBrush = SelectObject(hdc, hbrHover);
+        HGDIOBJ oldPen = SelectObject(hdc, hPen);
+        RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, 6, 6);
+        SelectObject(hdc, oldPen);
+        SelectObject(hdc, oldBrush);
+        if (isActiveToggle) DeleteObject(hPen);
+    }
+
+    HFONT hIconFont = CreateFontW(-Theme::Get().Scale(16, m_hwnd), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                                  L"Segoe MDL2 Assets");
+    HGDIOBJ oldFont = SelectObject(hdc, hIconFont);
+    SetBkMode(hdc, TRANSPARENT);
+
+    COLORREF textColor = Theme::Get().ClrTextPrimary();
+    if (isDisabled) {
+        textColor = Theme::Get().ClrTextSecondary();
+    } else if (isActiveToggle) {
+        textColor = Theme::Get().ClrAccent();
+    }
+    SetTextColor(hdc, textColor);
+
+    wchar_t text[64] = { 0 };
+    GetWindowTextW(pdis->hwndItem, text, 64);
+    DrawTextW(hdc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    SelectObject(hdc, oldFont);
+    DeleteObject(hIconFont);
+}
+
 LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_PAINT: {
@@ -1438,47 +1426,7 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT* pdis = (DRAWITEMSTRUCT*)lParam;
         if (pdis->CtlType == ODT_BUTTON) {
-            HDC hdc = pdis->hDC;
-            RECT rc = pdis->rcItem;
-
-            bool isHot = s_btnHoverMap[pdis->hwndItem];
-            bool isSelected = (pdis->itemState & ODS_SELECTED) != 0;
-            bool isDisabled = (pdis->itemState & ODS_DISABLED) != 0;
-
-            FillRect(hdc, &rc, Theme::Get().BrushSurface());
-
-            if (isSelected) {
-                HBRUSH hbrPressed = Theme::Get().BrushSelected();
-                HPEN hPen = Theme::Get().PenBorder();
-                HGDIOBJ oldBrush = SelectObject(hdc, hbrPressed);
-                HGDIOBJ oldPen = SelectObject(hdc, hPen);
-                RoundRect(hdc, rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1, 6, 6);
-                SelectObject(hdc, oldPen);
-                SelectObject(hdc, oldBrush);
-            } else if (isHot) {
-                HBRUSH hbrHover = Theme::Get().BrushHover();
-                HPEN hPen = Theme::Get().PenBorder();
-                HGDIOBJ oldBrush = SelectObject(hdc, hbrHover);
-                HGDIOBJ oldPen = SelectObject(hdc, hPen);
-                RoundRect(hdc, rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1, 6, 6);
-                SelectObject(hdc, oldPen);
-                SelectObject(hdc, oldBrush);
-            }
-
-            HFONT hIconFont = CreateFontW(-Theme::Get().Scale(16, m_hwnd), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                          CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                                          L"Segoe MDL2 Assets");
-            HGDIOBJ oldFont = SelectObject(hdc, hIconFont);
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, isDisabled ? Theme::Get().ClrTextSecondary() : Theme::Get().ClrTextPrimary());
-
-            wchar_t text[64] = { 0 };
-            GetWindowTextW(pdis->hwndItem, text, 64);
-            DrawTextW(hdc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-            SelectObject(hdc, oldFont);
-            DeleteObject(hIconFont);
+            DrawToolbarButton(pdis);
             return TRUE;
         }
         break;

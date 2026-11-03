@@ -33,7 +33,6 @@ private:
     HWND m_hwnd = nullptr;
     std::vector<LinkItem> m_links;
     std::vector<RECT> m_itemRects;
-    RECT m_btnAddRect = { 0, 0, 0, 0 };
     int m_hoverIndex = -1;
-    bool m_hoverAdd = false;
+    class DropTarget* m_pDropTarget = nullptr;
 };

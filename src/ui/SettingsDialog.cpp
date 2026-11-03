@@ -11,8 +11,8 @@ static std::function<void()> s_onSettingsChanged;
 
 static HWND s_hTab = nullptr;
 
-// 9 Pages
-static std::vector<HWND> s_pageControls[9];
+// 8 Pages
+static std::vector<HWND> s_pageControls[8];
 
 // Page 0: General
 static HWND s_hLangCombo = nullptr;
@@ -121,6 +121,10 @@ void SettingsDialog::Show(HWND hwndParent, std::function<void()> onSettingsChang
   Theme::Get().ApplyToWindow(hwndDlg);
   CreateControls(hwndDlg);
 
+  int initialTab = std::clamp(initialCategory, 0, 7);
+  TabCtrl_SetCurSel(s_hTab, initialTab);
+  SwitchTab(hwndDlg, initialTab);
+
   EnableWindow(hwndParent, FALSE);
   ShowWindow(hwndDlg, SW_SHOW);
   UpdateWindow(hwndDlg);
@@ -142,7 +146,7 @@ void SettingsDialog::Show(HWND hwndParent, std::function<void()> onSettingsChang
 }
 
 void SettingsDialog::SwitchTab(HWND hwnd, int tabIndex) {
-  for (int p = 0; p < 9; ++p) {
+  for (int p = 0; p < 8; ++p) {
     for (HWND hCtrl : s_pageControls[p]) {
       ShowWindow(hCtrl, (p == tabIndex) ? SW_SHOW : SW_HIDE);
     }
@@ -206,7 +210,7 @@ static LRESULT CALLBACK DarkHeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wPara
 }
 
 void SettingsDialog::CreateControls(HWND hwnd) {
-  for (int p = 0; p < 9; ++p) {
+  for (int p = 0; p < 8; ++p) {
     s_pageControls[p].clear();
   }
 
@@ -232,9 +236,9 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   SendMessageW(s_hTab, WM_SETFONT, (WPARAM)hFont, TRUE);
 
   const wchar_t* tabTitlesZh[] = { L"常规", L"窗口与分屏", L"分页标签", L"侧边栏与树", L"视图与列表", L"搜索过滤", L"鼠标手势", L"外观工具栏" };
-  const wchar_t* tabTitlesEn[] = { L"General", L"Window Actions", L"Window & Split", L"Tabs", L"Sidebar & Tree", L"View & List", L"Search & Filter", L"Gestures", L"Appearance" };
+  const wchar_t* tabTitlesEn[] = { L"General", L"Window & Split", L"Tabs", L"Sidebar & Tree", L"View & List", L"Search & Filter", L"Gestures", L"Appearance" };
 
-  for (int i = 0; i < 9; ++i) {
+  for (int i = 0; i < 8; ++i) {
     TCITEMW tie = { 0 };
     tie.mask = TCIF_TEXT;
     tie.pszText = (LPWSTR)(zh ? tabTitlesZh[i] : tabTitlesEn[i]);

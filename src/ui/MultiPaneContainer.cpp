@@ -206,6 +206,9 @@ void MultiPaneContainer::SetLayout(PaneLayout layout) {
 
   LayoutChildren();
   InvalidateRect(m_hwnd, nullptr, TRUE);
+  if (onLayoutChanged) {
+    onLayoutChanged(m_layout);
+  }
 }
 
 void MultiPaneContainer::UpdateLayout(int x, int y, int width, int height) {
