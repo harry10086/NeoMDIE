@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generator: Adobe Illustrator 17.0.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" id="图层_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 width="256px" height="256px" viewBox="0 0 256 256" enable-background="new 0 0 256 256" xml:space="preserve">
+<path fill="#7C2D12" fill-opacity="0.45" d="M125,48h52c6,0,10,4,12,10l6,18h-76L125,48z"/>
+<linearGradient id="SVGID_1_" gradientUnits="userSpaceOnUse" x1="-176.7193" y1="522.8779" x2="-175.7193" y2="521.8779" gradientTransform="matrix(208 0 0 -184 36774.8398 96263.5391)">
+	<stop  offset="0" style="stop-color:#FBBF24"/>
+	<stop  offset="1" style="stop-color:#EA580C"/>
+</linearGradient>
+<path fill="url(#SVGID_1_)" d="M44,48h72c6,0,10,4,12,10l6,14h74c13,0,24,11,24,24v112c0,13-11,24-24,24H48c-13,0-24-11-24-24V68
+	C24,55,35,48,44,48z"/>
+<path fill="none" stroke="#FFFFFF" stroke-width="2.5" stroke-linecap="round" stroke-opacity="0.35" d="M46,50h69c5,0,9,3,11,8
+	l6,14h74"/>
+<g id="nm-origami">
+	<path fill="#00F0FF" fill-opacity="0.75" stroke="#00F0FF" stroke-width="0.5" stroke-linejoin="round" d="M46.25,186.204
+		l23.094-76.642c2.099-6.387,10.497-8.516,18.895,0l33.591,76.642h-20.994l-16.796-40.45l-18.895,40.45H46.25z"/>
+	<path fill="#FFFFFF" fill-opacity="0.45" d="M105.166,186.5l12.434-51.104l12.114,26.016L116.057,186.5H105.166z"/>
+	<path fill="#FFFFFF" stroke="#FFFFFF" stroke-width="0.5" stroke-linejoin="round" d="M116.407,186.204l18.895-76.642
+		c2.099-6.387,10.497-6.387,14.696,0l14.696,38.321l14.696-38.321c4.199-6.387,12.597-6.387,14.696,0l10.497,76.642h-16.796
+		l-6.298-51.095l-11.547,27.676h-10.497l-11.547-27.676l-10.497,51.095H116.407z"/>
+</g>
+</svg>

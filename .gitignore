@@ -66,3 +66,8 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# NeoMDIE runtime & intermediates
+bin/*.ini
+*.res
+tools/*.exe

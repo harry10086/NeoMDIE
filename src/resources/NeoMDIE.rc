@@ -1,0 +1,152 @@
+#pragma code_page(65001)
+#include <windows.h>
+#include "..\resource.h"
+
+// Icon
+IDI_APP_ICON            ICON                    "NeoMDIE.ico"
+
+// Manifest
+1                       RT_MANIFEST             "NeoMDIE.manifest"
+
+// Accelerators
+IDR_MAIN_ACCEL ACCELERATORS
+BEGIN
+    "T",            ID_FILE_NEW_TAB,        VIRTKEY, CONTROL
+    "W",            ID_FILE_CLOSE_TAB,      VIRTKEY, CONTROL
+    "K",            ID_FILE_DUPLICATE_TAB,  VIRTKEY, CONTROL
+    "T",            ID_FILE_REOPEN_CLOSED_TAB, VIRTKEY, CONTROL, SHIFT
+    VK_TAB,         ID_TAB_NEXT,            VIRTKEY, CONTROL
+    VK_TAB,         ID_TAB_PREV,            VIRTKEY, CONTROL, SHIFT
+    "N",            ID_FILE_NEW_FOLDER,     VIRTKEY, CONTROL, SHIFT
+    VK_F5,          ID_VIEW_REFRESH,        VIRTKEY
+    "R",            ID_VIEW_REFRESH,        VIRTKEY, CONTROL
+    "E",            ID_VIEW_SPLIT_TOGGLE,   VIRTKEY, CONTROL
+    "1",            ID_VIEW_LAYOUT_1X1,     VIRTKEY, CONTROL
+    "2",            ID_VIEW_LAYOUT_1X2,     VIRTKEY, CONTROL
+    "3",            ID_VIEW_LAYOUT_2X1,     VIRTKEY, CONTROL
+    "4",            ID_VIEW_LAYOUT_2X2,     VIRTKEY, CONTROL
+    "5",            ID_VIEW_LAYOUT_1P2,     VIRTKEY, CONTROL
+    "P",            ID_VIEW_PREVIEW_TOGGLE, VIRTKEY, ALT
+    "F",            ID_VIEW_FILTER_FOCUS,   VIRTKEY, CONTROL
+    "L",            ID_VIEW_ADDRESS_FOCUS,  VIRTKEY, CONTROL
+    "D",            ID_VIEW_ADDRESS_FOCUS,  VIRTKEY, ALT
+    VK_F6,          ID_VIEW_ADDRESS_FOCUS,  VIRTKEY
+    VK_BACK,        ID_NAV_UP,              VIRTKEY, ALT
+    VK_LEFT,        ID_NAV_BACK,            VIRTKEY, ALT
+    VK_RIGHT,       ID_NAV_FORWARD,         VIRTKEY, ALT
+    VK_UP,          ID_NAV_UP,              VIRTKEY, ALT
+    "A",            ID_EDIT_SELECT_ALL,     VIRTKEY, CONTROL
+    "C",            ID_EDIT_COPY,           VIRTKEY, CONTROL
+    "X",            ID_EDIT_CUT,            VIRTKEY, CONTROL
+    "V",            ID_EDIT_PASTE,          VIRTKEY, CONTROL
+    "C",            ID_EDIT_COPY_PATH,      VIRTKEY, CONTROL, SHIFT
+    VK_DELETE,      ID_EDIT_DELETE,         VIRTKEY
+    VK_F2,          ID_EDIT_RENAME,         VIRTKEY
+    VK_OEM_3,       ID_TOOLS_OPEN_TERMINAL, VIRTKEY, CONTROL
+    VK_F12,         ID_TOOLS_SCRIPT_CONSOLE,VIRTKEY
+    VK_HOME,        ID_SCROLL_TOP,          VIRTKEY
+    VK_END,         ID_SCROLL_BOTTOM,       VIRTKEY
+    VK_PRIOR,       ID_SCROLL_PAGEUP,       VIRTKEY
+    VK_NEXT,        ID_SCROLL_PAGEDOWN,     VIRTKEY
+END
+
+// Menus
+IDC_NEOMDIE MENU
+BEGIN
+    POPUP "文件(&F)"
+    BEGIN
+        MENUITEM "新建标签页(&T)\tCtrl+T",              ID_FILE_NEW_TAB
+        MENUITEM "关闭当前标签页(&W)\tCtrl+W",          ID_FILE_CLOSE_TAB
+        MENUITEM "复制标签页(&D)\tCtrl+K",              ID_FILE_DUPLICATE_TAB
+        MENUITEM SEPARATOR
+        MENUITEM "新建文件夹(&N)\tCtrl+Shift+N",        ID_FILE_NEW_FOLDER
+        MENUITEM "新建文本文件(&M)",                     ID_FILE_NEW_FILE
+        MENUITEM SEPARATOR
+        MENUITEM "属性(&R)\tAlt+Enter",                 ID_FILE_PROPERTIES
+        MENUITEM SEPARATOR
+        MENUITEM "退出(&X)\tAlt+F4",                    ID_FILE_EXIT
+    END
+    POPUP "编辑(&E)"
+    BEGIN
+        MENUITEM "剪切(&T)\tCtrl+X",                    ID_EDIT_CUT
+        MENUITEM "复制(&C)\tCtrl+C",                    ID_EDIT_COPY
+        MENUITEM "粘贴(&P)\tCtrl+V",                    ID_EDIT_PASTE
+        MENUITEM "删除(&D)\tDel",                       ID_EDIT_DELETE
+        MENUITEM "重命名(&M)\tF2",                      ID_EDIT_RENAME
+        MENUITEM SEPARATOR
+        MENUITEM "全选(&A)\tCtrl+A",                    ID_EDIT_SELECT_ALL
+        MENUITEM "反向选择(&I)",                        ID_EDIT_INVERT_SELECTION
+        MENUITEM SEPARATOR
+        MENUITEM "复制完整路径(&Y)",                     ID_EDIT_COPY_PATH
+    END
+    POPUP "查看(&V)"
+    BEGIN
+        MENUITEM "刷新(&R)\tF5",                        ID_VIEW_REFRESH
+        MENUITEM SEPARATOR
+        MENUITEM "双栏分屏(&S)\tCtrl+E",                ID_VIEW_SPLIT_TOGGLE
+        MENUITEM "文件预览窗格(&P)\tAlt+P",              ID_VIEW_PREVIEW_TOGGLE
+        MENUITEM "即时过滤查找(&F)\tCtrl+F",            ID_VIEW_FILTER_FOCUS
+        MENUITEM SEPARATOR
+        MENUITEM "详细信息(&D)",                        ID_VIEW_DETAILS
+        MENUITEM "大图标(&G)",                          ID_VIEW_ICONS_LARGE
+        MENUITEM "小图标(&M)",                          ID_VIEW_ICONS_SMALL
+        MENUITEM "列表(&L)",                            ID_VIEW_LIST
+        MENUITEM "平铺(&T)",                            ID_VIEW_TILES
+        MENUITEM SEPARATOR
+        MENUITEM "显示隐藏文件(&H)",                    ID_VIEW_SHOW_HIDDEN
+        MENUITEM "后台计算文件夹大小(&S)",              ID_VIEW_CALC_FOLDER_SIZE
+    END
+    POPUP "转到(&G)"
+    BEGIN
+        MENUITEM "后退(&B)\tAlt+Left",                  ID_NAV_BACK
+        MENUITEM "前进(&F)\tAlt+Right",                 ID_NAV_FORWARD
+        MENUITEM "向上一级(&U)\tAlt+Up",                ID_NAV_UP
+        MENUITEM SEPARATOR
+        MENUITEM "转到地址栏(&L)\tCtrl+L",              ID_NAV_HOME
+    END
+    POPUP "工具(&T)"
+    BEGIN
+        MENUITEM "在此处打开 Windows Terminal(&W)\tCtrl+`", ID_TOOLS_OPEN_TERMINAL
+        MENUITEM "在此处打开 PowerShell(&P)",           ID_TOOLS_OPEN_POWERSHELL
+        MENUITEM "在此处打开命令提示符(&C)",             ID_TOOLS_OPEN_CMD
+        MENUITEM "在此处用 VS Code 打开(&V)",           ID_TOOLS_OPEN_VSCODE
+        MENUITEM SEPARATOR
+        MENUITEM "重新载入扩展脚本(&R)\tCtrl+Shift+R",   ID_TOOLS_RELOAD_SCRIPTS
+        MENUITEM "扩展脚本控制台(&O)\tF12",              ID_TOOLS_SCRIPT_CONSOLE
+        MENUITEM SEPARATOR
+        MENUITEM "选项与配置(&S)...",                   ID_TOOLS_SETTINGS
+    END
+    POPUP "帮助(&H)"
+    BEGIN
+        MENUITEM "关于 NeoMDIE(&A)...",                 ID_HELP_ABOUT
+    END
+END
+
+// Version Info
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS__WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName",      "NeoMDIE Open Source Project"
+            VALUE "FileDescription",  "NeoMDIE - Modern Lightweight Tabbed File Manager"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "NeoMDIE"
+            VALUE "OriginalFilename", "NeoMDIE.exe"
+            VALUE "ProductName",      "NeoMDIE"
+            VALUE "ProductVersion",   "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END

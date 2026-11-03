@@ -1,0 +1,10 @@
+Windows Registry Editor Version 5.00
+
+[-HKEY_CURRENT_USER\Software\Classes\Directory\shell\open]
+[-HKEY_CURRENT_USER\Software\Classes\Folder\shell\open]
+[-HKEY_CURRENT_USER\Software\Classes\Drive\shell\open]
+[-HKEY_CURRENT_USER\Software\Classes\CLSID\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}]
+[-HKEY_CURRENT_USER\Software\Classes\Directory\shell\open_NeoMDIE]
+[-HKEY_CURRENT_USER\Software\Classes\Folder\shell\open_NeoMDIE]
+[-HKEY_CURRENT_USER\Software\Classes\Drive\shell\open_NeoMDIE]
+
