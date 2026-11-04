@@ -125,10 +125,7 @@ void Config::Load() {
             int vAct = GetPrivateProfileIntW(secGestures, kAct, 0, m_iniPath.c_str());
 
             if (wcslen(vCode) > 0) {
-                std::wstring name = vName;
-                if (name == L"滚动到列表首端") name = L"滚动到列表顶部";
-                else if (name == L"滚动到列表末端") name = L"滚动到列表底部";
-                gestures.push_back({ Util::WideToUtf8(vCode), vAct, name });
+                gestures.push_back({ Util::WideToUtf8(vCode), vAct, vName });
             }
         }
     }
@@ -137,13 +134,13 @@ void Config::Load() {
             { "L", 1, L"后退" },
             { "R", 2, L"前进" },
             { "U", 3, L"向上一级" },
-            { "D", 4, L"关闭当前标签页" },
+            { "D", 4, L"关闭标签页" },
             { "UD", 6, L"刷新" },
             { "DR", 5, L"新建标签页" },
-            { "UL", 7, L"复制当前标签页" },
-            { "UR", 8, L"显示/隐藏侧边栏目录树" },
-            { "LDR", 13, L"滚动到列表顶部" },
-            { "RDL", 14, L"滚动到列表底部" },
+            { "UL", 7, L"复制标签页" },
+            { "UR", 8, L"切换目录树" },
+            { "LDR", 13, L"滚动到列表首端" },
+            { "RDL", 14, L"滚动到列表末端" },
             { "LUR", 15, L"向上翻页" },
             { "RUL", 16, L"向下翻页" }
         };

@@ -71,3 +71,6 @@ Testing/
 bin/*.ini
 *.res
 tools/*.exe
+
+# other
+restare_nov2/

@@ -85,4 +85,3 @@ if (!activePath || !fso.FolderExists(activePath)) {
         shell.Run('"' + targetFile + '"');
     }
 }
-

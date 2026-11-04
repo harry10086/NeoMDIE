@@ -1,3 +1,4 @@
+#include "I18n.h"
 #include "ScriptEngine.h"
 #include "..\resource.h"
 #include "..\ui\Theme.h"
@@ -100,10 +101,23 @@ bool ScriptEngine::ExecuteCommand(UINT cmdId, const std::wstring& activePath, co
 }
 
 bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstring& activePath, const std::vector<std::wstring>& selectedFiles) {
-    Log(L"正在执行脚本: " + filePath);
+    bool isZh = I18n::Get().IsChinese();
 
-    // Pass environment variables to script
-    SetEnvironmentVariableW(L"NEOMDIE_ACTIVE_PATH", activePath.c_str());
+    // Validate active directory
+    std::wstring workingDir = activePath;
+    if (workingDir.empty() || workingDir == L"This PC" || workingDir == L"此电脑" || !PathFileExistsW(workingDir.c_str())) {
+        MessageBoxW(m_hwndMain,
+            isZh ? L"请先在标签页中进入一个具体的本地磁盘或文件夹目录（而不是“此电脑”），再执行该扩展脚本。"
+                 : L"Please navigate to a valid local directory before running this script.",
+            isZh ? L"脚本执行提示" : L"Script Execution Notice",
+            MB_OK | MB_ICONINFORMATION);
+        return false;
+    }
+
+    Log(L"正在执行脚本: " + filePath);
+    Log(L"工作目录: " + workingDir);
+
+    SetEnvironmentVariableW(L"NEOMDIE_ACTIVE_PATH", workingDir.c_str());
 
     std::wstring filesJoined;
     for (const auto& f : selectedFiles) {
@@ -112,7 +126,6 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
     }
     SetEnvironmentVariableW(L"NEOMDIE_SELECTED_FILES", filesJoined.c_str());
 
-    // Execute via Windows Script Host / cscript
     std::wstring cmd = L"cscript.exe //NoLogo \"" + filePath + L"\"";
 
     SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
@@ -128,17 +141,16 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
 
     PROCESS_INFORMATION pi = { 0 };
     BOOL success = CreateProcessW(nullptr, &cmd[0], nullptr, nullptr, TRUE,
-                                  CREATE_NO_WINDOW, nullptr, activePath.c_str(), &si, &pi);
+                                  CREATE_NO_WINDOW, nullptr, workingDir.c_str(), &si, &pi);
 
     CloseHandle(hWritePipe);
 
+    std::string output;
     if (success) {
         CloseHandle(pi.hThread);
 
-        // Read output
         char buffer[1024];
         DWORD bytesRead = 0;
-        std::string output;
         while (ReadFile(hReadPipe, buffer, sizeof(buffer) - 1, &bytesRead, nullptr) && bytesRead > 0) {
             buffer[bytesRead] = '\0';
             output += buffer;
@@ -147,12 +159,21 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
         WaitForSingleObject(pi.hProcess, 5000);
         CloseHandle(pi.hProcess);
 
-        if (!output.empty()) {
-            Log(Util::Utf8ToWide(output));
+        std::wstring wOutput = Util::Utf8ToWide(output);
+        if (!wOutput.empty()) {
+            Log(wOutput);
+            MessageBoxW(m_hwndMain, wOutput.c_str(), isZh ? L"NeoMDIE 脚本执行结果" : L"Script Execution Result",
+                        MB_OK | (output.find("错误") != std::string::npos ? MB_ICONWARNING : MB_ICONINFORMATION));
+        } else {
+            Log(L"脚本执行完毕。");
+            MessageBoxW(m_hwndMain, isZh ? L"脚本执行完毕。" : L"Script execution finished.",
+                        isZh ? L"脚本提示" : L"Script Notice", MB_OK | MB_ICONINFORMATION);
         }
-        Log(L"脚本执行完毕。");
     } else {
-        Log(L"脚本启动失败！");
+        DWORD err = GetLastError();
+        std::wstring errText = isZh ? (L"脚本启动失败，错误代码: " + std::to_wstring(err)) : (L"Failed to start script, error code: " + std::to_wstring(err));
+        Log(errText);
+        MessageBoxW(m_hwndMain, errText.c_str(), isZh ? L"脚本错误" : L"Script Error", MB_OK | MB_ICONERROR);
     }
 
     CloseHandle(hReadPipe);
@@ -160,16 +181,21 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
 }
 
 void ScriptEngine::Log(const std::wstring& msg) {
-    m_logs.push_back(msg);
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    wchar_t timeBuf[32];
+    StringCchPrintfW(timeBuf, 32, L"[%02d:%02d:%02d] ", st.wHour, st.wMinute, st.wSecond);
+
+    std::wstring entry = timeBuf + msg;
+    m_logs.push_back(entry);
+
     if (m_hwndConsole && IsWindow(m_hwndConsole)) {
         HWND hEdit = GetDlgItem(m_hwndConsole, 101);
         if (hEdit) {
-            std::wstring fullText;
-            for (const auto& l : m_logs) {
-                fullText += l + L"\r\n";
-            }
-            SetWindowTextW(hEdit, fullText.c_str());
-            SendMessageW(hEdit, EM_SETSEL, (WPARAM)fullText.length(), (LPARAM)fullText.length());
+            std::wstring line = entry + L"\r\n";
+            int len = GetWindowTextLengthW(hEdit);
+            SendMessageW(hEdit, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+            SendMessageW(hEdit, EM_REPLACESEL, FALSE, (LPARAM)line.c_str());
             SendMessageW(hEdit, EM_SCROLLCARET, 0, 0);
         }
     }
@@ -220,6 +246,17 @@ void ScriptEngine::ShowConsole() {
                                   CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
         SendMessageW(hEdit, WM_SETFONT, (WPARAM)hFont, TRUE);
         Theme::Get().ApplyToWindow(m_hwndConsole);
+    }
+
+    HWND hEdit = GetDlgItem(m_hwndConsole, 101);
+    if (hEdit) {
+        std::wstring fullText;
+        for (const auto& l : m_logs) {
+            fullText += l + L"\r\n";
+        }
+        SetWindowTextW(hEdit, fullText.c_str());
+        SendMessageW(hEdit, EM_SETSEL, (WPARAM)fullText.length(), (LPARAM)fullText.length());
+        SendMessageW(hEdit, EM_SCROLLCARET, 0, 0);
     }
 
     ShowWindow(m_hwndConsole, SW_SHOW);

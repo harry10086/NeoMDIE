@@ -17,6 +17,7 @@ HWND BreadcrumbBar::Create(HWND hwndParent, int id) {
         wc.lpfnWndProc = BreadcrumbBar::WndProc;
         wc.hInstance = hInst;
         wc.lpszClassName = BREADCRUMB_CLASS;
+        wc.style = CS_HREDRAW | CS_VREDRAW;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         RegisterClassExW(&wc);
     }
@@ -210,8 +211,13 @@ LRESULT BreadcrumbBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         EndPaint(hwnd, &ps);
         return 0;
     }
-    case WM_ERASEBKGND:
+    case WM_ERASEBKGND: {
+        HDC hdc = (HDC)wParam;
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect(hdc, &rc, Theme::Get().BrushSurface());
         return 1;
+    }
 
     case WM_MOUSEMOVE: {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };

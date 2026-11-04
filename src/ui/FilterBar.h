@@ -10,9 +10,9 @@ public:
     HWND GetHwnd() const { return m_hwnd; }
 
     void Clear();
+    void SetText(const std::wstring& text);
     void SetFocus();
     void UpdateLanguage();
-    void SetText(const std::wstring& text);
     std::wstring GetText() const;
     void UpdateLayout(int x, int y, int width, int height);
 

@@ -43,15 +43,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                     cds.cbData = (DWORD)((folderArg.length() + 1) * sizeof(wchar_t));
                     cds.lpData = (PVOID)folderArg.c_str();
                     SendMessageW(hExisting, WM_COPYDATA, 0, (LPARAM)&cds);
-                } else {
-                    if (!IsWindowVisible(hExisting)) {
-                        ShowWindow(hExisting, SW_SHOW);
-                    }
-                    if (IsIconic(hExisting)) {
-                        ShowWindow(hExisting, SW_RESTORE);
-                    }
-                    SetForegroundWindow(hExisting);
                 }
+                if (!IsWindowVisible(hExisting) || IsIconic(hExisting)) {
+                    ShowWindow(hExisting, SW_RESTORE);
+                }
+                SetForegroundWindow(hExisting);
                 if (hMutex) CloseHandle(hMutex);
                 OleUninitialize();
                 return 0;
@@ -77,8 +73,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         return 1;
     }
 
-    // 8. Accelerators
-    HACCEL hAccel = LoadAcceleratorsW(hInstance, MAKEINTRESOURCEW(IDR_MAIN_ACCEL));
+    // 8. Dynamic Accelerators (Managed by MainWindow & Config)
+    HACCEL hAccel = mainWin.GetAcceleratorTable();
 
     // 9. Message Loop
     MSG msg;
@@ -104,7 +100,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             }
         }
 
-        if (skipAccel || !hAccel || !TranslateAcceleratorW(hwnd, hAccel, &msg)) {
+        HACCEL curAccel = mainWin.GetAcceleratorTable();
+        if (!curAccel) curAccel = hAccel;
+
+        if (skipAccel || !curAccel || !TranslateAcceleratorW(hwnd, curAccel, &msg)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }

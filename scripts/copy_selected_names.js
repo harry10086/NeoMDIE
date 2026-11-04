@@ -30,4 +30,3 @@ if (!selectedFiles) {
     shell.Run(clipCmd, 0, true);
     WScript.Echo("已成功复制到剪贴板！");
 }
-

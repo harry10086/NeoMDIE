@@ -54,13 +54,13 @@ int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder) {
     std::wstring ext = pExt ? pExt : L"";
     std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
 
-    bool isCustomFile = (ext == L".exe" || ext == L".ico" || ext == L".lnk" || ext == L".cur" || ext == L".scr");
-    if (!isCustomFile && !ext.empty()) {
-        auto it = s_extIconCache.find(ext);
-        if (it != s_extIconCache.end()) {
-            return it->second;
-        }
+    // Fast cache lookup for all extensions
+    auto it = s_extIconCache.find(ext);
+    if (it != s_extIconCache.end()) {
+        return it->second;
     }
+
+    bool isCustomFile = (ext == L".exe" || ext == L".ico" || ext == L".lnk" || ext == L".cur" || ext == L".scr");
 
     SHFILEINFOW sfi = { 0 };
     DWORD flags = SHGFI_SYSICONINDEX | SHGFI_SMALLICON;
@@ -72,9 +72,7 @@ int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder) {
 
     SHGetFileInfoW((L"dummy" + ext).c_str(), attr ? attr : FILE_ATTRIBUTE_NORMAL,
                    &sfi, sizeof(sfi), flags | SHGFI_USEFILEATTRIBUTES);
-    if (!isCustomFile && !ext.empty()) {
-        s_extIconCache[ext] = sfi.iIcon;
-    }
+    s_extIconCache[ext] = sfi.iIcon;
     return sfi.iIcon;
 }
 
@@ -83,11 +81,9 @@ std::wstring GetItemTypeName(const std::wstring& path, DWORD attr) {
     std::wstring ext = pExt ? pExt : L"";
     std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
 
-    if (!ext.empty()) {
-        auto it = s_extTypeCache.find(ext);
-        if (it != s_extTypeCache.end()) {
-            return it->second;
-        }
+    auto it = s_extTypeCache.find(ext);
+    if (it != s_extTypeCache.end()) {
+        return it->second;
     }
 
     SHFILEINFOW sfi = { 0 };
@@ -105,6 +101,8 @@ void EnumerateDrives(std::vector<NeoShellItem>& outDrives) {
     DWORD len = GetLogicalDriveStringsW(512, driveStrings);
     if (len == 0) return;
 
+    UINT oldErrMode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+
     wchar_t* pDrive = driveStrings;
     while (*pDrive) {
         NeoShellItem item;
@@ -114,21 +112,24 @@ void EnumerateDrives(std::vector<NeoShellItem>& outDrives) {
         item.isDrive = true;
         item.attributes = FILE_ATTRIBUTE_DIRECTORY;
 
-        // Drive volume label and type
-        wchar_t volName[MAX_PATH] = { 0 };
-        wchar_t fsName[MAX_PATH] = { 0 };
-        GetVolumeInformationW(pDrive, volName, MAX_PATH, nullptr, nullptr, nullptr, fsName, MAX_PATH);
-
-        ULARGE_INTEGER freeBytes, totalBytes, totalFree;
-        if (GetDiskFreeSpaceExW(pDrive, &freeBytes, &totalBytes, &totalFree)) {
-            item.size = totalBytes.QuadPart;
-        }
-
         UINT driveType = GetDriveTypeW(pDrive);
         std::wstring typeStr = I18n::Get().T(StringId::DriveLocal);
         if (driveType == DRIVE_REMOVABLE) typeStr = I18n::Get().T(StringId::DriveRemovable);
         else if (driveType == DRIVE_CDROM) typeStr = I18n::Get().T(StringId::DriveCD);
         else if (driveType == DRIVE_REMOTE) typeStr = I18n::Get().T(StringId::DriveNetwork);
+
+        wchar_t volName[MAX_PATH] = { 0 };
+        wchar_t fsName[MAX_PATH] = { 0 };
+
+        // Only query volume information for local fixed or ready removable drives to prevent network/optical drive hangs
+        if (driveType == DRIVE_FIXED || driveType == DRIVE_RAMDISK || driveType == DRIVE_REMOVABLE) {
+            GetVolumeInformationW(pDrive, volName, MAX_PATH, nullptr, nullptr, nullptr, fsName, MAX_PATH);
+
+            ULARGE_INTEGER freeBytes, totalBytes, totalFree;
+            if (GetDiskFreeSpaceExW(pDrive, &freeBytes, &totalBytes, &totalFree)) {
+                item.size = totalBytes.QuadPart;
+            }
+        }
 
         if (wcslen(volName) > 0) {
             item.name = std::wstring(volName) + L" (" + pDrive[0] + L":)";
@@ -142,6 +143,8 @@ void EnumerateDrives(std::vector<NeoShellItem>& outDrives) {
         outDrives.push_back(item);
         pDrive += wcslen(pDrive) + 1;
     }
+
+    SetErrorMode(oldErrMode);
 }
 
 bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems) {
@@ -234,6 +237,9 @@ static IContextMenu3* g_pContextMenu3 = nullptr;
 
 static LRESULT CALLBACK ContextMenuSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     switch (msg) {
+    case WM_SETCURSOR:
+        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+        return TRUE;
     case WM_INITMENUPOPUP:
     case WM_DRAWITEM:
     case WM_MEASUREITEM:
@@ -258,13 +264,26 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
 
     bool shown = false;
     std::wstring firstPath = Util::NormalizePath(paths[0]);
-    PIDLIST_ABSOLUTE pidlFirst = ILCreateFromPathW(firstPath.c_str());
+    PIDLIST_ABSOLUTE pidlFirst = nullptr;
+    if (firstPath == L"This PC" || firstPath == L"此电脑" || firstPath == L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") {
+        SHParseDisplayName(L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", nullptr, &pidlFirst, 0, nullptr);
+    } else {
+        pidlFirst = ILCreateFromPathW(firstPath.c_str());
+        if (!pidlFirst) {
+            SHParseDisplayName(firstPath.c_str(), nullptr, &pidlFirst, 0, nullptr);
+        }
+    }
 
     IShellFolder* pFolder = nullptr;
     PCUITEMID_CHILD pidlFirstChild = nullptr;
 
     if (pidlFirst) {
-        if (SUCCEEDED(SHBindToParent(pidlFirst, IID_IShellFolder, (void**)&pFolder, &pidlFirstChild)) && pFolder) {
+        if (FAILED(SHBindToParent(pidlFirst, IID_IShellFolder, (void**)&pFolder, &pidlFirstChild)) || !pFolder) {
+            if (SUCCEEDED(SHGetDesktopFolder(&pFolder)) && pFolder) {
+                pidlFirstChild = pidlFirst;
+            }
+        }
+        if (pFolder && pidlFirstChild) {
             std::vector<PCUITEMID_CHILD> childPidls;
             childPidls.push_back(pidlFirstChild);
 
@@ -292,7 +311,7 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
                 // 1. Elevate NeoMDIE Custom Commands TO THE VERY TOP
                 if (isDir) {
                     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, isZh ? L"在新标签页中打开(&T)" : L"Open in New Tab(&T)");
-                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_SPLIT, isZh ? L"在分屏中打开(&S)" : L"Open in Split Pane(&S)");
+                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_SPLIT, isZh ? L"在新栏中打开(&S)" : L"Open in New Pane(&S)");
                 }
                 AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, isZh ? L"复制完整路径(&A)" : L"Copy Full Path(&A)");
                 AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_TERMINAL, isZh ? L"在此处打开命令提示符 CMD(&C)" : L"Open CMD Here(&C)");
@@ -300,11 +319,14 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
                 int topItemsCount = GetMenuItemCount(hMenu);
-                pContextMenu->QueryContextMenu(hMenu, topItemsCount, 1, 0x6FFF, CMF_NORMAL | CMF_CANRENAME);
+                SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+                SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+                pContextMenu->QueryContextMenu(hMenu, topItemsCount, 1, 0x6FFF, CMF_EXPLORE | CMF_CANRENAME);
+                SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+                SetCursor(LoadCursorW(nullptr, IDC_ARROW));
 
                 SetWindowSubclass(hwnd, ContextMenuSubclassProc, 9999, 0);
 
-                SetCursor(LoadCursorW(nullptr, IDC_ARROW));
                 int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                          ptScreen.x, ptScreen.y, 0, hwnd, nullptr);
 
@@ -439,52 +461,35 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     AppendMenuW(hMenu, MF_STRING | MF_GRAYED, CMD_BG_UNDO, isZh ? L"撤消(&U)\tCtrl+Z" : L"Undo(&U)\tCtrl+Z");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
-    // 5. Query Shell Background Context Menu
+    // 5. Query Shell Background Context Menu (Modern IShellItem pipeline)
     IContextMenu* pContextMenu = nullptr;
     IShellFolder* pFolder = nullptr;
-    PIDLIST_ABSOLUTE pidl = nullptr;
-    HMENU hShellMenu = nullptr;
 
     if (!currentDir.empty() && currentDir != L"This PC" && currentDir != L"此电脑") {
-        pidl = ILCreateFromPathW(Util::NormalizePath(currentDir).c_str());
-        if (pidl) {
-            if (SUCCEEDED(SHBindToObject(nullptr, pidl, nullptr, IID_IShellFolder, (void**)&pFolder)) && pFolder) {
-                if (SUCCEEDED(pFolder->CreateViewObject(hwnd, IID_IContextMenu, (void**)&pContextMenu)) && pContextMenu) {
-                    pContextMenu->QueryInterface(IID_PPV_ARGS(&g_pContextMenu2));
-                    pContextMenu->QueryInterface(IID_PPV_ARGS(&g_pContextMenu3));
-
-                    hShellMenu = CreatePopupMenu();
-                    pContextMenu->QueryContextMenu(hShellMenu, 0, 1, 0x6FFF, CMF_NORMAL | CMF_EXPLORE);
-
-                    // Transfer items from shell menu to our menu
-                    int count = GetMenuItemCount(hShellMenu);
-                    for (int i = 0; i < count; ++i) {
-                        wchar_t text[256] = { 0 };
-                        MENUITEMINFOW mii = { sizeof(mii) };
-                        mii.fMask = MIIM_STATE | MIIM_ID | MIIM_SUBMENU | MIIM_TYPE | MIIM_DATA | MIIM_BITMAP;
-                        mii.dwTypeData = text;
-                        mii.cch = 256;
-                        if (GetMenuItemInfoW(hShellMenu, i, TRUE, &mii)) {
-                            if (mii.hSubMenu) {
-                                RemoveMenu(hShellMenu, i, MF_BYPOSITION);
-                                InsertMenuItemW(hMenu, GetMenuItemCount(hMenu), TRUE, &mii);
-                                i--;
-                                count--;
-                            } else {
-                                InsertMenuItemW(hMenu, GetMenuItemCount(hMenu), TRUE, &mii);
-                            }
-                        }
-                    }
-                }
+        IShellItem* pItem = nullptr;
+        HRESULT hr = SHCreateItemFromParsingName(Util::NormalizePath(currentDir).c_str(), nullptr, IID_PPV_ARGS(&pItem));
+        if (SUCCEEDED(hr) && pItem) {
+            hr = pItem->BindToHandler(nullptr, BHID_SFObject, IID_PPV_ARGS(&pFolder));
+            if (SUCCEEDED(hr) && pFolder) {
+                pFolder->CreateViewObject(hwnd, IID_PPV_ARGS(&pContextMenu));
             }
+            pItem->Release();
         }
     }
 
-    if (!pContextMenu) {
+    if (pContextMenu) {
+        pContextMenu->QueryInterface(IID_PPV_ARGS(&g_pContextMenu2));
+        pContextMenu->QueryInterface(IID_PPV_ARGS(&g_pContextMenu3));
+        int shellPos = GetMenuItemCount(hMenu);
+        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+        pContextMenu->QueryContextMenu(hMenu, shellPos, 1, 0x6FFF, CMF_NORMAL);
+        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+    } else {
         // Fallback New submenu if shell COM not available
         HMENU hSubNew = CreatePopupMenu();
         AppendMenuW(hSubNew, MF_STRING, CMD_BG_NEW_FOLDER, I18n::Get().T(StringId::MenuNewFolder));
         AppendMenuW(hSubNew, MF_STRING, CMD_BG_NEW_FILE, I18n::Get().T(StringId::MenuNewFile));
+        AppendMenuW(hSubNew, MF_STRING, CMD_BG_NEW_MD, isZh ? L"新建 Markdown 文档 (.md)" : L"New Markdown Document (.md)");
         AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSubNew, isZh ? L"新建(&W)" : L"New(&W)");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(hMenu, MF_STRING, CMD_BG_PROPERTIES, I18n::Get().T(StringId::MenuProperties));
@@ -496,6 +501,7 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_SETTINGS, isZh ? L"选项与设置(&S)..." : L"Options & Settings(&S)...");
 
     SetWindowSubclass(hwnd, ContextMenuSubclassProc, 9999, 0);
+    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
 
     int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                              ptScreen.x, ptScreen.y, 0, hwnd, nullptr);
@@ -506,12 +512,10 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     if (g_pContextMenu2) { g_pContextMenu2->Release(); g_pContextMenu2 = nullptr; }
 
     DestroyMenu(hMenu);
-    if (hShellMenu) DestroyMenu(hShellMenu);
 
     if (cmd >= 0x7100) {
         if (pContextMenu) { pContextMenu->Release(); pContextMenu = nullptr; }
         if (pFolder) { pFolder->Release(); pFolder = nullptr; }
-        if (pidl) { ILFree(pidl); pidl = nullptr; }
 
         if (onCustomCommand) {
             onCustomCommand(cmd, currentDir);
@@ -530,7 +534,6 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
 
     if (pContextMenu) pContextMenu->Release();
     if (pFolder) pFolder->Release();
-    if (pidl) ILFree(pidl);
 
     return true;
 }
@@ -832,53 +835,155 @@ bool CreateShortcut(const std::wstring& shortcutPath, const std::wstring& target
 
 bool IsExplorerReplaced() {
     HKEY hKey = nullptr;
+    // On Win 10 & 11, check HKCU\Software\Classes\Directory\shell\open\command
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open\\command", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-        wchar_t val[MAX_PATH * 2] = { 0 };
+        wchar_t val[MAX_PATH] = { 0 };
         DWORD size = sizeof(val);
         DWORD type = 0;
-        if (RegQueryValueExW(hKey, nullptr, nullptr, &type, (LPBYTE)val, &size) == ERROR_SUCCESS) {
-            RegCloseKey(hKey);
-            std::wstring s(val);
-            if (s.find(L"NeoMDIE") != std::wstring::npos) {
-                return true;
-            }
-        } else {
-            RegCloseKey(hKey);
+        bool hasCmd = (RegQueryValueExW(hKey, nullptr, nullptr, &type, (LPBYTE)val, &size) == ERROR_SUCCESS);
+        RegCloseKey(hKey);
+        if (hasCmd && wcsstr(val, L"NeoMDIE") != nullptr) {
+            return true;
         }
     }
     return false;
 }
 
 bool SetExplorerReplaced(bool enable) {
-    const wchar_t* keys[] = {
+    // Windows 10 and 11 delegate directory/folder clicks through DelegateExecute COM handlers.
+    // To cleanly override Windows Explorer per-user without requiring Administrator/UAC elevation:
+    // 1. Override HKCU\Software\Classes\Directory\shell\open\command
+    // 2. Override HKCU\Software\Classes\Folder\shell\open\command
+    // 3. Override HKCU\Software\Classes\Drive\shell\open\command
+    // 4. Set DelegateExecute = "" (empty string) to suppress Explorer's internal COM delegate!
+    const wchar_t* openCmdKeys[] = {
         L"Software\\Classes\\Directory\\shell\\open\\command",
         L"Software\\Classes\\Folder\\shell\\open\\command",
-        L"Software\\Classes\\Drive\\shell\\open\\command"
+        L"Software\\Classes\\Drive\\shell\\open\\command",
+        L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\open\\command"
     };
 
     if (enable) {
         wchar_t exePath[MAX_PATH];
         GetModuleFileNameW(nullptr, exePath, MAX_PATH);
         std::wstring cmdStr = L"\"" + std::wstring(exePath) + L"\" \"%1\"";
+        const wchar_t* emptyDelegate = L"";
 
-        for (const auto* k : keys) {
+        for (const auto* k : openCmdKeys) {
             HKEY hKey = nullptr;
             if (RegCreateKeyExW(HKEY_CURRENT_USER, k, 0, nullptr, 0, KEY_WRITE, nullptr, &hKey, nullptr) == ERROR_SUCCESS) {
                 RegSetValueExW(hKey, nullptr, 0, REG_SZ, (const BYTE*)cmdStr.c_str(), (DWORD)((cmdStr.length() + 1) * sizeof(wchar_t)));
+                // Clear DelegateExecute so Windows Explorer doesn't hijack the open verb
+                RegSetValueExW(hKey, L"DelegateExecute", 0, REG_SZ, (const BYTE*)emptyDelegate, sizeof(wchar_t));
                 RegCloseKey(hKey);
             }
         }
     } else {
-        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open\\command");
+        for (const auto* k : openCmdKeys) {
+            RegDeleteKeyW(HKEY_CURRENT_USER, k);
+        }
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open");
-        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\open\\command");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\open");
-        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open\\command");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open");
+
+        // Clean up legacy open_NeoMDIE if present
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open_NeoMDIE\\command");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open_NeoMDIE");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\open_NeoMDIE\\command");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\open_NeoMDIE");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open_NeoMDIE\\command");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open_NeoMDIE");
     }
 
-    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+    std::thread([]() {
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+    }).detach();
     return true;
+}
+
+void CheckForUpdates(HWND hwndParent) {
+    bool isZh = I18n::Get().IsChinese();
+    std::thread([hwndParent, isZh]() {
+        HINTERNET hInternet = InternetOpenW(L"NeoMDIE-UpdateChecker", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+        if (!hInternet) {
+            MessageBoxW(hwndParent,
+                isZh ? L"无法初始化网络连接以检查更新。" : L"Failed to initialize internet connection.",
+                isZh ? L"检查更新" : L"Check for Updates", MB_OK | MB_ICONWARNING);
+            return;
+        }
+
+        DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE;
+        HINTERNET hUrl = InternetOpenUrlW(hInternet,
+            L"https://api.github.com/repos/harry10086/NeoMDIE/releases/latest",
+            L"User-Agent: NeoMDIE-UpdateChecker\r\nAccept: application/vnd.github.v3+json\r\n",
+            (DWORD)-1, flags, 0);
+
+        if (!hUrl) {
+            InternetCloseHandle(hInternet);
+            int res = MessageBoxW(hwndParent,
+                isZh ? L"无法连接到 GitHub 检查更新。\n\n是否直接前往 GitHub 仓库 Releases 页面？"
+                     : L"Unable to connect to GitHub.\n\nOpen Releases page in browser?",
+                isZh ? L"检查更新" : L"Check for Updates", MB_YESNO | MB_ICONQUESTION);
+            if (res == IDYES) {
+                ShellExecuteW(nullptr, L"open", L"https://github.com/harry10086/NeoMDIE/releases", nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            return;
+        }
+
+        std::string json;
+        char buffer[2048];
+        DWORD bytesRead = 0;
+        while (InternetReadFile(hUrl, buffer, sizeof(buffer) - 1, &bytesRead) && bytesRead > 0) {
+            buffer[bytesRead] = '\0';
+            json.append(buffer, bytesRead);
+        }
+
+        InternetCloseHandle(hUrl);
+        InternetCloseHandle(hInternet);
+
+        std::string tagName;
+        size_t tagPos = json.find("\"tag_name\":");
+        if (tagPos != std::string::npos) {
+            size_t start = json.find("\"", tagPos + 11);
+            if (start != std::string::npos) {
+                size_t end = json.find("\"", start + 1);
+                if (end != std::string::npos) {
+                    tagName = json.substr(start + 1, end - start - 1);
+                }
+            }
+        }
+
+        std::string htmlUrl = "https://github.com/harry10086/NeoMDIE/releases";
+        size_t urlPos = json.find("\"html_url\":");
+        if (urlPos != std::string::npos) {
+            size_t start = json.find("\"", urlPos + 11);
+            if (start != std::string::npos) {
+                size_t end = json.find("\"", start + 1);
+                if (end != std::string::npos) {
+                    htmlUrl = json.substr(start + 1, end - start - 1);
+                }
+            }
+        }
+
+        std::wstring wTagName = Util::Utf8ToWide(tagName);
+        std::wstring wHtmlUrl = Util::Utf8ToWide(htmlUrl);
+
+        const std::wstring currentVer = L"v1.0.0";
+        if (!wTagName.empty() && wTagName != currentVer) {
+            std::wstring msg = isZh
+                ? (L"发现 NeoMDIE 新版本: " + wTagName + L" (当前版本: " + currentVer + L")\n\n是否立即前往 GitHub 下载更新？")
+                : (L"New version found: " + wTagName + L" (Current: " + currentVer + L")\n\nOpen GitHub release page to download?");
+            int res = MessageBoxW(hwndParent, msg.c_str(), isZh ? L"发现新版本" : L"Update Available", MB_YESNO | MB_ICONINFORMATION);
+            if (res == IDYES) {
+                ShellExecuteW(nullptr, L"open", wHtmlUrl.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
+        } else {
+            std::wstring msg = isZh
+                ? (L"您当前使用的是最新版本 (" + currentVer + L")。\n\n没有可用的更新。")
+                : (L"You are using the latest version (" + currentVer + L").\n\nNo updates available.");
+            MessageBoxW(hwndParent, msg.c_str(), isZh ? L"检查更新" : L"Check for Updates", MB_OK | MB_ICONINFORMATION);
+        }
+    }).detach();
 }
 
 bool GetDriveSpace(const std::wstring& drivePath, uint64_t& outFreeBytes, uint64_t& outTotalBytes) {

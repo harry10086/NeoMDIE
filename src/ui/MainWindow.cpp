@@ -10,10 +10,37 @@
 static const wchar_t* MAINWINDOW_CLASS = L"NeoMDIE_MainWindow";
 static std::unordered_map<HWND, bool> s_btnHoverMap;
 
+#define WM_TRAY_NOTIFY (WM_USER + 201)
+
+void MainWindow::AddTrayIcon() {
+    if (m_hasTrayIcon) return;
+    NOTIFYICONDATAW nid = { sizeof(nid) };
+    nid.hWnd = m_hwnd;
+    nid.uID = 1001;
+    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAY_NOTIFY;
+    nid.hIcon = (HICON)LoadImageW(m_hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
+    if (!nid.hIcon) nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    StringCchCopyW(nid.szTip, 128, L"NeoMDIE");
+    Shell_NotifyIconW(NIM_ADD, &nid);
+    m_hasTrayIcon = true;
+}
+
+void MainWindow::RemoveTrayIcon() {
+    if (!m_hasTrayIcon) return;
+    NOTIFYICONDATAW nid = { sizeof(nid) };
+    nid.hWnd = m_hwnd;
+    nid.uID = 1001;
+    Shell_NotifyIconW(NIM_DELETE, &nid);
+    m_hasTrayIcon = false;
+}
+
 MainWindow::MainWindow() {
 }
 
 MainWindow::~MainWindow() {
+    if (m_hwnd) UnregisterHotKey(m_hwnd, 9001);
+    if (m_hAccel) DestroyAcceleratorTable(m_hAccel);
 }
 
 HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
@@ -48,27 +75,73 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
     if (!m_hwnd) return nullptr;
 
     Theme::Get().ApplyToWindow(m_hwnd);
-
-    HICON hIconBig = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
-        GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR);
-    HICON hIconSmall = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
-        GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
-    SendMessageW(m_hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIconBig);
-    SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIconSmall);
-
     CreateControls();
-    BuildMenu();
 
-    // Restore sessions tabs
-    for (const auto& tabPath : cfg.sessionTabs) {
-        m_tabBar.AddTab(tabPath, false);
+    // Initialize scripts before BuildMenu so they are listed in Tools menu
+    ScriptEngine::Get().Initialize(m_hwnd);
+
+    BuildMenu();
+    RebuildAccelerators();
+    if (ShellUtils::IsExplorerReplaced()) {
+        RegisterHotKey(m_hwnd, 9001, MOD_WIN, 'E');
     }
-    if (m_tabBar.GetTabCount() == 0) {
-        m_tabBar.AddTab(L"This PC", true);
+
+    // Pre-warm Windows Shell COM in background thread to eliminate cold start right-click lag
+    std::thread([]() {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        IShellFolder* pDesktop = nullptr;
+        if (SUCCEEDED(SHGetDesktopFolder(&pDesktop)) && pDesktop) {
+            PIDLIST_ABSOLUTE pidl = nullptr;
+            wchar_t tempPath[MAX_PATH];
+            GetTempPathW(MAX_PATH, tempPath);
+            if (SUCCEEDED(SHParseDisplayName(tempPath, nullptr, &pidl, 0, nullptr)) && pidl) {
+                PCUITEMID_CHILD pidlChild = nullptr;
+                IShellFolder* pParent = nullptr;
+                if (SUCCEEDED(SHBindToParent(pidl, IID_IShellFolder, (void**)&pParent, &pidlChild)) && pParent) {
+                    IContextMenu* pcm = nullptr;
+                    if (SUCCEEDED(pParent->GetUIObjectOf(nullptr, 1, &pidlChild, IID_IContextMenu, nullptr, (void**)&pcm)) && pcm) {
+                        HMENU hDummy = CreatePopupMenu();
+                        pcm->QueryContextMenu(hDummy, 0, 1, 0x1000, CMF_EXPLORE);
+                        DestroyMenu(hDummy);
+                        pcm->Release();
+                    }
+                    pParent->Release();
+                }
+                ILFree(pidl);
+            }
+            pDesktop->Release();
+        }
+        CoUninitialize();
+    }).detach();
+
+    std::wstring cmdPath;
+    if (__argc > 1 && __wargv && __wargv[1]) {
+        std::wstring arg = __wargv[1];
+        if (arg.length() >= 2 && arg.front() == L'"' && arg.back() == L'"') {
+            arg = arg.substr(1, arg.length() - 2);
+        }
+        if (PathFileExistsW(arg.c_str())) {
+            cmdPath = arg;
+        }
+    }
+
+    if (!cmdPath.empty()) {
+        m_tabBar.AddTab(cmdPath, true);
     } else {
-        int act = std::clamp(cfg.activeTabIndex, 0, m_tabBar.GetTabCount() - 1);
-        m_tabBar.SetActiveTab(act);
+        if (cfg.restoreTabsOnStartup) {
+            for (const auto& tabPath : cfg.sessionTabs) {
+                m_tabBar.AddTab(tabPath, false);
+            }
+        }
+        if (m_tabBar.GetTabCount() == 0) {
+            m_tabBar.AddTab(L"This PC", true);
+        } else {
+            int act = std::clamp(cfg.activeTabIndex, 0, m_tabBar.GetTabCount() - 1);
+            m_tabBar.SetActiveTab(act);
+        }
     }
+    std::wstring activePath = m_tabBar.GetTabPath(m_tabBar.GetActiveIndex());
+    UpdateWindowTitle(activePath);
 
     if (cfg.paneLayout >= 0 && cfg.paneLayout <= 4) {
         m_multiPane.SetLayout((PaneLayout)cfg.paneLayout);
@@ -83,10 +156,35 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
     }
     UpdateWindow(m_hwnd);
 
-    // Initialize scripts
-    ScriptEngine::Get().Initialize(m_hwnd);
+
 
     return m_hwnd;
+}
+
+void MainWindow::UpdateWindowTitle(const std::wstring& path) {
+    std::wstring name = ShellUtils::GetDisplayName(path);
+    if (name.empty()) name = path;
+    if (name.empty()) {
+        SetWindowTextW(m_hwnd, L"NeoMDIE");
+    } else {
+        std::wstring fullTitle = name + L" - NeoMDIE";
+        SetWindowTextW(m_hwnd, fullTitle.c_str());
+    }
+}
+
+void MainWindow::ApplyTheme() {
+    Theme::Get().ApplyToWindow(m_hwnd);
+    for (int p = 0; p < 4; ++p) {
+        m_multiPane.GetPane(p).ApplyTheme();
+    }
+    m_tree.ApplyTheme();
+    m_preview.ApplyTheme();
+    InvalidateRect(m_tabBar.GetHwnd(), nullptr, TRUE);
+    InvalidateRect(m_linksBar.GetHwnd(), nullptr, TRUE);
+    InvalidateRect(m_filterBar.GetHwnd(), nullptr, TRUE);
+    InvalidateRect(m_breadcrumb.GetHwnd(), nullptr, TRUE);
+    InvalidateRect(m_hwnd, nullptr, TRUE);
+    DrawMenuBar(m_hwnd);
 }
 
 void MainWindow::AddToHistory(const std::wstring& path) {
@@ -107,85 +205,116 @@ void MainWindow::BuildMenu() {
     bool isZh = I18n::Get().IsChinese();
     FileListView* activeView = m_multiPane.GetActivePane();
 
+    // =========================================================================
     // 1. 文件 (F) File Menu
+    // =========================================================================
     HMENU hFileMenu = CreatePopupMenu();
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_NEW_TAB, I18n::Get().T(StringId::MenuNewTab));
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_DUPLICATE_TAB, I18n::Get().T(StringId::MenuDuplicateTab));
-    bool isPinned = m_tabBar.IsTabPinned(m_tabBar.GetActiveIndex());
-    AppendMenuW(hFileMenu, MF_STRING | (isPinned ? MF_CHECKED : MF_UNCHECKED),
-                ID_FILE_PIN_TAB, isPinned ? I18n::Get().T(StringId::MenuUnpinTab) : I18n::Get().T(StringId::MenuPinTab));
+
+    // 打开新窗口 (N)
+    HMENU hNewWinSubmenu = CreatePopupMenu();
+    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_SPECIFY, isZh ? L"指定文件夹(&T)..." : L"Specify Folder(&T)...");
+    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_DESKTOP, isZh ? L"桌面(&D)" : L"Desktop(&D)");
+    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_CURRENT, isZh ? L"当前文件夹(&F)" : L"Current Folder(&F)");
+    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_CLIPBOARD, isZh ? L"剪贴板(&C)" : L"Clipboard(&C)");
+    AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hNewWinSubmenu, isZh ? L"打开新窗口(&N)" : L"New Window(&N)");
+
+    // 最近关闭的文件夹 (M)
+    HMENU hRecentClosedSubmenu = CreatePopupMenu();
+    AppendMenuW(hRecentClosedSubmenu, MF_STRING, ID_FILE_REOPEN_CLOSED_TAB,
+                isZh ? L"打开最后关闭的文件夹(&L)\tCtrl+Shift+T" : L"Reopen Last Closed Tab(&L)\tCtrl+Shift+T");
+    AppendMenuW(hRecentClosedSubmenu, MF_SEPARATOR, 0, nullptr);
+    const auto& closedHist = m_tabBar.GetClosedHistory();
+    if (closedHist.empty()) {
+        AppendMenuW(hRecentClosedSubmenu, MF_STRING | MF_GRAYED, 0, isZh ? L"(无记录)" : L"(Empty)");
+    } else {
+        int count = std::min((int)closedHist.size(), 10);
+        for (int i = 0; i < count; ++i) {
+            UINT cmd = ID_RECENT_CLOSED_START + i;
+            const std::wstring& p = closedHist[closedHist.size() - 1 - i];
+            std::wstring label = std::to_wstring(i) + L" " + p;
+            AppendMenuW(hRecentClosedSubmenu, MF_STRING, cmd, label.c_str());
+        }
+    }
+    AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hRecentClosedSubmenu, isZh ? L"最近关闭的文件夹(&M)" : L"Recently Closed Folders(&M)");
+
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_NEW_TAB, isZh ? L"新建标签页(&T)\tCtrl+T" : L"New Tab(&T)\tCtrl+T");
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_CLOSE_TAB, isZh ? L"关闭当前标签(&C)\tCtrl+W" : L"Close Tab(&C)\tCtrl+W");
     AppendMenuW(hFileMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_REOPEN_CLOSED_TAB, I18n::Get().T(StringId::MenuReopenClosedTab));
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_CLOSE_TAB, I18n::Get().T(StringId::MenuCloseTab));
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_CLOSE_OTHER_TABS, I18n::Get().T(StringId::MenuCloseOtherTabs));
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_CLOSE_ALL_TABS, I18n::Get().T(StringId::MenuCloseAllTabs));
-    AppendMenuW(hFileMenu, MF_SEPARATOR, 0, nullptr);
+
+    AppendMenuW(hFileMenu, MF_STRING, ID_EDIT_DELETE, isZh ? L"删除(&D)\tDelete" : L"Delete(&D)\tDelete");
+    AppendMenuW(hFileMenu, MF_STRING, ID_EDIT_RENAME, isZh ? L"重命名(&R)\tF2" : L"Rename(&R)\tF2");
 
     HMENU hNewSubmenu = CreatePopupMenu();
-    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FOLDER, I18n::Get().T(StringId::MenuNewFolder));
-    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FILE, I18n::Get().T(StringId::MenuNewFile));
-    AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hNewSubmenu, isZh ? L"新建(&N)" : L"New(&N)");
+    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FOLDER, isZh ? L"文件夹(&F)\tCtrl+Shift+N" : L"Folder(&F)\tCtrl+Shift+N");
+    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FILE, isZh ? L"文本文档(&T)" : L"Text Document(&T)");
+    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_MD, isZh ? L"Markdown 文档(&M)" : L"Markdown Document(&M)");
+    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_MD, isZh ? L"Markdown 文档(&M)" : L"Markdown Document(&M)");
+    AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hNewSubmenu, isZh ? L"新建(&W)" : L"New(&W)");
 
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_CREATE_SHORTCUT, isZh ? L"创建快捷方式(&S)" : L"Create Shortcut(&S)");
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_OPEN_EXPLORER, isZh ? L"用系统资源管理器打开(&O)" : L"Open in Explorer(&O)");
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_PROPERTIES, isZh ? L"属性(&P)\tAlt+Enter" : L"Properties(&P)\tAlt+Enter");
     AppendMenuW(hFileMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_PROPERTIES, I18n::Get().T(StringId::MenuProperties));
-    AppendMenuW(hFileMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_EXIT, I18n::Get().T(StringId::MenuExit));
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hFileMenu, I18n::Get().T(StringId::MenuFile));
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_EXIT, isZh ? L"退出(&X)\tAlt+F4" : L"Exit(&X)\tAlt+F4");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hFileMenu, isZh ? L"文件(&F)" : L"File(&F)");
 
+    // =========================================================================
     // 2. 编辑 (E) Edit Menu
+    // =========================================================================
     HMENU hEditMenu = CreatePopupMenu();
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_CUT, I18n::Get().T(StringId::MenuCut));
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_COPY, I18n::Get().T(StringId::MenuCopy));
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_UNDO, isZh ? L"撤销(&U)\tCtrl+Z" : L"Undo(&U)\tCtrl+Z");
+    AppendMenuW(hEditMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_CUT, isZh ? L"剪切(&T)\tCtrl+X" : L"Cut(&T)\tCtrl+X");
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_COPY, isZh ? L"复制(&C)\tCtrl+C" : L"Copy(&C)\tCtrl+C");
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_PASTE, isZh ? L"粘贴(&P)\tCtrl+V" : L"Paste(&P)\tCtrl+V");
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_PASTE_SHORTCUT, isZh ? L"粘贴快捷方式(&S)" : L"Paste Shortcut(&S)");
+    AppendMenuW(hEditMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_SELECT_ALL, isZh ? L"全选(&A)\tCtrl+A" : L"Select All(&A)\tCtrl+A");
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_INVERT_SELECTION, isZh ? L"反向选择(&I)\tCtrl+I" : L"Invert Selection(&I)\tCtrl+I");
+    AppendMenuW(hEditMenu, MF_SEPARATOR, 0, nullptr);
 
     HMENU hCopyPathSubmenu = CreatePopupMenu();
-    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_PATH, I18n::Get().T(StringId::MenuCopyPath));
-    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_NAME, I18n::Get().T(StringId::MenuCopyName));
-    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_DIR, I18n::Get().T(StringId::MenuCopyDir));
+    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_PATH, isZh ? L"复制完整路径(&P)\tCtrl+Shift+C" : L"Copy Full Path(&P)\tCtrl+Shift+C");
+    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_NAME, isZh ? L"复制文件名(&N)" : L"Copy File Name(&N)");
+    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_DIR, isZh ? L"复制所在目录(&D)" : L"Copy Directory Path(&D)");
     AppendMenuW(hEditMenu, MF_POPUP, (UINT_PTR)hCopyPathSubmenu, isZh ? L"复制路径(&Y)" : L"Copy Path(&Y)");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hEditMenu, isZh ? L"编辑(&E)" : L"Edit(&E)");
 
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_PASTE, I18n::Get().T(StringId::MenuPaste));
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_PASTE_SHORTCUT, I18n::Get().T(StringId::MenuPasteShortcut));
-    AppendMenuW(hEditMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_DELETE, I18n::Get().T(StringId::MenuDelete));
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_RENAME, I18n::Get().T(StringId::MenuRename));
-    AppendMenuW(hEditMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_SELECT_ALL, I18n::Get().T(StringId::MenuSelectAll));
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_INVERT_SELECTION, I18n::Get().T(StringId::MenuInvertSelection));
-    AppendMenuW(hEditMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hEditMenu, MF_STRING, ID_VIEW_FILTER_FOCUS, I18n::Get().T(StringId::MenuFilter));
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hEditMenu, I18n::Get().T(StringId::MenuEdit));
-
+    // =========================================================================
     // 3. 查看 (V) View Menu
+    // =========================================================================
     HMENU hViewMenu = CreatePopupMenu();
-    HMENU hSubLayout = CreatePopupMenu();
-    PaneLayout curLayout = m_multiPane.GetLayout();
-    AppendMenuW(hSubLayout, MF_STRING | (curLayout == PaneLayout::Single ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LAYOUT_1X1, I18n::Get().T(StringId::Layout1x1));
-    AppendMenuW(hSubLayout, MF_STRING | (curLayout == PaneLayout::DualVertical ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LAYOUT_1X2, I18n::Get().T(StringId::Layout1x2));
-    AppendMenuW(hSubLayout, MF_STRING | (curLayout == PaneLayout::DualHorizontal ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LAYOUT_2X1, I18n::Get().T(StringId::Layout2x1));
-    AppendMenuW(hSubLayout, MF_STRING | (curLayout == PaneLayout::Quad ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LAYOUT_2X2, I18n::Get().T(StringId::Layout2x2));
-    AppendMenuW(hSubLayout, MF_STRING | (curLayout == PaneLayout::ThreeLeft ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LAYOUT_1P2, I18n::Get().T(StringId::Layout1p2));
-    AppendMenuW(hSubLayout, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hSubLayout, MF_STRING | (Config::Get().syncNav ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SYNC_NAV, I18n::Get().T(StringId::LayoutSyncNav));
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hSubLayout, isZh ? L"窗格布局(&L)" : L"Pane Layout(&L)");
 
+    // 工具栏 (T)
     HMENU hBarsSubmenu = CreatePopupMenu();
+    AppendMenuW(hBarsSubmenu, MF_STRING | (Config::Get().showToolbarStandard ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_TB_STANDARD, isZh ? L"标准按钮(&S)" : L"Standard Buttons(&S)");
+    AppendMenuW(hBarsSubmenu, MF_STRING | (Config::Get().showToolbarAddress ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_TB_ADDRESS, isZh ? L"地址栏(&A)" : L"Address Bar(&A)");
     AppendMenuW(hBarsSubmenu, MF_STRING | (m_linksVisible ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_TOGGLE_LINKS, isZh ? L"显示链接栏 / 收藏夹(&L)" : L"Favorites / Links Bar(&L)");
-    AppendMenuW(hBarsSubmenu, MF_STRING | (m_treeVisible ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_TREE_TOGGLE, I18n::Get().T(StringId::MenuTree));
-    AppendMenuW(hBarsSubmenu, MF_STRING | (m_previewVisible ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_PREVIEW_TOGGLE, I18n::Get().T(StringId::MenuPreview));
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hBarsSubmenu, isZh ? L"工具栏与栏目(&T)" : L"Toolbars & Sidebars(&T)");
+                ID_VIEW_TOGGLE_LINKS, isZh ? L"链接栏(&L)" : L"Links Bar(&L)");
+    AppendMenuW(hBarsSubmenu, MF_STRING | (Config::Get().showToolbarSearch ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_TB_SEARCH, isZh ? L"搜索栏(&F)" : L"Search Bar(&F)");
+    AppendMenuW(hBarsSubmenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hBarsSubmenu, MF_STRING | (Config::Get().lockToolbars ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_LOCK_TOOLBARS, isZh ? L"锁定工具栏" : L"Lock Toolbars");
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hBarsSubmenu, isZh ? L"工具栏(&T)" : L"Toolbars(&T)");
 
-    AppendMenuW(hViewMenu, MF_STRING, ID_VIEW_REFRESH, I18n::Get().T(StringId::MenuRefresh));
+    AppendMenuW(hViewMenu, MF_STRING | (Config::Get().showStatusBar ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_STATUSBAR, isZh ? L"状态栏(&B)" : L"Status Bar(&B)");
+
+    // 侧边栏 (E)
+    HMENU hSideSubmenu = CreatePopupMenu();
+    AppendMenuW(hSideSubmenu, MF_STRING | (m_treeVisible ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_TREE_TOGGLE, isZh ? L"文件夹目录树(&O)\tF8" : L"Folders Tree(&O)\tF8");
+    AppendMenuW(hSideSubmenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hSideSubmenu, MF_STRING | (m_previewVisible ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_PREVIEW_TOGGLE, isZh ? L"快速预览窗格(&P)\tAlt+P" : L"Preview Pane(&P)\tAlt+P");
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hSideSubmenu, isZh ? L"侧边栏(&E)" : L"Sidebar(&E)");
+
     AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
 
+    // 视图样式 (V)
     HMENU hViewStyleSubmenu = CreatePopupMenu();
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_ICONS_XLARGE, isZh ? L"超大图标(&X)" : L"Extra large icons(&X)");
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_ICONS_LARGE, isZh ? L"大图标(&R)" : L"Large icons(&R)");
@@ -194,7 +323,6 @@ void MainWindow::BuildMenu() {
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_LIST, isZh ? L"列表(&L)" : L"List(&L)");
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_DETAILS, isZh ? L"详细信息(&D)" : L"Details(&D)");
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_TILES, isZh ? L"平铺(&S)" : L"Tiles(&S)");
-
     int curVm = Config::Get().viewMode;
     UINT activeVmId = ID_VIEW_DETAILS;
     if (curVm == 0) activeVmId = ID_VIEW_DETAILS;
@@ -205,55 +333,142 @@ void MainWindow::BuildMenu() {
     CheckMenuRadioItem(hViewStyleSubmenu, ID_VIEW_DETAILS, ID_VIEW_ICONS_MEDIUM, activeVmId, MF_BYCOMMAND);
     AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hViewStyleSubmenu, isZh ? L"视图样式(&V)" : L"View Mode(&V)");
 
+    // 排列图标 (I)
     HMENU hSortSubmenu = CreatePopupMenu();
     SortColumn curSortCol = activeView ? activeView->GetSortColumn() : SortColumn::Name;
     bool isAsc = activeView ? activeView->IsSortAscending() : true;
-
     AppendMenuW(hSortSubmenu, MF_STRING | (curSortCol == SortColumn::Name ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_NAME, I18n::Get().T(StringId::MenuSortName));
-    AppendMenuW(hSortSubmenu, MF_STRING | (curSortCol == SortColumn::DateModified ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_DATE, I18n::Get().T(StringId::MenuSortDate));
-    AppendMenuW(hSortSubmenu, MF_STRING | (curSortCol == SortColumn::Type ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_TYPE, I18n::Get().T(StringId::MenuSortType));
+                ID_VIEW_SORT_NAME, isZh ? L"名称" : L"Name");
     AppendMenuW(hSortSubmenu, MF_STRING | (curSortCol == SortColumn::Size ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_SIZE, I18n::Get().T(StringId::MenuSortSize));
+                ID_VIEW_SORT_SIZE, isZh ? L"大小" : L"Size");
+    AppendMenuW(hSortSubmenu, MF_STRING | (curSortCol == SortColumn::Type ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_SORT_TYPE, isZh ? L"类型" : L"Type");
+    AppendMenuW(hSortSubmenu, MF_STRING | (curSortCol == SortColumn::DateModified ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_SORT_DATE, isZh ? L"修改日期" : L"Date Modified");
     AppendMenuW(hSortSubmenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hSortSubmenu, MF_STRING | (isAsc ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_ASC, I18n::Get().T(StringId::MenuSortAsc));
+                ID_VIEW_SORT_ASC, isZh ? L"递增排序(&A)" : L"Ascending(&A)");
     AppendMenuW(hSortSubmenu, MF_STRING | (!isAsc ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_DESC, I18n::Get().T(StringId::MenuSortDesc));
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hSortSubmenu, I18n::Get().T(StringId::MenuSortBy));
+                ID_VIEW_SORT_DESC, isZh ? L"递减排序(&D)" : L"Descending(&D)");
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hSortSubmenu, isZh ? L"排列图标(&I)" : L"Sort By(&I)");
 
     AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
+
+    // 转到 (M)
+    HMENU hGoSubmenu = CreatePopupMenu();
+    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_BACK, isZh ? L"后退(&B)\tAlt+Left" : L"Back(&B)\tAlt+Left");
+    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_FORWARD, isZh ? L"前进(&F)\tAlt+Right" : L"Forward(&F)\tAlt+Right");
+    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_UP, isZh ? L"向上一级(&U)\tAlt+Up" : L"Up(&U)\tAlt+Up");
+    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_UP_NEW_TAB, isZh ? L"在新标签页中打开上一级文件夹(&N)" : L"Open Up in New Tab(&N)");
+    AppendMenuW(hGoSubmenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_HOME, isZh ? L"转到地址栏(&D)\tAlt+D" : L"Go to Address Bar(&D)\tAlt+D");
+    HMENU hHistSubmenu = CreatePopupMenu();
+    if (m_historyPaths.empty()) {
+        AppendMenuW(hHistSubmenu, MF_STRING | MF_GRAYED, 0, isZh ? L"(无历史记录)" : L"(No History)");
+    } else {
+        for (size_t i = 0; i < m_historyPaths.size(); ++i) {
+            UINT histCmdId = ID_HISTORY_START + (UINT)i;
+            AppendMenuW(hHistSubmenu, MF_STRING, histCmdId, m_historyPaths[i].c_str());
+        }
+    }
+    AppendMenuW(hGoSubmenu, MF_POPUP, (UINT_PTR)hHistSubmenu, isZh ? L"历史记录(&H)" : L"History(&H)");
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hGoSubmenu, isZh ? L"转到(&M)" : L"Go(&M)");
+
     AppendMenuW(hViewMenu, MF_STRING | (Config::Get().showHidden ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SHOW_HIDDEN, I18n::Get().T(StringId::MenuShowHidden));
+                ID_VIEW_SHOW_HIDDEN, isZh ? L"显示隐藏文件(&H)" : L"Show Hidden Files(&H)");
     AppendMenuW(hViewMenu, MF_STRING | (Config::Get().calcFolderSize ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_CALC_FOLDER_SIZE, I18n::Get().T(StringId::MenuCalcFolderSize));
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hViewMenu, I18n::Get().T(StringId::MenuView));
+                ID_VIEW_CALC_FOLDER_SIZE, isZh ? L"计算文件夹大小(&C)" : L"Calculate Folder Sizes(&C)");
+        // 滚动 (X)
+    HMENU hScrollSubmenu = CreatePopupMenu();
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_TOP, isZh ? L"列表开头(&T)\tHome" : L"Top of List(&T)\tHome");
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_PAGEUP, isZh ? L"此页开头(&U)\tPage Up" : L"Top of Page(&U)\tPage Up");
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_PAGEDOWN, isZh ? L"此页结尾(&D)\tPage Down" : L"Bottom of Page(&D)\tPage Down");
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_BOTTOM, isZh ? L"列表结尾(&B)\tEnd" : L"Bottom of List(&B)\tEnd");
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hScrollSubmenu, isZh ? L"滚动(&X)" : L"Scroll(&X)");
+    AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hViewMenu, MF_STRING, ID_VIEW_REFRESH, isZh ? L"刷新(&R)\tF5" : L"Refresh(&R)\tF5");
+    AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hViewMenu, MF_STRING | (Theme::Get().IsDarkMode() ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_DARK_MODE, isZh ? L"深色主题模式(&D)" : L"Dark Theme Mode(&D)");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hViewMenu, isZh ? L"查看(&V)" : L"View(&V)");
 
+    // =========================================================================
     // 4. 工具 (T) Tools Menu
+    // =========================================================================
     HMENU hToolsMenu = CreatePopupMenu();
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_OPEN_CMD, isZh ? L"打开命令行 CMD(&C)\tCtrl+Shift+C" : L"Command Prompt CMD(&C)\tCtrl+Shift+C");
+    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_OPEN_CMD, isZh ? L"打开命令行 CMD(&C)" : L"Open Command Prompt CMD(&C)");
     AppendMenuW(hToolsMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_SETTINGS, isZh ? L"选项与设置(&S)..." : L"Options & Settings(&S)...");
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hToolsMenu, I18n::Get().T(StringId::MenuTools));
+    HMENU hScriptSub = CreatePopupMenu();
+    AppendMenuW(hScriptSub, MF_STRING, ID_TOOLS_RELOAD_SCRIPTS, isZh ? L"重新加载所有脚本(&R)" : L"Reload All Scripts(&R)");
+    AppendMenuW(hScriptSub, MF_STRING, ID_TOOLS_SCRIPT_CONSOLE, isZh ? L"打开脚本控制台(&C)" : L"Script Console(&C)");
+    AppendMenuW(hScriptSub, MF_STRING, ID_TOOLS_OPEN_SCRIPTS_DIR, isZh ? L"打开脚本目录(&D)" : L"Open Scripts Directory(&D)");
 
-    // 5. 窗口 (W) Window Menu
+    const auto& scripts = ScriptEngine::Get().GetScripts();
+    if (!scripts.empty()) {
+        AppendMenuW(hScriptSub, MF_SEPARATOR, 0, nullptr);
+        for (const auto& s : scripts) {
+            std::wstring itemText = s.name;
+            if (!s.hotkey.empty()) itemText += L"\t" + s.hotkey;
+            AppendMenuW(hScriptSub, MF_STRING, s.commandId, itemText.c_str());
+        }
+    }
+    AppendMenuW(hToolsMenu, MF_POPUP, (UINT_PTR)hScriptSub, isZh ? L"脚本扩展(&E)" : L"Scripts(&E)");
+    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_FOLDER_OPTIONS, isZh ? L"系统文件夹选项(&O)..." : L"Folder Options(&O)...");
+    AppendMenuW(hToolsMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_SETTINGS, isZh ? L"NeoMDIE 设置(&S)..." : L"NeoMDIE Settings(&S)...");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hToolsMenu, isZh ? L"工具(&T)" : L"Tools(&T)");
+
+    // =========================================================================
+    // 6. 窗口 (W) Window Menu
+    // =========================================================================
     HMENU hWindowMenu = CreatePopupMenu();
-    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_NEW_TAB, isZh ? L"新建标签页(&T)\tCtrl+T" : L"New Tab(&T)\tCtrl+T");
-    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_DUPLICATE_TAB, isZh ? L"复制当前标签页(&D)\tCtrl+K" : L"Duplicate Tab(&D)\tCtrl+K");
-    AppendMenuW(hWindowMenu, MF_STRING | (isPinned ? MF_CHECKED : MF_UNCHECKED),
-                ID_FILE_PIN_TAB, isPinned ? (isZh ? L"解锁当前标签页(&P)" : L"Unpin Tab(&P)") : (isZh ? L"锁定当前标签页(&P)" : L"Pin Tab(&P)"));
-    AppendMenuW(hWindowMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_REOPEN_CLOSED_TAB, isZh ? L"恢复关闭的标签页(&R)\tCtrl+Shift+T" : L"Reopen Closed Tab(&R)\tCtrl+Shift+T");
-    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_CLOSE_TAB, isZh ? L"关闭当前标签页(&W)\tCtrl+W" : L"Close Current Tab(&W)\tCtrl+W");
-    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_CLOSE_OTHER_TABS, isZh ? L"关闭其他标签页(&O)" : L"Close Other Tabs(&O)");
-    AppendMenuW(hWindowMenu, MF_STRING, ID_FILE_CLOSE_ALL_TABS, isZh ? L"关闭所有标签页(&A)" : L"Close All Tabs(&A)");
-    AppendMenuW(hWindowMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hWindowMenu, MF_STRING, ID_TAB_NEXT, isZh ? L"下一个标签页(&N)\tCtrl+Tab" : L"Next Tab(&N)\tCtrl+Tab");
-    AppendMenuW(hWindowMenu, MF_STRING, ID_TAB_PREV, isZh ? L"上一个标签页(&P)\tCtrl+Shift+Tab" : L"Previous Tab(&P)\tCtrl+Shift+Tab");
-    AppendMenuW(hWindowMenu, MF_SEPARATOR, 0, nullptr);
 
+    // 标签页操作 (T)
+    HMENU hTabOpsSubmenu = CreatePopupMenu();
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_TAB_NEXT, isZh ? L"下一个标签(&N)\tCtrl+Tab" : L"Next Tab(&N)\tCtrl+Tab");
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_TAB_PREV, isZh ? L"上一个标签(&B)\tCtrl+Shift+Tab" : L"Previous Tab(&B)\tCtrl+Shift+Tab");
+    AppendMenuW(hTabOpsSubmenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_TAB, isZh ? L"关闭当前标签(&C)\tCtrl+W" : L"Close Current Tab(&C)\tCtrl+W");
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_LEFT_TABS, isZh ? L"关闭左侧标签(&L)" : L"Close Left Tabs(&L)");
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_RIGHT_TABS, isZh ? L"关闭右侧标签(&R)" : L"Close Right Tabs(&R)");
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_OTHER_TABS, isZh ? L"除当前标签外全部关闭(&O)" : L"Close Other Tabs(&O)");
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_ALL_TABS, isZh ? L"关闭全部标签(&A)" : L"Close All Tabs(&A)");
+    AppendMenuW(hTabOpsSubmenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_DUPLICATE_TAB, isZh ? L"复制当前标签(&D)" : L"Duplicate Tab(&D)");
+    bool isPinned = m_tabBar.IsTabPinned(m_tabBar.GetActiveIndex());
+    AppendMenuW(hTabOpsSubmenu, MF_STRING | (isPinned ? MF_CHECKED : MF_UNCHECKED),
+                ID_FILE_PIN_TAB, isPinned ? (isZh ? L"取消固定标签(&P)" : L"Unpin Tab(&P)") : (isZh ? L"固定当前标签(&P)" : L"Pin Tab(&P)"));
+    AppendMenuW(hWindowMenu, MF_POPUP, (UINT_PTR)hTabOpsSubmenu, isZh ? L"标签页操作(&T)" : L"Tab Operations(&T)");
+
+    // 窗口操作 (W)
+    HMENU hWinOpsSubmenu = CreatePopupMenu();
+    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAXIMIZE, isZh ? L"当前窗格最大化(&M)" : L"Maximize Pane(&M)");
+    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MINIMIZE, isZh ? L"当前窗格最小化(&I)" : L"Minimize Pane(&I)");
+    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_CLOSE, isZh ? L"关闭当前窗格(&C)" : L"Close Pane(&C)");
+    AppendMenuW(hWinOpsSubmenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAIN_MAXIMIZE, isZh ? L"主窗口最大化(&A)" : L"Maximize Main Window(&A)");
+    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAIN_MINIMIZE, isZh ? L"主窗口最小化(&N)" : L"Minimize Main Window(&N)");
+    AppendMenuW(hWindowMenu, MF_POPUP, (UINT_PTR)hWinOpsSubmenu, isZh ? L"窗口操作(&W)" : L"Window Operations(&W)");
+
+    // 窗口模式 (M)
+    HMENU hWinModeSubmenu = CreatePopupMenu();
+    PaneLayout curLayout = m_multiPane.GetLayout();
+    AppendMenuW(hWinModeSubmenu, MF_STRING | (curLayout == PaneLayout::Single ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_LAYOUT_1X1, isZh ? L"普通/单屏(&N)" : L"Single Pane(&N)");
+    AppendMenuW(hWinModeSubmenu, MF_STRING | (curLayout == PaneLayout::DualVertical ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_LAYOUT_1X2, isZh ? L"垂直两个页面(&V)" : L"Dual Vertical(&V)");
+    AppendMenuW(hWinModeSubmenu, MF_STRING | (curLayout == PaneLayout::DualHorizontal ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_LAYOUT_2X1, isZh ? L"水平两个页面(&H)" : L"Dual Horizontal(&H)");
+    AppendMenuW(hWinModeSubmenu, MF_STRING | (curLayout == PaneLayout::Quad ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_LAYOUT_2X2, isZh ? L"四栏(&Q)" : L"Quad 2x2(&Q)");
+    AppendMenuW(hWinModeSubmenu, MF_STRING | (curLayout == PaneLayout::ThreeLeft ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_LAYOUT_1P2, isZh ? L"左一右二(&T)" : L"Three Panes (1+2)(&T)");
+    AppendMenuW(hWinModeSubmenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hWinModeSubmenu, MF_STRING | (Config::Get().syncNav ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_SYNC_NAV, isZh ? L"多窗格同步浏览(&S)" : L"Sync Navigation(&S)");
+    AppendMenuW(hWindowMenu, MF_POPUP, (UINT_PTR)hWinModeSubmenu, isZh ? L"窗口模式(&M)" : L"Window Mode(&M)");
+
+    AppendMenuW(hWindowMenu, MF_SEPARATOR, 0, nullptr);
     const auto& allTabs = m_tabBar.GetTabs();
     int activeIdx = m_tabBar.GetActiveIndex();
     for (size_t i = 0; i < allTabs.size(); ++i) {
@@ -264,13 +479,15 @@ void MainWindow::BuildMenu() {
     }
     AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hWindowMenu, isZh ? L"窗口(&W)" : L"Window(&W)");
 
-    // 6. 帮助 (H) Help Menu
+    // =========================================================================
+    // 7. 帮助 (H) Help Menu
+    // =========================================================================
     HMENU hHelpMenu = CreatePopupMenu();
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_SHORTCUTS, isZh ? L"快捷键帮助(&K)" : L"Keyboard Shortcuts(&K)");
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_GESTURES, isZh ? L"鼠标手势指南(&G)" : L"Mouse Gestures(&G)");
+    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_GITHUB, isZh ? L"NeoMDIE 开源仓库(&G)" : L"NeoMDIE GitHub Repository(&G)");
+    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_CHECK_UPDATES, isZh ? L"检查更新(&U)..." : L"Check for Updates(&U)...");
     AppendMenuW(hHelpMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_ABOUT, isZh ? L"关于 NeoMDIE(&A)" : L"About NeoMDIE(&A)");
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hHelpMenu, I18n::Get().T(StringId::MenuHelp));
+    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_ABOUT, isZh ? L"关于 NeoMDIE(&A)..." : L"About NeoMDIE(&A)...");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hHelpMenu, isZh ? L"帮助(&H)" : L"Help(&H)");
 
     SetMenu(m_hwnd, hMenuBar);
     if (hOldMenu) {
@@ -312,9 +529,9 @@ void MainWindow::CreateControls() {
     m_hwndBtnUp      = createBtn(L"\uE74A", IDC_BTN_UP);
     m_hwndBtnRefresh = createBtn(L"\uE72C", IDC_BTN_REFRESH);
     m_hwndBtnNewTab  = createBtn(L"\uE710", IDC_BTN_NEWTAB);
-    m_hwndBtnTree    = createBtn(L"\uE8A9", IDC_BTN_TREE);
-    m_hwndBtnSplit   = createBtn(L"\uE784", IDC_BTN_SPLIT);
-    m_hwndBtnPreview = createBtn(L"\uE8FF", IDC_BTN_PREVIEW);
+    m_hwndBtnTree    = createBtn(L"\uE8A7", IDC_BTN_TREE);
+    m_hwndBtnSplit   = createBtn(L"\uE740", IDC_BTN_SPLIT);
+    m_hwndBtnPreview = createBtn(L"\uE896", IDC_BTN_PREVIEW);
 
     // Tooltips
     m_hwndTooltip = CreateWindowExW(
@@ -341,7 +558,7 @@ void MainWindow::CreateControls() {
     addTip(m_hwndBtnRefresh, isZh ? L"刷新 (F5)" : L"Refresh (F5)");
     addTip(m_hwndBtnNewTab, isZh ? L"新建标签页 (Ctrl+T)" : L"New Tab (Ctrl+T)");
     addTip(m_hwndBtnTree, isZh ? L"文件夹目录树 (F8)" : L"Directory Tree (F8)");
-    addTip(m_hwndBtnSplit, isZh ? L"多栏分屏 (F4)" : L"Split View (F4)");
+    addTip(m_hwndBtnSplit, isZh ? L"多栏布局 (F4)" : L"Split View (F4)");
     addTip(m_hwndBtnPreview, isZh ? L"快速预览 (Alt+P)" : L"Preview Pane (Alt+P)");
 
     // 3. Breadcrumb & FilterBar
@@ -387,6 +604,11 @@ void MainWindow::CreateControls() {
         m_multiPane.SetActivePane(1);
     };
 
+    // Wire up preview close
+    m_preview.onCloseRequested = [this]() {
+        TogglePreview();
+    };
+
     // Wire up tab bar callbacks
     m_tabBar.onTabChanged = [this](int idx) {
         std::wstring path = m_tabBar.GetTabPath(idx);
@@ -395,41 +617,55 @@ void MainWindow::CreateControls() {
             activeView->NavigateTo(path);
         }
         m_breadcrumb.SetPath(path);
-        m_tree.SelectPath(path);
+        m_filterBar.SetText(activeView ? activeView->GetFilterQuery() : L"");
+        if (m_treeVisible && Config::Get().autoExpandTree) {
+            m_tree.SelectPath(path);
+        }
         UpdateNavButtons();
         AddToHistory(path);
-        BuildMenu();
+        UpdateWindowTitle(path);
     };
 
     m_tabBar.onTabClosed = [this](int) {
-        BuildMenu();
+        int act = m_tabBar.GetActiveIndex();
+        if (act >= 0) {
+            UpdateWindowTitle(m_tabBar.GetTabPath(act));
+        }
     };
 
     m_tabBar.onNewTabRequested = [this]() {
         FileListView* activeView = m_multiPane.GetActivePane();
         std::wstring cur = activeView ? activeView->GetCurrentPath() : L"This PC";
         m_tabBar.AddTab(cur, true);
-        BuildMenu();
     };
 
     m_tabBar.onOpenTerminalRequested = [this](const std::wstring& path) {
         ShellUtils::LaunchTerminal(path);
     };
 
+    // Window Action: Breadcrumb / Address Bar
     m_breadcrumb.onPathNavigated = [this](const std::wstring& path) {
-        FileListView* activeView = m_multiPane.GetActivePane();
-        if (activeView) {
-            activeView->NavigateTo(path);
+        ActionTrigger trigger = GetCurrentTrigger();
+        WindowAction act = Config::Get().actionAddress.ResolveAction(trigger);
+        if (act == WindowAction::NewTab || act == WindowAction::BgTab) {
+            m_tabBar.AddTab(path, true);
+        } else if (act == WindowAction::OtherPane && m_multiPane.GetPaneCount() > 1) {
+            int otherIdx = (m_multiPane.GetActiveIndex() + 1) % m_multiPane.GetPaneCount();
+            m_multiPane.GetPane(otherIdx).NavigateTo(path);
+            m_multiPane.SetActivePane(otherIdx);
+        } else if (act == WindowAction::Explorer) {
+            ShellExecuteW(nullptr, L"explore", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        } else if (act == WindowAction::CurrentPane) {
+            FileListView* activeView = m_multiPane.GetActivePane();
+            if (activeView) activeView->NavigateTo(path);
         }
     };
 
+    // Window Action: Tree
     m_tree.onPathSelected = [this](const std::wstring& path) {
         FileListView* activeView = m_multiPane.GetActivePane();
-        if (activeView) {
-            activeView->NavigateTo(path);
-        }
+        if (activeView) activeView->NavigateTo(path);
     };
-
     m_filterBar.onFilterChanged = [this](const std::wstring& q, bool sub, bool matchCase) {
         FileListView* activeView = m_multiPane.GetActivePane();
         if (activeView) {
@@ -442,6 +678,15 @@ void MainWindow::CreateControls() {
         if (activeView) {
             SetFocus(activeView->GetHwnd());
         }
+    };
+
+    // MultiPane layout change callback
+    m_multiPane.onLayoutChanged = [this](PaneLayout newLayout) {
+        Config::Get().paneLayout = (int)newLayout;
+        Config::Get().splitEnabled = (newLayout != PaneLayout::Single);
+        BuildMenu();
+        LayoutAll();
+        InvalidateRect(m_hwnd, nullptr, TRUE);
     };
 
     // MultiPane gesture & custom command callbacks
@@ -464,33 +709,33 @@ void MainWindow::CreateControls() {
         case GestureAction::OpenTerminal: OnCommand(ID_TOOLS_OPEN_CMD); break;
         case GestureAction::MaximizePane: m_multiPane.ToggleMaximizePane(m_multiPane.GetActiveIndex()); break;
         case GestureAction::ClosePane: m_multiPane.ClosePane(m_multiPane.GetActiveIndex()); break;
-        case GestureAction::CloseOtherTabs: OnCommand(ID_FILE_CLOSE_OTHER_TABS); break;
-        case GestureAction::ReopenClosedTab: OnCommand(ID_FILE_REOPEN_CLOSED_TAB); break;
+        case GestureAction::ScrollTop: if (activeView) activeView->ScrollToTop(); break;
+        case GestureAction::ScrollBottom: if (activeView) activeView->ScrollToBottom(); break;
+        case GestureAction::PageUp: if (activeView) activeView->ScrollPageUp(); break;
+        case GestureAction::PageDown: if (activeView) activeView->ScrollPageDown(); break;
+        case GestureAction::NewFolder: OnCommand(ID_FILE_NEW_FOLDER); break;
+        case GestureAction::Copy: OnCommand(ID_EDIT_COPY); break;
+        case GestureAction::Cut: OnCommand(ID_EDIT_CUT); break;
+        case GestureAction::Paste: OnCommand(ID_EDIT_PASTE); break;
+        case GestureAction::SelectAll: OnCommand(ID_EDIT_SELECT_ALL); break;
+        case GestureAction::Properties: OnCommand(ID_FILE_PROPERTIES); break;
         case GestureAction::LockTab: {
             int actIdx = m_tabBar.GetActiveIndex();
             m_tabBar.TogglePinTab(actIdx);
             break;
         }
+        case GestureAction::ReopenClosedTab: OnCommand(ID_FILE_REOPEN_CLOSED_TAB); break;
         case GestureAction::NextTab: m_tabBar.NextTab(); break;
         case GestureAction::PrevTab: m_tabBar.PrevTab(); break;
-        case GestureAction::ScrollTop: if (activeView) activeView->ScrollToTop(); break;
-        case GestureAction::ScrollBottom: if (activeView) activeView->ScrollToBottom(); break;
-        case GestureAction::PageUp: if (activeView) activeView->ScrollPageUp(); break;
-        case GestureAction::PageDown: if (activeView) activeView->ScrollPageDown(); break;
-        case GestureAction::Copy: OnCommand(ID_EDIT_COPY); break;
-        case GestureAction::Cut: OnCommand(ID_EDIT_CUT); break;
-        case GestureAction::Paste: OnCommand(ID_EDIT_PASTE); break;
-        case GestureAction::SelectAll: OnCommand(ID_EDIT_SELECT_ALL); break;
-        case GestureAction::NewFolder: OnCommand(ID_FILE_NEW_FOLDER); break;
-        case GestureAction::Properties: OnCommand(ID_FILE_PROPERTIES); break;
-        case GestureAction::LayoutSingle: OnCommand(ID_VIEW_LAYOUT_1X1); break;
-        case GestureAction::Layout2H: OnCommand(ID_VIEW_LAYOUT_1X2); break;
-        case GestureAction::Layout2V: OnCommand(ID_VIEW_LAYOUT_2X1); break;
-        case GestureAction::Layout4Grid: OnCommand(ID_VIEW_LAYOUT_2X2); break;
-        case GestureAction::CopyPath: OnCommand(ID_EDIT_COPY_PATH); break;
-        case GestureAction::Delete: OnCommand(ID_EDIT_DELETE); break;
-        case GestureAction::Rename: OnCommand(ID_EDIT_RENAME); break;
-        case GestureAction::NewMD: OnCommand(ID_FILE_NEW_MD); break;
+        case GestureAction::CloseOtherTabs: OnCommand(ID_FILE_CLOSE_OTHER_TABS); break;
+        case GestureAction::LayoutSingle: m_multiPane.SetLayout(PaneLayout::Single); break;
+        case GestureAction::Layout2H:     m_multiPane.SetLayout(PaneLayout::DualHorizontal); break;
+        case GestureAction::Layout2V:     m_multiPane.SetLayout(PaneLayout::DualVertical); break;
+        case GestureAction::Layout4Grid:  m_multiPane.SetLayout(PaneLayout::Quad); break;
+        case GestureAction::CopyPath:     if (activeView) ShellUtils::CopyToClipboard(activeView->GetCurrentPath()); break;
+        case GestureAction::Delete:       OnCommand(ID_EDIT_DELETE); break;
+        case GestureAction::Rename:       OnCommand(ID_EDIT_RENAME); break;
+        case GestureAction::NewMD:        OnCommand(ID_FILE_NEW_MD); break;
         case GestureAction::ToggleHidden: OnCommand(ID_VIEW_SHOW_HIDDEN); break;
         case GestureAction::OpenSettings: OnCommand(ID_TOOLS_SETTINGS); break;
         case GestureAction::InvertSelection: OnCommand(ID_EDIT_INVERT_SELECTION); break;
@@ -507,6 +752,8 @@ void MainWindow::CreateControls() {
             m_multiPane.SetActivePane(1);
         } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
             m_linksBar.AddLink(L"", path);
+        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
+            OnCommand(ID_TOOLS_SETTINGS);
         }
     };
 
@@ -519,6 +766,8 @@ void MainWindow::CreateControls() {
             m_multiPane.SetActivePane(1);
         } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
             m_linksBar.AddLink(L"", path);
+        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
+            OnCommand(ID_TOOLS_SETTINGS);
         }
     };
 
@@ -531,6 +780,8 @@ void MainWindow::CreateControls() {
             m_multiPane.SetActivePane(1);
         } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
             m_linksBar.AddLink(L"", path);
+        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
+            OnCommand(ID_TOOLS_SETTINGS);
         }
     };
 
@@ -543,17 +794,52 @@ void MainWindow::CreateControls() {
             m_multiPane.SetActivePane(1);
         } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
             m_linksBar.AddLink(L"", path);
+        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
+            OnCommand(ID_TOOLS_SETTINGS);
+        }
+    };
+
+    m_tree.onCustomCommand = [this](int cmd, const std::wstring& path) {
+        if (cmd == CMD_NEOMDIE_OPEN_NEW_TAB) {
+            m_tabBar.AddTab(path, true);
+        } else if (cmd == CMD_NEOMDIE_OPEN_SPLIT) {
+            m_multiPane.SetLayout(PaneLayout::DualVertical);
+            m_multiPane.GetPane(1).NavigateTo(path);
+            m_multiPane.SetActivePane(1);
+        } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
+            m_linksBar.AddLink(L"", path);
+        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
+            OnCommand(ID_TOOLS_SETTINGS);
+        }
+    };
+
+    m_tree.onCustomCommand = [this](int cmd, const std::wstring& path) {
+        if (cmd == CMD_NEOMDIE_OPEN_NEW_TAB) {
+            m_tabBar.AddTab(path, true);
+        } else if (cmd == CMD_NEOMDIE_OPEN_SPLIT) {
+            m_multiPane.SetLayout(PaneLayout::DualVertical);
+            m_multiPane.GetPane(1).NavigateTo(path);
+            m_multiPane.SetActivePane(1);
+        } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
+            m_linksBar.AddLink(L"", path);
+        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
+            OnCommand(ID_TOOLS_SETTINGS);
         }
     };
 
     auto setupViewCallbacks = [this](FileListView& view, int paneIdx) {
         view.onPathChanged = [this, paneIdx](const std::wstring& p) {
+            m_multiPane.UpdatePaneHeader(paneIdx);
+
             if (m_multiPane.GetActiveIndex() == paneIdx) {
                 m_tabBar.SetTabPath(m_tabBar.GetActiveIndex(), p);
                 m_breadcrumb.SetPath(p);
-                m_tree.SelectPath(p);
+                if (m_treeVisible && Config::Get().autoExpandTree) {
+                    m_tree.SelectPath(p);
+                }
                 UpdateNavButtons();
                 AddToHistory(p);
+                UpdateWindowTitle(p);
             }
             if (Config::Get().syncNav) {
                 for (int i = 0; i < m_multiPane.GetPaneCount(); ++i) {
@@ -575,6 +861,12 @@ void MainWindow::CreateControls() {
                 UpdateStatus(count, totalSize);
             }
         };
+
+        view.onCustomCommand = [this](int cmd, const std::wstring& path) {
+            if (m_multiPane.onCustomCommand) {
+                m_multiPane.onCustomCommand(cmd, path);
+            }
+        };
     };
 
     for (int i = 0; i < 4; ++i) {
@@ -582,25 +874,25 @@ void MainWindow::CreateControls() {
     }
     m_multiPane.SetShowHidden(Config::Get().showHidden);
     m_multiPane.SetCalcFolderSize(Config::Get().calcFolderSize);
+    m_multiPane.SetShowHidden(Config::Get().showHidden);
+    m_multiPane.SetCalcFolderSize(Config::Get().calcFolderSize);
 
     m_multiPane.onActivePaneChanged = [this](int idx, const std::wstring& p) {
         m_breadcrumb.SetPath(p);
-        m_tree.SelectPath(p);
+        if (m_treeVisible && Config::Get().autoExpandTree) {
+            m_tree.SelectPath(p);
+        }
         m_tabBar.SetTabPath(m_tabBar.GetActiveIndex(), p);
         UpdateNavButtons();
+        UpdateWindowTitle(p);
         FileListView* activeView = m_multiPane.GetActivePane();
         if (activeView) {
+            m_filterBar.SetText(activeView->GetFilterQuery());
             auto sel = activeView->GetSelectedPaths();
             if (m_previewVisible && !sel.empty()) {
                 m_preview.SetFile(sel[0]);
             }
         }
-    };
-
-    m_multiPane.onLayoutChanged = [this](PaneLayout layout) {
-        Config::Get().paneLayout = (int)layout;
-        BuildMenu();
-        if (m_hwndBtnSplit) InvalidateRect(m_hwndBtnSplit, nullptr, TRUE);
     };
 }
 
@@ -620,6 +912,16 @@ void MainWindow::LayoutAll() {
     // 1. TabBar
     m_tabBar.UpdateLayout(totalW, tabH);
 
+    Config& cfg = Config::Get();
+    m_linksVisible = cfg.showToolbarLinks;
+
+    bool showTB = cfg.showToolbarStandard || cfg.showToolbarAddress || cfg.showToolbarSearch;
+    toolbarH = showTB ? Theme::Get().Scale(38, m_hwnd) : 0;
+    linksH = m_linksVisible ? Theme::Get().Scale(28, m_hwnd) : 0;
+    statusH = cfg.showStatusBar ? Theme::Get().Scale(24, m_hwnd) : 0;
+
+    ShowWindow(m_hwndStatusBar, cfg.showStatusBar ? SW_SHOW : SW_HIDE);
+
     // 2. Toolbar
     int btnW = Theme::Get().Scale(36, m_hwnd);
     int btnH = Theme::Get().Scale(32, m_hwnd);
@@ -627,49 +929,64 @@ void MainWindow::LayoutAll() {
     int barY = tabH + (toolbarH - btnH) / 2;
 
     int curX = Theme::Get().Scale(6, m_hwnd);
-    MoveWindow(m_hwndBtnBack, curX, barY, btnW, btnH, TRUE);
-    curX += btnW + spacing;
-    MoveWindow(m_hwndBtnForward, curX, barY, btnW, btnH, TRUE);
-    curX += btnW + spacing;
-    MoveWindow(m_hwndBtnUp, curX, barY, btnW, btnH, TRUE);
-    curX += btnW + spacing;
-    MoveWindow(m_hwndBtnRefresh, curX, barY, btnW, btnH, TRUE);
-    curX += btnW + spacing;
-    MoveWindow(m_hwndBtnNewTab, curX, barY, btnW, btnH, TRUE);
-    curX += btnW + spacing * 2;
 
-    MoveWindow(m_hwndBtnTree, curX, barY, btnW, btnH, TRUE);
-    curX += btnW + spacing * 2;
+    int swStd = (cfg.showToolbarStandard && showTB) ? SW_SHOW : SW_HIDE;
+    ShowWindow(m_hwndBtnBack, swStd);
+    ShowWindow(m_hwndBtnForward, swStd);
+    ShowWindow(m_hwndBtnUp, swStd);
+    ShowWindow(m_hwndBtnRefresh, swStd);
+    ShowWindow(m_hwndBtnNewTab, swStd);
+    ShowWindow(m_hwndBtnTree, swStd);
 
-    Config& cfg = Config::Get();
+    if (cfg.showToolbarStandard && showTB) {
+        MoveWindow(m_hwndBtnBack, curX, barY, btnW, btnH, TRUE);
+        curX += btnW + spacing;
+        MoveWindow(m_hwndBtnForward, curX, barY, btnW, btnH, TRUE);
+        curX += btnW + spacing;
+        MoveWindow(m_hwndBtnUp, curX, barY, btnW, btnH, TRUE);
+        curX += btnW + spacing;
+        MoveWindow(m_hwndBtnRefresh, curX, barY, btnW, btnH, TRUE);
+        curX += btnW + spacing;
+        MoveWindow(m_hwndBtnNewTab, curX, barY, btnW, btnH, TRUE);
+        curX += btnW + spacing * 2;
+
+        MoveWindow(m_hwndBtnTree, curX, barY, btnW, btnH, TRUE);
+        curX += btnW + spacing * 2;
+    }
+
     int rightBtnsW = btnW * 2 + spacing * 3;
     int filterW = Theme::Get().Scale(cfg.filterBarWidth, m_hwnd);
-    int splitBarToolW = (!cfg.lockToolbars) ? Theme::Get().Scale(5, m_hwnd) : 0;
+    int splitBarToolW = (cfg.showToolbarAddress && cfg.showToolbarSearch && !cfg.lockToolbars && showTB) ? Theme::Get().Scale(5, m_hwnd) : 0;
     int breadcrumbW = totalW - curX - filterW - rightBtnsW - splitBarToolW - Theme::Get().Scale(16, m_hwnd);
     if (breadcrumbW < Theme::Get().Scale(120, m_hwnd)) {
         breadcrumbW = Theme::Get().Scale(120, m_hwnd);
         filterW = totalW - curX - breadcrumbW - rightBtnsW - splitBarToolW - Theme::Get().Scale(16, m_hwnd);
-        if (filterW < Theme::Get().Scale(80, m_hwnd)) filterW = Theme::Get().Scale(80, m_hwnd);
+        if (filterW < Theme::Get().Scale(100, m_hwnd)) filterW = Theme::Get().Scale(100, m_hwnd);
     }
 
-    if (cfg.searchBarFirst) {
-        m_filterBar.UpdateLayout(curX, barY, filterW, btnH);
-        curX += filterW;
-        if (!cfg.lockToolbars) {
-            m_rcFilterSplitter.left = curX;
-            m_rcFilterSplitter.top = barY;
-            m_rcFilterSplitter.right = curX + splitBarToolW;
-            m_rcFilterSplitter.bottom = barY + btnH;
-            curX += splitBarToolW;
-        } else {
-            SetRectEmpty(&m_rcFilterSplitter);
-        }
-        m_breadcrumb.UpdateLayout(curX, barY, breadcrumbW, btnH);
-        curX += breadcrumbW + spacing * 2;
+    if (!cfg.showToolbarAddress) {
+        ShowWindow(m_breadcrumb.GetHwnd(), SW_HIDE);
+        filterW = totalW - curX - rightBtnsW - Theme::Get().Scale(16, m_hwnd);
+        if (filterW < Theme::Get().Scale(100, m_hwnd)) filterW = Theme::Get().Scale(100, m_hwnd);
     } else {
-        m_breadcrumb.UpdateLayout(curX, barY, breadcrumbW, btnH);
-        curX += breadcrumbW;
-        if (!cfg.lockToolbars) {
+        ShowWindow(m_breadcrumb.GetHwnd(), showTB ? SW_SHOW : SW_HIDE);
+    }
+
+    if (!cfg.showToolbarSearch) {
+        ShowWindow(m_filterBar.GetHwnd(), SW_HIDE);
+        breadcrumbW = totalW - curX - rightBtnsW - Theme::Get().Scale(16, m_hwnd);
+        if (breadcrumbW < Theme::Get().Scale(120, m_hwnd)) breadcrumbW = Theme::Get().Scale(120, m_hwnd);
+    } else {
+        ShowWindow(m_filterBar.GetHwnd(), showTB ? SW_SHOW : SW_HIDE);
+    }
+
+    if (!cfg.searchBarFirst) {
+        if (cfg.showToolbarAddress && showTB) {
+            m_breadcrumb.UpdateLayout(curX, barY, breadcrumbW, btnH);
+            curX += breadcrumbW;
+        }
+
+        if (cfg.showToolbarAddress && cfg.showToolbarSearch && showTB) {
             m_rcFilterSplitter.left = curX;
             m_rcFilterSplitter.top = barY;
             m_rcFilterSplitter.right = curX + splitBarToolW;
@@ -678,14 +995,41 @@ void MainWindow::LayoutAll() {
         } else {
             SetRectEmpty(&m_rcFilterSplitter);
         }
-        m_filterBar.UpdateLayout(curX, barY, filterW, btnH);
-        curX += filterW + spacing * 2;
+
+        if (cfg.showToolbarSearch && showTB) {
+            m_filterBar.UpdateLayout(curX, barY, filterW, btnH);
+            curX += filterW + spacing * 2;
+        }
+    } else {
+        if (cfg.showToolbarSearch && showTB) {
+            m_filterBar.UpdateLayout(curX, barY, filterW, btnH);
+            curX += filterW;
+        }
+
+        if (cfg.showToolbarAddress && cfg.showToolbarSearch && showTB) {
+            m_rcFilterSplitter.left = curX;
+            m_rcFilterSplitter.top = barY;
+            m_rcFilterSplitter.right = curX + splitBarToolW;
+            m_rcFilterSplitter.bottom = barY + btnH;
+            curX += splitBarToolW;
+        } else {
+            SetRectEmpty(&m_rcFilterSplitter);
+        }
+
+        if (cfg.showToolbarAddress && showTB) {
+            m_breadcrumb.UpdateLayout(curX, barY, breadcrumbW, btnH);
+            curX += breadcrumbW + spacing * 2;
+        }
     }
 
-    MoveWindow(m_hwndBtnSplit, curX, barY, btnW, btnH, TRUE);
-    curX += btnW + spacing;
-
-    MoveWindow(m_hwndBtnPreview, curX, barY, btnW, btnH, TRUE);
+    int swRight = showTB ? SW_SHOW : SW_HIDE;
+    ShowWindow(m_hwndBtnSplit, swRight);
+    ShowWindow(m_hwndBtnPreview, swRight);
+    if (showTB) {
+        MoveWindow(m_hwndBtnSplit, curX, barY, btnW, btnH, TRUE);
+        curX += btnW + spacing;
+        MoveWindow(m_hwndBtnPreview, curX, barY, btnW, btnH, TRUE);
+    }
 
     // Links Bar
     if (m_linksVisible) {
@@ -722,16 +1066,24 @@ void MainWindow::LayoutAll() {
         mainWidth = totalW - mainStartX;
     }
 
+    ShowWindow(m_preview.GetHwnd(), m_previewVisible ? SW_SHOW : SW_HIDE);
     if (!m_previewVisible) {
         m_multiPane.UpdateLayout(mainStartX, contentY, mainWidth, contentH);
+        m_multiPane.LayoutChildren();
     } else {
+        int minListW = (m_multiPane.GetPaneCount() > 1) ? Theme::Get().Scale(350, m_hwnd) : Theme::Get().Scale(250, m_hwnd);
         int listW = mainWidth - m_previewWidth - splitBarW;
-        if (listW < Theme::Get().Scale(250, m_hwnd)) {
-            listW = Theme::Get().Scale(250, m_hwnd);
+        if (listW < minListW) {
+            listW = minListW;
             m_previewWidth = mainWidth - listW - splitBarW;
+            if (m_previewWidth < Theme::Get().Scale(120, m_hwnd)) {
+                m_previewWidth = Theme::Get().Scale(120, m_hwnd);
+                listW = mainWidth - m_previewWidth - splitBarW;
+            }
         }
 
         m_multiPane.UpdateLayout(mainStartX, contentY, listW, contentH);
+        m_multiPane.LayoutChildren();
 
         m_rcPreviewSplitter.left = mainStartX + listW;
         m_rcPreviewSplitter.top = contentY;
@@ -746,6 +1098,8 @@ void MainWindow::LayoutAll() {
         SendMessageW(m_hwndStatusBar, WM_SIZE, 0, 0);
     }
 
+    RECT rcToolbar = { 0, tabH, totalW, tabH + toolbarH };
+    InvalidateRect(m_hwnd, &rcToolbar, TRUE);
     InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
@@ -794,7 +1148,6 @@ void MainWindow::SetLayout(PaneLayout layout) {
     Config::Get().Save();
     BuildMenu();
     LayoutAll();
-    if (m_hwndBtnSplit) InvalidateRect(m_hwndBtnSplit, nullptr, TRUE);
 }
 
 void MainWindow::ShowLayoutMenu(POINT ptScreen) {
@@ -831,7 +1184,6 @@ void MainWindow::ToggleTree() {
     ShowWindow(m_tree.GetHwnd(), m_treeVisible ? SW_SHOW : SW_HIDE);
     BuildMenu();
     LayoutAll();
-    if (m_hwndBtnTree) InvalidateRect(m_hwndBtnTree, nullptr, TRUE);
 }
 
 void MainWindow::ToggleLinksBar() {
@@ -844,27 +1196,59 @@ void MainWindow::ToggleLinksBar() {
 void MainWindow::ShowToolbarContextMenu(POINT ptScreen) {
     bool isZh = I18n::Get().IsChinese();
     HMENU hMenu = CreatePopupMenu();
-    AppendMenuW(hMenu, MF_STRING | (m_linksVisible ? MF_CHECKED : MF_UNCHECKED),
-                1001, isZh ? L"显示链接栏 / 收藏夹" : L"Show Favorites / Links Bar");
-    AppendMenuW(hMenu, MF_STRING | (m_treeVisible ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_TREE_TOGGLE, isZh ? L"显示文件夹目录树 (F8)" : L"Show Directory Tree (F8)");
-    AppendMenuW(hMenu, MF_STRING | (m_previewVisible ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_PREVIEW_TOGGLE, isZh ? L"显示快速预览窗格 (Alt+P)" : L"Show Preview Pane (Alt+P)");
+    AppendMenuW(hMenu, MF_STRING | (Config::Get().lockToolbars ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_LOCK_TOOLBARS, isZh ? L"锁定工具栏(&L)" : L"Lock Toolbars(&L)");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hMenu, MF_STRING, ID_TOOLS_SETTINGS, isZh ? L"选项与设置(&S)..." : L"Options & Settings(&S)...");
+
+    // Toolbar arrangement
+    HMENU hArrSub = CreatePopupMenu();
+    AppendMenuW(hArrSub, MF_STRING | (!Config::Get().searchBarFirst ? MF_CHECKED : MF_UNCHECKED),
+                1101, isZh ? L"地址栏在前，搜索栏在后" : L"Address Bar First, Search Bar Second");
+    AppendMenuW(hArrSub, MF_STRING | (Config::Get().searchBarFirst ? MF_CHECKED : MF_UNCHECKED),
+                1102, isZh ? L"搜索栏在前，地址栏在后" : L"Search Bar First, Address Bar Second");
+    AppendMenuW(hArrSub, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hArrSub, MF_STRING, 1103, isZh ? L"重置工具栏默认位置与宽度(&R)" : L"Reset Toolbar Layout(&R)");
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hArrSub, isZh ? L"排列方式(&A)" : L"Arrangement(&A)");
+
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hMenu, MF_STRING | (m_linksVisible ? MF_CHECKED : MF_UNCHECKED),
+                1001, isZh ? L"显示链接栏 / 收藏夹(&K)" : L"Show Favorites / Links Bar(&K)");
+    AppendMenuW(hMenu, MF_STRING | (m_treeVisible ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_TREE_TOGGLE, isZh ? L"显示文件夹目录树(&T)\tF8" : L"Show Directory Tree(&T)\tF8");
+    AppendMenuW(hMenu, MF_STRING | (m_previewVisible ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_PREVIEW_TOGGLE, isZh ? L"显示快速预览窗格(&P)\tAlt+P" : L"Show Preview Pane(&P)\tAlt+P");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hMenu, MF_STRING, ID_TOOLS_SETTINGS, isZh ? L"选项设置(&O)..." : L"Options(&O)...");
 
     int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, ptScreen.x, ptScreen.y, 0, m_hwnd, nullptr);
     DestroyMenu(hMenu);
 
-    if (cmd > 0) {
+    if (cmd == 1101) {
+        Config::Get().searchBarFirst = false;
+        Config::Get().Save();
+        LayoutAll();
+    } else if (cmd == 1102) {
+        Config::Get().searchBarFirst = true;
+        Config::Get().Save();
+        LayoutAll();
+    } else if (cmd == 1103) {
+        Config::Get().searchBarFirst = false;
+        Config::Get().filterBarWidth = 240;
+        Config::Get().Save();
+        LayoutAll();
+    } else if (cmd > 0) {
         OnCommand((UINT)cmd);
     }
 }
 
 void MainWindow::TogglePreview() {
     m_previewVisible = !m_previewVisible;
-    ShowWindow(m_preview.GetHwnd(), m_previewVisible ? SW_SHOW : SW_HIDE);
+    BuildMenu();
+    LayoutAll();
+    UpdateWindow(m_hwnd); // Instant visual update of toolbar preview icon to gray!
+
     if (m_previewVisible) {
+        ShowWindow(m_preview.GetHwnd(), SW_SHOW);
         FileListView* activeView = m_multiPane.GetActivePane();
         if (activeView) {
             auto sel = activeView->GetSelectedPaths();
@@ -873,11 +1257,9 @@ void MainWindow::TogglePreview() {
             }
         }
     } else {
+        ShowWindow(m_preview.GetHwnd(), SW_HIDE);
         m_preview.Clear();
     }
-    BuildMenu();
-    LayoutAll();
-    if (m_hwndBtnPreview) InvalidateRect(m_hwndBtnPreview, nullptr, TRUE);
 }
 
 void MainWindow::OnCommand(UINT cmdId) {
@@ -898,10 +1280,16 @@ void MainWindow::OnCommand(UINT cmdId) {
         activeView->GoUp();
         break;
     case IDC_BTN_REFRESH:
-    case ID_VIEW_REFRESH:
-        activeView->Refresh();
+    case ID_VIEW_REFRESH: {
+        std::wstring curFilter = m_filterBar.GetText();
+        if (curFilter.empty() && !activeView->GetFilterQuery().empty()) {
+            activeView->SetFilter(L"", false, false);
+        } else {
+            activeView->Refresh();
+        }
         m_tree.Refresh();
         break;
+    }
     case IDC_BTN_NEWTAB:
         m_tabBar.AddTab(activeView->GetCurrentPath(), true);
         break;
@@ -978,6 +1366,197 @@ void MainWindow::OnCommand(UINT cmdId) {
         m_tabBar.CloseAllTabs();
         BuildMenu();
         break;
+    case ID_FILE_CLOSE_LEFT_TABS:
+        m_tabBar.CloseTabsToLeft(m_tabBar.GetActiveIndex());
+        BuildMenu();
+        break;
+    case ID_FILE_CLOSE_RIGHT_TABS:
+        m_tabBar.CloseTabsToRight(m_tabBar.GetActiveIndex());
+        BuildMenu();
+        break;
+    case ID_FILE_NEW_WINDOW_SPECIFY: {
+        IFileDialog* pfd = nullptr;
+        if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pfd)))) {
+            DWORD dwOptions = 0;
+            pfd->GetOptions(&dwOptions);
+            pfd->SetOptions(dwOptions | FOS_PICKFOLDERS);
+            if (SUCCEEDED(pfd->Show(m_hwnd))) {
+                IShellItem* psi = nullptr;
+                if (SUCCEEDED(pfd->GetResult(&psi))) {
+                    PWSTR pszPath = nullptr;
+                    if (SUCCEEDED(psi->GetDisplayName(SIGDN_FILESYSPATH, &pszPath))) {
+                        wchar_t exePath[MAX_PATH];
+                        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+                        ShellExecuteW(nullptr, L"open", exePath, pszPath, nullptr, SW_SHOWNORMAL);
+                        CoTaskMemFree(pszPath);
+                    }
+                    psi->Release();
+                }
+            }
+            pfd->Release();
+        }
+        break;
+    }
+    case ID_FILE_NEW_WINDOW_DESKTOP: {
+        PWSTR p = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, NULL, &p)) && p) {
+            wchar_t exePath[MAX_PATH];
+            GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+            ShellExecuteW(nullptr, L"open", exePath, p, nullptr, SW_SHOWNORMAL);
+            CoTaskMemFree(p);
+        }
+        break;
+    }
+    case ID_FILE_NEW_WINDOW_CURRENT: {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        ShellExecuteW(nullptr, L"open", exePath, activeView->GetCurrentPath().c_str(), nullptr, SW_SHOWNORMAL);
+        break;
+    }
+    case ID_FILE_NEW_WINDOW_CLIPBOARD: {
+        if (OpenClipboard(m_hwnd)) {
+            HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+            if (hData) {
+                wchar_t* pText = (wchar_t*)GlobalLock(hData);
+                if (pText && PathFileExistsW(pText)) {
+                    wchar_t exePath[MAX_PATH];
+                    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+                    ShellExecuteW(nullptr, L"open", exePath, pText, nullptr, SW_SHOWNORMAL);
+                }
+                GlobalUnlock(hData);
+            }
+            CloseClipboard();
+        }
+        break;
+    }
+    case ID_FILE_OPEN_EXPLORER:
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", activeView->GetCurrentPath().c_str(), nullptr, SW_SHOWNORMAL);
+        break;
+    case ID_FILE_CREATE_SHORTCUT: {
+        auto sel = activeView->GetSelectedPaths();
+        std::wstring target = !sel.empty() ? sel[0] : activeView->GetCurrentPath();
+        PWSTR pDesk = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, NULL, &pDesk)) && pDesk) {
+            std::wstring lnkPath = std::wstring(pDesk) + L"\\" + PathFindFileNameW(target.c_str()) + L".lnk";
+            ShellUtils::CreateShortcut(lnkPath, target, L"", L"");
+            CoTaskMemFree(pDesk);
+        }
+        break;
+    }
+    case ID_EDIT_UNDO: {
+        HWND hList = activeView->GetHwnd();
+        if (hList) {
+            SetFocus(hList);
+            keybd_event(VK_CONTROL, 0, 0, 0);
+            keybd_event('Z', 0, 0, 0);
+            keybd_event('Z', 0, KEYEVENTF_KEYUP, 0);
+            keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+        }
+        break;
+    }
+    case ID_VIEW_LOCK_TOOLBARS:
+        Config::Get().lockToolbars = !Config::Get().lockToolbars;
+        Config::Get().Save();
+        BuildMenu();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        break;
+    case ID_VIEW_TB_STANDARD:
+        Config::Get().showToolbarStandard = !Config::Get().showToolbarStandard;
+        Config::Get().Save();
+        BuildMenu();
+        LayoutAll();
+        break;
+    case ID_VIEW_TB_ADDRESS:
+        Config::Get().showToolbarAddress = !Config::Get().showToolbarAddress;
+        Config::Get().Save();
+        BuildMenu();
+        LayoutAll();
+        break;
+    case ID_VIEW_TB_SEARCH:
+        Config::Get().showToolbarSearch = !Config::Get().showToolbarSearch;
+        Config::Get().Save();
+        BuildMenu();
+        LayoutAll();
+        break;
+    case ID_VIEW_STATUSBAR:
+        Config::Get().showStatusBar = !Config::Get().showStatusBar;
+        ShowWindow(m_hwndStatusBar, Config::Get().showStatusBar ? SW_SHOW : SW_HIDE);
+        Config::Get().Save();
+        BuildMenu();
+        LayoutAll();
+        break;
+    case ID_VIEW_SHOW_HIDDEN: {
+        Config::Get().showHidden = !Config::Get().showHidden;
+        Config::Get().Save();
+        m_multiPane.SetShowHidden(Config::Get().showHidden);
+        BuildMenu();
+        break;
+    }
+    case ID_VIEW_CALC_FOLDER_SIZE: {
+        Config::Get().calcFolderSize = !Config::Get().calcFolderSize;
+        Config::Get().Save();
+        m_multiPane.SetCalcFolderSize(Config::Get().calcFolderSize);
+        BuildMenu();
+        break;
+    }
+    case ID_VIEW_MINIMIZE_TRAY:
+        ShowWindow(m_hwnd, SW_MINIMIZE);
+        break;
+    case ID_NAV_UP_NEW_TAB: {
+        wchar_t parent[MAX_PATH];
+        StringCchCopyW(parent, MAX_PATH, activeView->GetCurrentPath().c_str());
+        PathRemoveFileSpecW(parent);
+        if (parent[0]) {
+            m_tabBar.AddTab(parent, true);
+            BuildMenu();
+        }
+        break;
+    }
+    case ID_WINDOW_MAXIMIZE:
+        m_multiPane.ToggleMaximizePane(m_multiPane.GetActiveIndex());
+        break;
+    case ID_WINDOW_MINIMIZE:
+        m_multiPane.MinimizePane(m_multiPane.GetActiveIndex());
+        break;
+    case ID_WINDOW_CLOSE:
+        m_multiPane.ClosePane(m_multiPane.GetActiveIndex());
+        break;
+    case ID_WINDOW_MAIN_MAXIMIZE:
+        ShowWindow(m_hwnd, IsZoomed(m_hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+        break;
+    case ID_WINDOW_MAIN_MINIMIZE:
+        ShowWindow(m_hwnd, SW_MINIMIZE);
+        break;
+    case ID_TOOLS_GESTURES:
+        SettingsDialog::Show(m_hwnd, [this]() {
+            RebuildAccelerators();
+    if (ShellUtils::IsExplorerReplaced()) {
+        RegisterHotKey(m_hwnd, 9001, MOD_WIN, 'E');
+    }
+            UpdateLanguageUI();
+        });
+        break;
+    case ID_TOOLS_ALLOW_DUP_TABS:
+        Config::Get().allowDuplicateTabs = !Config::Get().allowDuplicateTabs;
+        Config::Get().Save();
+        BuildMenu();
+        break;
+    case ID_TOOLS_MIN_TO_TRAY:
+        Config::Get().minimizeToTray = !Config::Get().minimizeToTray;
+        Config::Get().Save();
+        BuildMenu();
+        break;
+    case ID_TOOLS_AUTO_EXPAND_TREE:
+        Config::Get().autoExpandTree = !Config::Get().autoExpandTree;
+        Config::Get().Save();
+        BuildMenu();
+        break;
+    case ID_TOOLS_OPEN_SCRIPTS_DIR:
+        ShellExecuteW(nullptr, L"open", ScriptEngine::Get().GetScriptsDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        break;
+    case ID_TOOLS_FOLDER_OPTIONS:
+        ShellExecuteW(nullptr, L"open", L"control.exe", L"folders", nullptr, SW_SHOWNORMAL);
+        break;
     case ID_FILE_REOPEN_CLOSED_TAB:
         m_tabBar.ReopenClosedTab();
         BuildMenu();
@@ -1000,6 +1579,36 @@ void MainWindow::OnCommand(UINT cmdId) {
         activeView->Refresh();
         break;
     }
+    case ID_FILE_NEW_MD: {
+        bool isZh = I18n::Get().IsChinese();
+        std::wstring baseName = isZh ? L"新建 Markdown 文档.md" : L"New Markdown Document.md";
+        std::wstring newFile = activeView->GetCurrentPath() + L"\\" + baseName;
+        int idx = 2;
+        while (PathFileExistsW(newFile.c_str())) {
+            newFile = activeView->GetCurrentPath() + (isZh ? (L"\\新建 Markdown 文档 (" + std::to_wstring(idx++) + L").md") : (L"\\New Markdown (" + std::to_wstring(idx++) + L").md"));
+        }
+        HANDLE hF = CreateFileW(newFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hF != INVALID_HANDLE_VALUE) {
+            const char* initContent = "# Title\n\n";
+            DWORD written = 0;
+            WriteFile(hF, initContent, (DWORD)strlen(initContent), &written, nullptr);
+            CloseHandle(hF);
+        }
+        activeView->Refresh();
+        break;
+    }
+    case ID_SCROLL_TOP:
+        activeView->ScrollToTop();
+        break;
+    case ID_SCROLL_BOTTOM:
+        activeView->ScrollToBottom();
+        break;
+    case ID_SCROLL_PAGEUP:
+        activeView->ScrollPageUp();
+        break;
+    case ID_SCROLL_PAGEDOWN:
+        activeView->ScrollPageDown();
+        break;
     case ID_FILE_NEW_FILE: {
         std::wstring newFile = activeView->GetCurrentPath() + L"\\" + I18n::Get().T(StringId::NewTextFile);
         int idx = 2;
@@ -1214,6 +1823,8 @@ void MainWindow::OnCommand(UINT cmdId) {
         break;
     case ID_TOOLS_RELOAD_SCRIPTS:
         ScriptEngine::Get().ReloadScripts();
+        BuildMenu();
+        DrawMenuBar(m_hwnd);
         break;
     case ID_TOOLS_SCRIPT_CONSOLE:
         ScriptEngine::Get().ShowConsole();
@@ -1237,28 +1848,70 @@ void MainWindow::OnCommand(UINT cmdId) {
                 m_multiPane.GetPane(i).SetCalcFolderSize(cfg.calcFolderSize);
             }
 
+            RebuildAccelerators();
+    if (ShellUtils::IsExplorerReplaced()) {
+        RegisterHotKey(m_hwnd, 9001, MOD_WIN, 'E');
+    }
             UpdateLanguageUI();
         });
         break;
 
+    case ID_TOOLS_SHORTCUTS_SETTINGS:
     case ID_HELP_SHORTCUTS:
-        MessageBoxW(m_hwnd, I18n::Get().T(StringId::ShortcutsCheatsheet),
-                    I18n::Get().T(StringId::MenuHelpShortcuts), MB_OK | MB_ICONINFORMATION);
+        SettingsDialog::Show(m_hwnd, [this]() {
+            UpdateLanguageUI();
+        }, 7);
         break;
     case ID_HELP_GESTURES:
-        MessageBoxW(m_hwnd, I18n::Get().T(StringId::GesturesCheatsheet),
-                    I18n::Get().T(StringId::MenuHelpGestures), MB_OK | MB_ICONINFORMATION);
+        SettingsDialog::Show(m_hwnd, [this]() {
+            UpdateLanguageUI();
+        }, 8);
         break;
-    case ID_HELP_MDIE_HOMEPAGE:
-        ShellExecuteW(nullptr, L"open", L"https://cres.s28.xrea.com/soft/mdie.html", nullptr, nullptr, SW_SHOWNORMAL);
+    case ID_HELP_CHECK_UPDATES: {
+        bool isZh = I18n::Get().IsChinese();
+        MessageBoxW(m_hwnd,
+            isZh ? L"当前已是最新版本 NeoMDIE v2.1.0\n\n已集成 MDIE 原版核心体验、现代化 Win32 / Shell COM 引擎、Tab 颜色标记与多栏分屏设计。"
+                 : L"You are using the latest version of NeoMDIE v2.1.0\n\nAll features and modern shell extensions are up to date.",
+            isZh ? L"检查更新" : L"Check for Updates",
+            MB_OK | MB_ICONINFORMATION);
         break;
+    }
     case ID_HELP_GITHUB:
-        ShellExecuteW(nullptr, L"open", L"https://github.com/mianao/NeoMDIE", nullptr, nullptr, SW_SHOWNORMAL);
+        ShellExecuteW(nullptr, L"open", L"https://github.com/harry10086/NeoMDIE", nullptr, nullptr, SW_SHOWNORMAL);
         break;
-    case ID_HELP_ABOUT:
-        MessageBoxW(m_hwnd, I18n::Get().T(StringId::AboutDialogText),
-                    I18n::Get().T(StringId::AppName), MB_OK | MB_ICONINFORMATION);
+    case ID_VIEW_DARK_MODE: {
+        Theme::Get().ToggleTheme();
+        Config::Get().themeMode = Theme::Get().IsDarkMode() ? 1 : 0;
+        DrawMenuBar(m_hwnd);
+        Config::Get().Save();
+        ApplyTheme();
+        BuildMenu();
         break;
+    }
+
+    case ID_HELP_ABOUT: {
+        bool isZh = I18n::Get().IsChinese();
+        std::wstring aboutText = isZh ?
+            L"NeoMDIE - 现代化纯原生 Win32 多标签/多栏文件管理器\n"
+            L"版本: v1.0.0 (x64 Release)\n\n"
+            L"作者: Harry (https://mianao.info)\n"
+            L"开源项目仓库: https://github.com/harry10086/NeoMDIE\n"
+            L"致敬经典: MDIE (Tabbed File Manager for Windows)\n\n"
+            L"技术特色:\n"
+            L"• 纯 C++17 / Native Win32 API / Windows Shell COM 引擎\n"
+            L"• 静态编译 (/MT)，零额外运行时依赖，轻量疾速 (<1MB)\n"
+            L"• 支持多栏分栏、鼠标手势、多标签彩色标记与即时搜索过滤\n\n"
+            L"基于 GNU General Public License v3 (GPLv3) 开源协议发布。" :
+            L"NeoMDIE - Modern Native Win32 Tabbed & Multi-Pane File Manager\n"
+            L"Version: v1.0.0 (x64 Release)\n\n"
+            L"Author: Harry (https://mianao.info)\n"
+            L"Repository: https://github.com/harry10086/NeoMDIE\n"
+            L"Inspired by: MDIE (Tabbed File Manager for Windows)\n\n"
+            L"Pure C++17 / Native Win32 / Shell COM. Zero dependencies.\n"
+            L"Licensed under the GNU General Public License v3 (GPLv3).";
+        MessageBoxW(m_hwnd, aboutText.c_str(), isZh ? L"关于 NeoMDIE" : L"About NeoMDIE", MB_OK | MB_ICONINFORMATION);
+        break;
+    }
 
     default:
         if (cmdId >= ID_HISTORY_START && cmdId <= ID_HISTORY_END) {
@@ -1272,12 +1925,23 @@ void MainWindow::OnCommand(UINT cmdId) {
                 m_tabBar.SetActiveTab(tIdx);
                 BuildMenu();
             }
+        } else if (cmdId >= ID_RECENT_CLOSED_START && cmdId <= ID_RECENT_CLOSED_END) {
+            int cIdx = (int)(cmdId - ID_RECENT_CLOSED_START);
+            const auto& cHist = m_tabBar.GetClosedHistory();
+            if (cIdx >= 0 && cIdx < (int)cHist.size()) {
+                m_tabBar.AddTab(cHist[cHist.size() - 1 - cIdx], true);
+                BuildMenu();
+            }
         } else if (cmdId >= ID_SCRIPT_COMMAND_START && cmdId <= ID_SCRIPT_COMMAND_END) {
-            ScriptEngine::Get().ExecuteCommand(cmdId, activeView->GetCurrentPath(), activeView->GetSelectedPaths());
+            bool ok = ScriptEngine::Get().ExecuteCommand(cmdId, activeView ? activeView->GetCurrentPath() : L"", activeView ? activeView->GetSelectedPaths() : std::vector<std::wstring>());
+            if (ok && activeView) {
+                activeView->Refresh();
+            }
         }
         break;
     }
 }
+
 
 void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
     HDC hdc = pdis->hDC;
@@ -1293,9 +1957,11 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
     else if (btnId == IDC_BTN_SPLIT && (m_multiPane.GetLayout() != PaneLayout::Single)) isActiveToggle = true;
     else if (btnId == IDC_BTN_PREVIEW && m_previewVisible) isActiveToggle = true;
 
+    // Background surface fill
     FillRect(hdc, &rc, Theme::Get().BrushSurface());
 
-    RECT rcBtn = { rc.left + 1, rc.top + 1, rc.right - 1, rc.bottom - 1 };
+    // Rounded rectangle on hover / selected / active
+    RECT rcBtn = { rc.left + 2, rc.top + 2, rc.right - 2, rc.bottom - 2 };
     if (isSelected) {
         HBRUSH hbrPressed = Theme::Get().BrushSelected();
         HPEN hPen = Theme::Get().PenBorder();
@@ -1304,7 +1970,7 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
         RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, 6, 6);
         SelectObject(hdc, oldPen);
         SelectObject(hdc, oldBrush);
-    } else if (isActiveToggle || isHot) {
+    } else if (isHot || isActiveToggle) {
         HBRUSH hbrHover = isActiveToggle ? Theme::Get().BrushSelected() : Theme::Get().BrushHover();
         HPEN hPen = isActiveToggle ? CreatePen(PS_SOLID, 1, Theme::Get().ClrAccent()) : Theme::Get().PenBorder();
         HGDIOBJ oldBrush = SelectObject(hdc, hbrHover);
@@ -1315,40 +1981,105 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
         if (isActiveToggle) DeleteObject(hPen);
     }
 
-    HFONT hIconFont = CreateFontW(-Theme::Get().Scale(16, m_hwnd), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                                  L"Segoe MDL2 Assets");
-    HGDIOBJ oldFont = SelectObject(hdc, hIconFont);
-    SetBkMode(hdc, TRANSPARENT);
-
-    COLORREF textColor = Theme::Get().ClrTextPrimary();
-    if (isDisabled) {
-        textColor = Theme::Get().ClrTextSecondary();
-    } else if (isActiveToggle) {
-        textColor = Theme::Get().ClrAccent();
+    // Windows 11 Fluent Icons glyph
+    wchar_t glyph[2] = { 0, 0 };
+    switch (btnId) {
+    case IDC_BTN_BACK:    glyph[0] = 0xE72B; break; // Back
+    case IDC_BTN_FORWARD: glyph[0] = 0xE72A; break; // Forward
+    case IDC_BTN_UP:      glyph[0] = 0xE74A; break; // Up
+    case IDC_BTN_REFRESH: glyph[0] = 0xE72C; break; // Refresh
+    case IDC_BTN_NEWTAB:  glyph[0] = 0xE710; break; // Add (+)
+    case IDC_BTN_TREE:    glyph[0] = 0xE8A9; break; // Navigation / Tree
+    case IDC_BTN_SPLIT:   glyph[0] = 0xE784; break; // Split View
+    case IDC_BTN_PREVIEW: glyph[0] = 0xE8FF; break; // Preview Pane
+    default: return;
     }
-    SetTextColor(hdc, textColor);
 
-    wchar_t text[64] = { 0 };
-    GetWindowTextW(pdis->hwndItem, text, 64);
-    DrawTextW(hdc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    COLORREF iconColor = Theme::Get().ClrTextPrimary();
+    if (isDisabled) {
+        iconColor = Theme::Get().ClrTextSecondary();
+    } else if (isActiveToggle || isHot) {
+        iconColor = Theme::Get().ClrAccent();
+    }
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, iconColor);
+
+    int iconPixelHeight = (btnId == IDC_BTN_NEWTAB) ? 14 : 15;
+    HFONT hIconFont = Theme::Get().GetIconFont(iconPixelHeight, m_hwnd);
+    HGDIOBJ oldFont = SelectObject(hdc, hIconFont);
+
+    DrawTextW(hdc, glyph, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     SelectObject(hdc, oldFont);
     DeleteObject(hIconFont);
 }
-
 LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case 0x0091: { // WM_UAHDRAWMENU (Dark mode menu bar background)
+        if (Theme::Get().IsDarkMode()) {
+            struct UAHMENU { HMENU hmenu; HDC hdc; DWORD dwFlags; };
+            UAHMENU* pUah = (UAHMENU*)lParam;
+            MENUBARINFO mbi = { sizeof(mbi) };
+            if (GetMenuBarInfo(hwnd, OBJID_MENU, 0, &mbi)) {
+                RECT rcWindow;
+                GetWindowRect(hwnd, &rcWindow);
+                RECT rcBar = mbi.rcBar;
+                OffsetRect(&rcBar, -rcWindow.left, -rcWindow.top);
+                rcBar.bottom += 2;
+                FillRect(pUah->hdc, &rcBar, Theme::Get().BrushSurface());
+                return TRUE;
+            }
+        }
+        break;
+    }
+    case 0x0092: { // WM_UAHDRAWMENUITEM (Dark mode menu bar items)
+        if (Theme::Get().IsDarkMode()) {
+            struct UAHMENU { HMENU hmenu; HDC hdc; DWORD dwFlags; };
+            struct UAHMENUITEM { int iPosition; };
+            struct UAHDRAWMENUITEM {
+                DRAWITEMSTRUCT dis;
+                UAHMENU um;
+                UAHMENUITEM umi;
+            };
+            UAHDRAWMENUITEM* pItem = (UAHDRAWMENUITEM*)lParam;
+            HDC hdc = pItem->dis.hDC ? pItem->dis.hDC : pItem->um.hdc;
+            RECT rc = pItem->dis.rcItem;
+            bool isHot = (pItem->dis.itemState & (ODS_SELECTED | ODS_HOTLIGHT)) != 0;
+            HBRUSH hbr = isHot ? Theme::Get().BrushSelected() : Theme::Get().BrushSurface();
+            FillRect(hdc, &rc, hbr);
+
+            HMENU hMenu = GetMenu(hwnd);
+            wchar_t text[128] = { 0 };
+            GetMenuStringW(hMenu, pItem->umi.iPosition, text, 128, MF_BYPOSITION);
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, isHot ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary());
+            HFONT hFont = Theme::Get().GetUIFont(hwnd);
+            HGDIOBJ oldFont = SelectObject(hdc, hFont);
+            DrawTextW(hdc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdc, oldFont);
+            return TRUE;
+        }
+        break;
+    }
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rcClient;
+        GetClientRect(hwnd, &rcClient);
+        int tabH = Theme::Get().Scale(36, hwnd);
+        int toolbarH = Theme::Get().Scale(38, hwnd);
+        RECT rcToolbar = { 0, tabH, rcClient.right, tabH + toolbarH };
+        FillRect(hdc, &rcToolbar, Theme::Get().BrushSurface());
+
         HBRUSH hbr = Theme::Get().BrushBorder();
         if (m_treeVisible) {
             FillRect(hdc, &m_rcTreeSplitter, hbr);
         }
         if (m_previewVisible) {
             FillRect(hdc, &m_rcPreviewSplitter, hbr);
+        }
+        if (!Config::Get().lockToolbars) {
         }
         EndPaint(hwnd, &ps);
         return 0;
@@ -1363,6 +2094,10 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return TRUE;
         }
         if ((m_previewVisible && PtInRect(&m_rcPreviewSplitter, pt)) || m_resizingPreview) {
+            SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+            return TRUE;
+        }
+        if (!Config::Get().lockToolbars && (PtInRect(&m_rcFilterSplitter, pt) || m_resizingFilterBar)) {
             SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
             return TRUE;
         }
@@ -1381,9 +2116,41 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             SetCapture(hwnd);
             return 0;
         }
+        if (!Config::Get().lockToolbars && PtInRect(&m_rcFilterSplitter, pt)) {
+            m_resizingFilterBar = true;
+            SetCapture(hwnd);
+            return 0;
+        }
         break;
     }
 
+    case WM_XBUTTONUP: {
+        WORD btn = GET_XBUTTON_WPARAM(wParam);
+        if (btn == XBUTTON1) {
+            FileListView* activeView = m_multiPane.GetActivePane();
+            if (activeView) activeView->GoBack();
+            return TRUE;
+        } else if (btn == XBUTTON2) {
+            FileListView* activeView = m_multiPane.GetActivePane();
+            if (activeView) activeView->GoForward();
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_APPCOMMAND: {
+        int cmd = GET_APPCOMMAND_LPARAM(lParam);
+        if (cmd == APPCOMMAND_BROWSER_BACKWARD) {
+            FileListView* activeView = m_multiPane.GetActivePane();
+            if (activeView) activeView->GoBack();
+            return TRUE;
+        } else if (cmd == APPCOMMAND_BROWSER_FORWARD) {
+            FileListView* activeView = m_multiPane.GetActivePane();
+            if (activeView) activeView->GoForward();
+            return TRUE;
+        }
+        break;
+    }
     case WM_MOUSEMOVE: {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         if (m_resizingTree && (wParam & MK_LBUTTON)) {
@@ -1396,6 +2163,32 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             GetClientRect(hwnd, &rc);
             m_previewWidth = rc.right - pt.x;
             LayoutAll();
+            return 0;
+        }
+        if (m_resizingFilterBar && (wParam & MK_LBUTTON)) {
+            RECT rcClient;
+            GetClientRect(hwnd, &rcClient);
+            int totalW = rcClient.right - rcClient.left;
+            int btnW = Theme::Get().Scale(36, hwnd);
+            int spacing = Theme::Get().Scale(3, hwnd);
+            int rightBtnsW = btnW * 2 + spacing * 3;
+            int filterStartX = Theme::Get().Scale(6, hwnd) + (btnW + spacing) * 5 + btnW + spacing * 2;
+
+            int newFilterW = 0;
+            if (Config::Get().searchBarFirst) {
+                newFilterW = pt.x - filterStartX;
+            } else {
+                newFilterW = (totalW - rightBtnsW - Theme::Get().Scale(16, hwnd)) - pt.x;
+            }
+            int unscaled = (int)(newFilterW / Theme::Get().GetScaleFactor(hwnd));
+            if (unscaled < 80) unscaled = 80;
+            if (unscaled > 700) unscaled = 700;
+            Config::Get().filterBarWidth = unscaled;
+            LayoutAll();
+            int tabH = Theme::Get().Scale(36, hwnd);
+            int toolbarH = Theme::Get().Scale(38, hwnd);
+            RECT rcToolbar = { 0, tabH, totalW, tabH + toolbarH };
+            RedrawWindow(hwnd, &rcToolbar, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
             return 0;
         }
         break;
@@ -1412,12 +2205,56 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             ReleaseCapture();
             return 0;
         }
+        if (m_resizingFilterBar) {
+            m_resizingFilterBar = false;
+            ReleaseCapture();
+            Config::Get().Save();
+            return 0;
+        }
         break;
     }
 
     case WM_SIZE:
         LayoutAll();
         return 0;
+
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xFFF0) == SC_MINIMIZE && Config::Get().minimizeToTray) {
+            AddTrayIcon();
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        }
+        break;
+
+    case WM_TRAY_NOTIFY: {
+        UINT uMsg = LOWORD(lParam);
+        if (uMsg == WM_LBUTTONUP || uMsg == WM_LBUTTONDBLCLK) {
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+            RemoveTrayIcon();
+        } else if (uMsg == WM_RBUTTONUP) {
+            POINT pt;
+            GetCursorPos(&pt);
+            HMENU hMenu = CreatePopupMenu();
+            bool isZh = I18n::Get().IsChinese();
+            AppendMenuW(hMenu, MF_STRING, 5001, isZh ? L"显示主界面(&O)" : L"Show NeoMDIE(&O)");
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(hMenu, MF_STRING, 5002, isZh ? L"退出(&X)" : L"Exit(&X)");
+            SetForegroundWindow(hwnd);
+            int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
+            DestroyMenu(hMenu);
+            if (cmd == 5001) {
+                ShowWindow(hwnd, SW_RESTORE);
+                SetForegroundWindow(hwnd);
+                RemoveTrayIcon();
+            } else if (cmd == 5002) {
+                RemoveTrayIcon();
+                Config::Get().closeToTray = false;
+                DestroyWindow(hwnd);
+            }
+        }
+        return 0;
+    }
 
     case WM_COMMAND:
         OnCommand(LOWORD(wParam));
@@ -1445,6 +2282,23 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         break;
     }
 
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX: {
+        HDC hdc = (HDC)wParam;
+        SetBkMode(hdc, OPAQUE);
+        SetBkColor(hdc, Theme::Get().ClrSurface());
+        SetTextColor(hdc, Theme::Get().ClrTextPrimary());
+        return (LRESULT)Theme::Get().BrushSurface();
+    }
+
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN: {
+        HDC hdc = (HDC)wParam;
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, Theme::Get().ClrTextPrimary());
+        return (LRESULT)Theme::Get().BrushSurface();
+    }
+
     case WM_SETTINGCHANGE: {
         if (lParam && wcscmp((const wchar_t*)lParam, L"ImmersiveColorSet") == 0) {
             Theme::Get().Initialize();
@@ -1464,6 +2318,12 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     }
 
     case WM_CLOSE: {
+        if (Config::Get().closeToTray) {
+            AddTrayIcon();
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        }
+        RemoveTrayIcon();
         Config& cfg = Config::Get();
         RECT rc;
         GetWindowRect(hwnd, &rc);
@@ -1513,4 +2373,114 @@ LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         return pThis->HandleMessage(hwnd, msg, wParam, lParam);
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+void MainWindow::RebuildAccelerators() {
+    if (m_hAccel) {
+        DestroyAcceleratorTable(m_hAccel);
+        m_hAccel = nullptr;
+    }
+
+    std::vector<ACCEL> accels;
+
+    // Load from Config::Get().shortcuts
+    const auto& shortcuts = Config::Get().shortcuts;
+
+    auto mapKey = [](const std::wstring& k) -> WORD {
+        if (k.length() == 1) {
+            wchar_t ch = k[0];
+            if (ch >= L'a' && ch <= L'z') return (WORD)(ch - L'a' + 'A');
+            if (ch >= L'A' && ch <= L'Z') return (WORD)ch;
+            if (ch >= L'0' && ch <= L'9') return (WORD)ch;
+        }
+        if (k == L"Tab") return VK_TAB;
+        if (k == L"Space") return VK_SPACE;
+        if (k == L"Enter") return VK_RETURN;
+        if (k == L"Esc") return VK_ESCAPE;
+        if (k == L"Backspace") return VK_BACK;
+        if (k == L"Delete") return VK_DELETE;
+        if (k == L"Insert") return VK_INSERT;
+        if (k == L"Home") return VK_HOME;
+        if (k == L"End") return VK_END;
+        if (k == L"PageUp") return VK_PRIOR;
+        if (k == L"PageDown") return VK_NEXT;
+        if (k == L"Left") return VK_LEFT;
+        if (k == L"Right") return VK_RIGHT;
+        if (k == L"Up") return VK_UP;
+        if (k == L"Down") return VK_DOWN;
+        if (k == L"F1") return VK_F1;
+        if (k == L"F2") return VK_F2;
+        if (k == L"F3") return VK_F3;
+        if (k == L"F4") return VK_F4;
+        if (k == L"F5") return VK_F5;
+        if (k == L"F6") return VK_F6;
+        if (k == L"F7") return VK_F7;
+        if (k == L"F8") return VK_F8;
+        if (k == L"F9") return VK_F9;
+        if (k == L"F10") return VK_F10;
+        if (k == L"F11") return VK_F11;
+        if (k == L"F12") return VK_F12;
+        return 0;
+    };
+
+    auto mapAction = [](const std::wstring& name) -> UINT {
+        if (name == L"新建标签页" || name == L"New Tab") return ID_FILE_NEW_TAB;
+        if (name == L"关闭当前标签页" || name == L"Close Current Tab") return ID_FILE_CLOSE_TAB;
+        if (name == L"切换到下一个标签页" || name == L"Next Tab") return ID_TAB_NEXT;
+        if (name == L"切换到上一个标签页" || name == L"Previous Tab") return ID_TAB_PREV;
+        if (name == L"新建窗口" || name == L"New Window") return ID_FILE_NEW_WINDOW_CURRENT;
+        if (name == L"后退" || name == L"Back") return ID_NAV_BACK;
+        if (name == L"前进" || name == L"Forward") return ID_NAV_FORWARD;
+        if (name == L"向上一级" || name == L"Up to Parent") return ID_NAV_UP;
+        if (name == L"刷新" || name == L"Refresh") return ID_VIEW_REFRESH;
+        if (name == L"聚焦到地址栏" || name == L"Focus Address Bar") return ID_VIEW_ADDRESS_FOCUS;
+        if (name == L"聚焦到搜索过滤栏" || name == L"Focus Filter Bar") return ID_VIEW_FILTER_FOCUS;
+        if (name == L"最大化/还原当前栏" || name == L"Maximize/Restore Pane") return ID_WINDOW_MAXIMIZE;
+        if (name == L"单栏视图" || name == L"单栏模式" || name == L"Single Pane") return ID_VIEW_LAYOUT_1X1;
+        if (name == L"垂直双栏" || name == L"左右双栏" || name == L"Dual Vertical Panes") return ID_VIEW_LAYOUT_1X2;
+        if (name == L"水平双栏" || name == L"上下双栏" || name == L"Dual Horizontal Panes") return ID_VIEW_LAYOUT_2X1;
+        if (name == L"四分栏网格" || name == L"四分栏模式" || name == L"Quad Panes") return ID_VIEW_LAYOUT_2X2;
+        if (name == L"滚动到列表顶部" || name == L"Scroll to Top") return ID_SCROLL_TOP;
+        if (name == L"滚动到列表底部" || name == L"Scroll to Bottom") return ID_SCROLL_BOTTOM;
+        if (name == L"向上翻页" || name == L"Page Up") return ID_SCROLL_PAGEUP;
+        if (name == L"向下翻页" || name == L"Page Down") return ID_SCROLL_PAGEDOWN;
+        if (name == L"全选" || name == L"Select All") return ID_EDIT_SELECT_ALL;
+        if (name == L"复制选中项" || name == L"复制" || name == L"Copy") return ID_EDIT_COPY;
+        if (name == L"剪切选中项" || name == L"剪切" || name == L"Cut") return ID_EDIT_CUT;
+        if (name == L"粘贴" || name == L"Paste") return ID_EDIT_PASTE;
+        if (name == L"新建文件夹" || name == L"New Folder") return ID_FILE_NEW_FOLDER;
+        if (name == L"属性" || name == L"Properties") return ID_FILE_PROPERTIES;
+        if (name == L"新建Markdown文档" || name == L"New Markdown Document") return ID_FILE_NEW_MD;
+        if (name == L"显示/隐藏隐藏文件" || name == L"Toggle Hidden Files") return ID_VIEW_SHOW_HIDDEN;
+        if (name == L"选项与设置" || name == L"Options & Settings") return ID_TOOLS_SETTINGS;
+        if (name == L"反向选择" || name == L"Invert Selection") return ID_EDIT_INVERT_SELECTION;
+        if (name == L"删除选中项" || name == L"删除" || name == L"Delete") return ID_EDIT_DELETE;
+        if (name == L"重命名" || name == L"Rename") return ID_EDIT_RENAME;
+        if (name == L"复制当前路径" || name == L"Copy Path") return ID_EDIT_COPY_PATH;
+        if (name == L"显示/隐藏侧边栏目录树" || name == L"Toggle Tree Sidebar") return ID_VIEW_TREE_TOGGLE;
+        if (name == L"显示/隐藏快速预览窗格" || name == L"Toggle Preview Pane") return ID_VIEW_PREVIEW_TOGGLE;
+        if (name == L"打开命令行 CMD" || name == L"Open Command Prompt CMD") return ID_TOOLS_OPEN_CMD;
+        return 0;
+    };
+
+    for (const auto& item : shortcuts) {
+        WORD vk = mapKey(item.key);
+        UINT cmd = mapAction(item.name);
+        if (vk != 0 && cmd != 0) {
+            ACCEL acc = { 0 };
+            acc.fVirt = FVIRTKEY;
+            if (item.ctrl) acc.fVirt |= FCONTROL;
+            if (item.shift) acc.fVirt |= FSHIFT;
+            if (item.alt) acc.fVirt |= FALT;
+            acc.key = vk;
+            acc.cmd = (WORD)cmd;
+            accels.push_back(acc);
+        }
+    }
+
+    if (!accels.empty()) {
+        m_hAccel = CreateAcceleratorTableW(accels.data(), (int)accels.size());
+    } else {
+        m_hAccel = LoadAcceleratorsW(m_hInstance, MAKEINTRESOURCEW(IDR_MAIN_ACCEL));
+    }
 }

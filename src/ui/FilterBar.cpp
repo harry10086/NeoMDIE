@@ -17,6 +17,7 @@ HWND FilterBar::Create(HWND hwndParent, int id) {
         wc.lpfnWndProc = FilterBar::WndProc;
         wc.hInstance = hInst;
         wc.lpszClassName = FILTERBAR_CLASS;
+        wc.style = CS_HREDRAW | CS_VREDRAW;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         RegisterClassExW(&wc);
     }
@@ -37,7 +38,7 @@ HWND FilterBar::Create(HWND hwndParent, int id) {
 
     m_hwndOptBtn = CreateWindowExW(
         0, L"BUTTON", L"⚙",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
         0, 0, 24, 22,
         m_hwnd, (HMENU)102, hInst, nullptr
     );
@@ -94,6 +95,7 @@ void FilterBar::UpdateLayout(int x, int y, int width, int height) {
             MoveWindow(m_hwndOptBtn, width - optW - Theme::Get().Scale(4, m_hwnd),
                        Theme::Get().Scale(3, m_hwnd), optW, height - Theme::Get().Scale(6, m_hwnd), TRUE);
         }
+        InvalidateRect(m_hwnd, nullptr, TRUE);
     }
 }
 
@@ -168,6 +170,25 @@ LRESULT CALLBACK FilterBar::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
         break;
     }
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT* pdis = (DRAWITEMSTRUCT*)lParam;
+        if (pdis && pdis->CtlID == 102) {
+            bool isDown = (pdis->itemState & ODS_SELECTED);
+            HBRUSH hbg = isDown ? Theme::Get().BrushSelected() : Theme::Get().BrushSurface();
+            FillRect(pdis->hDC, &pdis->rcItem, hbg);
+
+            SetBkMode(pdis->hDC, TRANSPARENT);
+            SetTextColor(pdis->hDC, Theme::Get().ClrTextPrimary());
+            HFONT hFont = Theme::Get().GetUIFont(hwnd);
+            HGDIOBJ oldFont = SelectObject(pdis->hDC, hFont);
+
+            DrawTextW(pdis->hDC, L"⚙", -1, &pdis->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+            SelectObject(pdis->hDC, oldFont);
+            return TRUE;
+        }
+        break;
+    }
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -185,8 +206,20 @@ LRESULT CALLBACK FilterBar::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         EndPaint(hwnd, &ps);
         return 0;
     }
-    case WM_ERASEBKGND:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC: {
+        HDC hdc = (HDC)wParam;
+        SetTextColor(hdc, Theme::Get().ClrTextPrimary());
+        SetBkColor(hdc, Theme::Get().ClrSurface());
+        return (INT_PTR)Theme::Get().BrushSurface();
+    }
+    case WM_ERASEBKGND: {
+        HDC hdc = (HDC)wParam;
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect(hdc, &rc, Theme::Get().BrushSurface());
         return 1;
+    }
     }
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);

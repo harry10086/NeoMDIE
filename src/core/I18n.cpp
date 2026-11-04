@@ -59,7 +59,7 @@ const wchar_t* I18n::T(StringId id) const {
     case StringId::ColSize:            return zh ? L"大小" : L"Size";
 
     case StringId::BtnTree:            return zh ? L"📁 目录树" : L"📁 Tree";
-    case StringId::BtnSplit:           return zh ? L"⊞ 分屏" : L"⊞ Split";
+    case StringId::BtnSplit:           return zh ? L"⊞ 分栏" : L"⊞ Split";
     case StringId::BtnPreview:         return zh ? L"👁 预览" : L"👁 Preview";
 
     case StringId::FilterCue:          return zh ? L"即时过滤 (Ctrl+F)" : L"Filter files (Ctrl+F)";
@@ -107,7 +107,7 @@ const wchar_t* I18n::T(StringId id) const {
     case StringId::MenuView:           return zh ? L"查看(&V)" : L"View(&V)";
     case StringId::MenuRefresh:        return zh ? L"刷新(&R)\tF5" : L"Refresh(&R)\tF5";
     case StringId::MenuTree:           return zh ? L"目录树(&T)" : L"Folder Tree(&T)";
-    case StringId::MenuSplit:          return zh ? L"多栏分屏(&S)" : L"Multi-Pane Split(&S)";
+    case StringId::MenuSplit:          return zh ? L"多栏布局(&S)" : L"Multi-Pane Split(&S)";
     case StringId::MenuPreview:        return zh ? L"文件预览窗格(&P)\tAlt+P" : L"Preview Pane(&P)\tAlt+P";
     case StringId::MenuFilter:         return zh ? L"即时过滤查找(&F)\tCtrl+F" : L"Incremental Filter(&F)\tCtrl+F";
     case StringId::MenuDetails:        return zh ? L"详细信息(&D)" : L"Details(&D)";
@@ -169,10 +169,10 @@ const wchar_t* I18n::T(StringId id) const {
             L"  Ctrl + Shift + Tab : 上一个标签页\n\n"
             L"• 窗格与多栏分屏:\n"
             L"  Ctrl + 1 : 单栏视图\n"
-            L"  Ctrl + 2 : 左右双栏分屏\n"
-            L"  Ctrl + 3 : 上下双栏分屏\n"
-            L"  Ctrl + 4 : 田字四分屏\n"
-            L"  Ctrl + 5 : 1左2右三分屏\n"
+            L"  Ctrl + 2 : 左右双栏\n"
+            L"  Ctrl + 3 : 上下双栏\n"
+            L"  Ctrl + 4 : 田字四栏\n"
+            L"  Ctrl + 5 : 1左2右三栏\n"
             L"  Alt + P : 切换文件预览窗格\n\n"
             L"• 导航与查找:\n"
             L"  Alt + ← / Backspace : 后退\n"
@@ -272,9 +272,9 @@ const wchar_t* I18n::T(StringId id) const {
     case StringId::Layout1x1:           return zh ? L"🗖 单栏视图 (1x1)" : L"🗖 Single Pane (1x1)";
     case StringId::Layout1x2:           return zh ? L"⫾ 左右双栏 (1x2)" : L"⫾ Dual Vertical (1x2)";
     case StringId::Layout2x1:           return zh ? L"⫽ 上下双栏 (2x1)" : L"⫽ Dual Horizontal (2x1)";
-    case StringId::Layout2x2:           return zh ? L"⊞ 田字四分屏 (2x2)" : L"⊞ Quad Grid (2x2)";
-    case StringId::Layout1p2:           return zh ? L"⧉ 1左2右三分屏 (1+2)" : L"⧉ Three Panes (1+2)";
-    case StringId::LayoutSyncNav:       return zh ? L"同步浏览 (所有分屏联动)" : L"Synchronized Navigation";
+    case StringId::Layout2x2:           return zh ? L"⊞ 田字四栏 (2x2)" : L"⊞ Quad Grid (2x2)";
+    case StringId::Layout1p2:           return zh ? L"⧉ 1左2右三栏 (1+2)" : L"⧉ Three Panes (1+2)";
+    case StringId::LayoutSyncNav:       return zh ? L"同步浏览 (所有分栏联动)" : L"Synchronized Navigation";
 
     case StringId::AboutDialogText:
         return zh ?
@@ -284,7 +284,7 @@ const wchar_t* I18n::T(StringId id) const {
             L" • 极低内存开销 (< 5MB) 与瞬时启动\n"
             L" • 纯绿色便携免安装\n"
             L" • 默认左侧文件目录树导航\n"
-            L" • 多标签页 / 双栏分屏 (Ctrl+E)\n"
+            L" • 多标签页 / 多栏切换 (Ctrl+E)\n"
             L" • 中/英文双语无缝切换\n"
             L" • 右键鼠标手势 (←后退, →前进, ↑向上, ↓关标签)\n"
             L" • 毫秒级即时过滤查找 (Ctrl+F)\n"

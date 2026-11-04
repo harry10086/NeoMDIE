@@ -83,7 +83,7 @@ BEGIN
     BEGIN
         MENUITEM "刷新(&R)\tF5",                        ID_VIEW_REFRESH
         MENUITEM SEPARATOR
-        MENUITEM "双栏分屏(&S)\tCtrl+E",                ID_VIEW_SPLIT_TOGGLE
+        MENUITEM "多栏切换(&S)\tCtrl+E",                ID_VIEW_SPLIT_TOGGLE
         MENUITEM "文件预览窗格(&P)\tAlt+P",              ID_VIEW_PREVIEW_TOGGLE
         MENUITEM "即时过滤查找(&F)\tCtrl+F",            ID_VIEW_FILTER_FOCUS
         MENUITEM SEPARATOR

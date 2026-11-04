@@ -35,7 +35,8 @@ enum NeoMDIECommand {
     CMD_BG_UNDO              = 0x7133,
     CMD_BG_PROPERTIES        = 0x7134,
     CMD_BG_NEW_FOLDER        = 0x7135,
-    CMD_BG_NEW_FILE          = 0x7136
+    CMD_BG_NEW_FILE          = 0x7136,
+    CMD_BG_NEW_MD            = 0x7137
 };
 
 namespace ShellUtils {
@@ -75,4 +76,5 @@ namespace ShellUtils {
     // Replace Windows Explorer
     bool IsExplorerReplaced();
     bool SetExplorerReplaced(bool enable);
+    void CheckForUpdates(HWND hwndParent);
 }

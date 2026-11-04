@@ -19,7 +19,6 @@ public:
     void ToggleTheme();
 
     void ApplyToWindow(HWND hwnd);
-    void AllowDarkModeForWindow(HWND hwnd, bool allow);
 
     // DPI Scaling
     int Scale(int val, HWND hwnd = nullptr) const;

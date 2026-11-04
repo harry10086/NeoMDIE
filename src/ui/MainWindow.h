@@ -15,6 +15,7 @@ public:
 
     HWND Create(HINSTANCE hInstance, int nCmdShow);
     HWND GetHwnd() const { return m_hwnd; }
+    HACCEL GetAcceleratorTable() const { return m_hAccel; }
     void RebuildAccelerators();
 
 private:
@@ -82,8 +83,6 @@ private:
     RECT m_rcFilterSplitter = { 0 };
 
     std::vector<std::wstring> m_historyPaths;
-    std::vector<std::wstring> m_menuDrives;
-    std::vector<std::wstring> m_menuFavLinks;
 
     static const UINT IDC_BTN_BACK = 2001;
     static const UINT IDC_BTN_FORWARD = 2002;

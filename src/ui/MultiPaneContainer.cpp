@@ -60,8 +60,7 @@ HWND MultiPaneContainer::Create(HWND hwndParent, int id) {
       }
     };
 
-    m_panes[i].onGestureAction = [this, i](GestureAction act) {
-      SetActivePane(i);
+    m_panes[i].onGestureAction = [this](GestureAction act) {
       if (onGestureAction) {
         onGestureAction(act);
       }
@@ -131,17 +130,27 @@ void MultiPaneContainer::ClosePane(int index) {
     return;
   }
 
-  if (m_layout == PaneLayout::DualVertical || m_layout == PaneLayout::DualHorizontal) {
+  m_maximizedPane = -1;
+
+  if (m_layout == PaneLayout::Quad) {
+    // 4 -> 3
+    for (int i = index; i < 3; ++i) {
+      m_panes[i].NavigateTo(m_panes[i + 1].GetCurrentPath());
+    }
+    SetLayout(PaneLayout::ThreeLeft);
+  } else if (m_layout == PaneLayout::ThreeLeft) {
+    // 3 -> 2
+    for (int i = index; i < 2; ++i) {
+      m_panes[i].NavigateTo(m_panes[i + 1].GetCurrentPath());
+    }
+    SetLayout(PaneLayout::DualVertical);
+  } else if (m_layout == PaneLayout::DualVertical || m_layout == PaneLayout::DualHorizontal) {
+    // 2 -> 1
     if (index == 0) {
-      // Copy pane 1 path to pane 0
       m_panes[0].NavigateTo(m_panes[1].GetCurrentPath());
     }
     SetLayout(PaneLayout::Single);
     SetActivePane(0);
-  } else if (m_layout == PaneLayout::Quad) {
-    SetLayout(PaneLayout::ThreeLeft);
-  } else if (m_layout == PaneLayout::ThreeLeft) {
-    SetLayout(PaneLayout::DualVertical);
   }
 }
 
@@ -158,19 +167,20 @@ void MultiPaneContainer::MinimizePane(int index) {
 
 void MultiPaneContainer::ToggleMaximizePane(int index) {
   if (m_layout == PaneLayout::Single) {
-    // Restore
-    SetLayout(m_prevSplitLayout);
-    SetActivePane(index);
+    return; // Already single pane, no maximize/restore
+  }
+  if (m_maximizedPane >= 0) {
+    // Restore back to normal multi-pane layout
+    m_maximizedPane = -1;
   } else {
-    // Maximize
-    m_prevSplitLayout = m_layout;
-    if (index > 0) {
-      // Bring index path to 0
-      std::wstring path = m_panes[index].GetCurrentPath();
-      m_panes[0].NavigateTo(path);
-    }
-    SetLayout(PaneLayout::Single);
-    SetActivePane(0);
+    // Temporarily maximize this pane
+    m_maximizedPane = index;
+    SetActivePane(index);
+  }
+  LayoutChildren();
+  InvalidateRect(m_hwnd, nullptr, TRUE);
+  for (int i = 0; i < 4; ++i) {
+    UpdatePaneHeader(i);
   }
 }
 
@@ -182,6 +192,7 @@ void MultiPaneContainer::UpdatePaneHeader(int index) {
 
 void MultiPaneContainer::SetLayout(PaneLayout layout) {
   m_layout = layout;
+  m_maximizedPane = -1; // Explicit layout change clears temporary maximize
   int count = GetPaneCount();
 
   std::wstring curPath = m_panes[0].GetCurrentPath();
@@ -192,7 +203,8 @@ void MultiPaneContainer::SetLayout(PaneLayout layout) {
     bool shouldShow = (i < count);
     ShowWindow(m_panes[i].GetHwnd(), shouldShow ? SW_SHOW : SW_HIDE);
     if (m_hHeaders[i]) {
-      ShowWindow(m_hHeaders[i], shouldShow ? SW_SHOW : SW_HIDE);
+      bool showHdr = shouldShow && (count > 1);
+      ShowWindow(m_hHeaders[i], showHdr ? SW_SHOW : SW_HIDE);
       UpdatePaneHeader(i);
     }
     if (shouldShow && m_panes[i].GetCurrentPath().empty()) {
@@ -206,8 +218,32 @@ void MultiPaneContainer::SetLayout(PaneLayout layout) {
 
   LayoutChildren();
   InvalidateRect(m_hwnd, nullptr, TRUE);
+
   if (onLayoutChanged) {
     onLayoutChanged(m_layout);
+  }
+}
+
+void MultiPaneContainer::ApplyTheme() {
+  if (m_hwnd) Theme::Get().ApplyToWindow(m_hwnd);
+  for (int i = 0; i < 4; ++i) {
+    m_panes[i].ApplyTheme();
+    if (m_hHeaders[i]) {
+      Theme::Get().ApplyToWindow(m_hHeaders[i]);
+      InvalidateRect(m_hHeaders[i], nullptr, TRUE);
+    }
+  }
+}
+
+void MultiPaneContainer::SetShowHidden(bool show) {
+  for (int i = 0; i < 4; ++i) {
+    m_panes[i].SetShowHidden(show);
+  }
+}
+
+void MultiPaneContainer::SetCalcFolderSize(bool calc) {
+  for (int i = 0; i < 4; ++i) {
+    m_panes[i].SetCalcFolderSize(calc);
   }
 }
 
@@ -228,14 +264,18 @@ void MultiPaneContainer::LayoutChildren() {
   int totalH = rc.bottom - rc.top;
 
   int splitW = Theme::Get().Scale(6, m_hwnd);
-  int headerH = Theme::Get().Scale(26, m_hwnd);
+  int count = GetPaneCount();
+  int headerH = (count > 1) ? Theme::Get().Scale(26, m_hwnd) : 0;
   int borderPad = 1;
 
   auto positionPane = [&](int idx, int x, int y, int w, int h) {
     if (idx >= 0 && idx < 4) {
-      if (m_hHeaders[idx]) {
+      if (count > 1 && m_hHeaders[idx]) {
+        ShowWindow(m_hHeaders[idx], SW_SHOW);
         SetWindowPos(m_hHeaders[idx], HWND_TOP, x, y, w, headerH, SWP_SHOWWINDOW | SWP_NOCOPYBITS);
         InvalidateRect(m_hHeaders[idx], nullptr, TRUE);
+      } else if (m_hHeaders[idx]) {
+        ShowWindow(m_hHeaders[idx], SW_HIDE);
       }
       m_panes[idx].UpdateLayout(x, y + headerH, w, h - headerH);
     }
@@ -395,7 +435,7 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg, WPARAM wPar
     DrawTextW(hdc, minGlyph, 1, &rcMin, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     // Maximize / Restore
-    wchar_t maxGlyph[2] = { (m_layout == PaneLayout::Single) ? (wchar_t)0xE923 : (wchar_t)0xE922, 0 };
+    wchar_t maxGlyph[2] = { (m_maximizedPane == paneIdx) ? (wchar_t)0xE923 : (wchar_t)0xE922, 0 };
     DrawTextW(hdc, maxGlyph, 1, &rcMax, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     // Close
@@ -468,9 +508,6 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg, WPARAM wPar
       return 0;
     } else if (x >= rc.right - btnW * 2 && x < rc.right - btnW) {
       ToggleMaximizePane(paneIdx);
-      return 0;
-    } else if (x >= rc.right - btnW * 3 && x < rc.right - btnW * 2) {
-      MinimizePane(paneIdx);
       return 0;
     }
     return 0;
@@ -692,18 +729,6 @@ LRESULT CALLBACK MultiPaneContainer::PaneSubclassProc(HWND hwnd, UINT msg,
   return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
-void MultiPaneContainer::SetShowHidden(bool show) {
-    for (int i = 0; i < 4; ++i) {
-        m_panes[i].SetShowHidden(show);
-    }
-}
-
-void MultiPaneContainer::SetCalcFolderSize(bool calc) {
-    for (int i = 0; i < 4; ++i) {
-        m_panes[i].SetCalcFolderSize(calc);
-    }
-}
-
 LRESULT CALLBACK MultiPaneContainer::WndProc(HWND hwnd, UINT msg, WPARAM wParam,
                                              LPARAM lParam) {
   MultiPaneContainer *pThis = nullptr;
@@ -720,17 +745,4 @@ LRESULT CALLBACK MultiPaneContainer::WndProc(HWND hwnd, UINT msg, WPARAM wParam,
     return pThis->HandleMessage(hwnd, msg, wParam, lParam);
   }
   return DefWindowProcW(hwnd, msg, wParam, lParam);
-}
-
-
-void MultiPaneContainer::ApplyTheme() {
-  Theme::Get().ApplyToWindow(m_hwnd);
-  for (int i = 0; i < 4; ++i) {
-    m_panes[i].ApplyTheme();
-    if (m_hHeaders[i]) {
-      Theme::Get().ApplyToWindow(m_hHeaders[i]);
-      InvalidateRect(m_hHeaders[i], nullptr, TRUE);
-    }
-  }
-  InvalidateRect(m_hwnd, nullptr, TRUE);
 }

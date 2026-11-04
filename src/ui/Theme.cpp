@@ -66,6 +66,10 @@ void Theme::SetDarkMode(bool dark) {
     if (m_pfnSetPreferredAppMode) {
         m_pfnSetPreferredAppMode(dark ? PreferredAppMode::ForceDark : PreferredAppMode::ForceLight);
     }
+    using fnFlushMenuThemes = void(WINAPI*)();
+    static auto pfnFlush = (fnFlushMenuThemes)GetProcAddress(GetModuleHandleW(L"uxtheme.dll"), MAKEINTRESOURCEA(136));
+    if (pfnFlush) pfnFlush();
+
     RecreateGdiObjects();
 }
 
@@ -88,13 +92,6 @@ void Theme::ApplyToWindow(HWND hwnd) {
 
     // Update window theme
     SetWindowTheme(hwnd, m_isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
-}
-
-void Theme::AllowDarkModeForWindow(HWND hwnd, bool allow) {
-    if (!hwnd) return;
-    if (m_pfnAllowDarkModeForWindow) {
-        m_pfnAllowDarkModeForWindow(hwnd, allow);
-    }
 }
 
 UINT Theme::GetDpi(HWND hwnd) const {
@@ -172,10 +169,16 @@ HFONT Theme::GetUIFont(HWND hwnd) {
         int fontSize = -MulDiv(9, currentDpi, 72);
 
         LOGFONTW lf = { 0 };
-        lf.lfHeight = fontSize;
-        lf.lfWeight = FW_NORMAL;
-        lf.lfQuality = CLEARTYPE_QUALITY;
-        StringCchCopyW(lf.lfFaceName, LF_FACESIZE, L"Segoe UI");
+        if (SystemParametersInfoW(SPI_GETICONTITLELOGFONT, sizeof(LOGFONTW), &lf, 0)) {
+            lf.lfHeight = fontSize;
+            lf.lfWeight = FW_NORMAL;
+            lf.lfQuality = CLEARTYPE_QUALITY;
+        } else {
+            lf.lfHeight = fontSize;
+            lf.lfWeight = FW_NORMAL;
+            lf.lfQuality = CLEARTYPE_QUALITY;
+            StringCchCopyW(lf.lfFaceName, LF_FACESIZE, L"Microsoft YaHei UI");
+        }
 
         m_fontUI = CreateFontIndirectW(&lf);
 

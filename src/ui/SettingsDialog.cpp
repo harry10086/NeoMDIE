@@ -4,41 +4,71 @@
 #include "..\core\GestureEngine.h"
 #include "..\core\ShellUtils.h"
 #include "Theme.h"
-#include "..\core\ShellUtils.h"
+#include <commctrl.h>
+#include <windowsx.h>
+#include <vector>
+#include <string>
+#include <algorithm>
 
-static const wchar_t *SETTINGS_CLASS = L"NeoMDIE_SettingsDialog";
+#define SETTINGS_CLASS L"NeoMDIE_SettingsDialog"
+
 static std::function<void()> s_onSettingsChanged;
+static int s_currentCategory = 0;
+static std::vector<HWND> s_pageControls[10];
 
-static HWND s_hTab = nullptr;
+static const wchar_t* navTitlesZh[10] = {
+    L" 常规与启动",
+    L" 窗口动作设置",
+    L" 窗口与多栏",
+    L" 标签页偏好",
+    L" 侧边栏与树状",
+    L" 视图与外观",
+    L" 搜索与过滤",
+    L" 快捷键自定义",
+    L" 鼠标手势设置",
+    L" 工具栏配置"
+};
 
-// 8 Pages
-static std::vector<HWND> s_pageControls[8];
+static const wchar_t* navTitlesEn[10] = {
+    L" General",
+    L" Window Actions",
+    L" Window & Panes",
+    L" Tabs",
+    L" Sidebar & Tree",
+    L" View & List",
+    L" Search & Filter",
+    L" Hotkeys",
+    L" Mouse Gestures",
+    L" Toolbars"
+};
+
+// Controls
+static HWND s_hCategoryList = nullptr;
 
 // Page 0: General
 static HWND s_hLangCombo = nullptr;
 static HWND s_hChkRestoreTabs = nullptr;
-static HWND s_hChkSingleInstance = nullptr;
-static HWND s_hChkSaveWindowPos = nullptr;
 static HWND s_hChkMinToTray = nullptr;
 static HWND s_hChkCloseToTray = nullptr;
+static HWND s_hChkSingleInstance = nullptr;
 static HWND s_hChkReplaceExplorer = nullptr;
 
-// Page 1: Window Actions (窗口动作)
-static HWND s_hTreeActionCombo = nullptr;
-static HWND s_hLinksActionCombo = nullptr;
-static HWND s_hAddressActionCombo = nullptr;
+// Page 1: Window Actions (Target + 5 action triggers)
+static HWND s_hActionTargetCombo = nullptr;
+static HWND s_hActionCombos[5] = { nullptr };
+static TargetActionConfig s_tempTreeAction;
+static TargetActionConfig s_tempLinksAction;
+static TargetActionConfig s_tempAddressAction;
+static int s_curActionTarget = 0; // 0: Tree, 1: Links, 2: Address
 
-// Page 2: Window & Split
+// Page 2: Window & Panes
 static HWND s_hLayoutCombo = nullptr;
 static HWND s_hChkSyncNav = nullptr;
-static HWND s_hChkPaneHeader = nullptr;
 static HWND s_hChkLockToolbars = nullptr;
 
 // Page 3: Tabs
 static HWND s_hChkAllowDupTabs = nullptr;
 static HWND s_hTabDblClickCombo = nullptr;
-static HWND s_hChkShowNewTabBtn = nullptr;
-static HWND s_hChkShowCloseBtn = nullptr;
 
 // Page 4: Tree & Sidebar
 static HWND s_hChkTree = nullptr;
@@ -49,24 +79,48 @@ static HWND s_hChkPreview = nullptr;
 static HWND s_hViewModeCombo = nullptr;
 static HWND s_hChkHidden = nullptr;
 static HWND s_hChkCalcSize = nullptr;
-static HWND s_hChkFullRowSelect = nullptr;
 static HWND s_hChkZebraStriping = nullptr;
+static HWND s_hChkGridLines = nullptr;
 
 // Page 6: Search & Filter
 static HWND s_hChkSearchSubfolders = nullptr;
 static HWND s_hChkMatchCase = nullptr;
-static HWND s_hChkIncremental = nullptr;
 
-// Page 7: Mouse Gestures
+// Page 7: Hotkeys (MDIE style)
+static HWND s_hShortcutList = nullptr;
+static HWND s_hScActionCombo = nullptr;
+static HWND s_hScKeyCombo = nullptr;
+static HWND s_hScShift = nullptr;
+static HWND s_hScCtrl = nullptr;
+static HWND s_hScAlt = nullptr;
+static HWND s_hBtnScAdd = nullptr;
+static HWND s_hBtnScMod = nullptr;
+static HWND s_hBtnScDel = nullptr;
+static HWND s_hBtnScReset = nullptr;
+
+struct ShortcutItem {
+    std::wstring name;
+    std::wstring key;
+    bool shift = false;
+    bool ctrl = false;
+    bool alt = false;
+    std::wstring keyText;
+};
+static std::vector<ShortcutItem> s_tempShortcuts;
+
+// Page 8: Mouse Gestures (MDIE style)
 static HWND s_hChkGestures = nullptr;
 static HWND s_hGestureList = nullptr;
-static HWND s_hBtnGestureAdd = nullptr;
-static HWND s_hBtnGestureEdit = nullptr;
-static HWND s_hBtnGestureDel = nullptr;
-static HWND s_hBtnGestureReset = nullptr;
+static HWND s_hGestPatternCombo = nullptr;
+static HWND s_hGestActionCombo = nullptr;
+static HWND s_hGestContextCombo = nullptr;
+static HWND s_hBtnGestAdd = nullptr;
+static HWND s_hBtnGestMod = nullptr;
+static HWND s_hBtnGestDel = nullptr;
+static HWND s_hBtnGestReset = nullptr;
 static std::vector<GestureEntry> s_tempGestures;
 
-// Page 8: Appearance & Toolbars
+// Page 9: Appearance & Toolbars
 static HWND s_hThemeCombo = nullptr;
 static HWND s_hChkTBStandard = nullptr;
 static HWND s_hChkTBAddress = nullptr;
@@ -74,24 +128,222 @@ static HWND s_hChkTBSearch = nullptr;
 static HWND s_hChkTBLinks = nullptr;
 static HWND s_hChkStatusBar = nullptr;
 
+struct ActionDef {
+    int id;
+    const wchar_t* nameZh;
+    const wchar_t* nameEn;
+};
+
+static const ActionDef s_allActions[] = {
+    { (int)GestureAction::NavBack, L"后退", L"Back" },
+    { (int)GestureAction::NavForward, L"前进", L"Forward" },
+    { (int)GestureAction::NavUp, L"向上一级", L"Up to Parent" },
+    { (int)GestureAction::Refresh, L"刷新", L"Refresh" },
+    { (int)GestureAction::NewTab, L"新建标签页", L"New Tab" },
+    { (int)GestureAction::CloseTab, L"关闭当前标签页", L"Close Current Tab" },
+    { (int)GestureAction::CloseOtherTabs, L"关闭其他标签页", L"Close Other Tabs" },
+    { (int)GestureAction::DuplicateTab, L"复制当前标签页", L"Duplicate Current Tab" },
+    { (int)GestureAction::ReopenClosedTab, L"恢复最近关闭的标签页", L"Reopen Closed Tab" },
+    { (int)GestureAction::LockTab, L"锁定/解锁当前标签页", L"Pin/Unpin Tab" },
+    { (int)GestureAction::NextTab, L"切换到下一个标签页", L"Next Tab" },
+    { (int)GestureAction::PrevTab, L"切换到上一个标签页", L"Previous Tab" },
+    { (int)GestureAction::ToggleTree, L"显示/隐藏侧边栏目录树", L"Toggle Tree Sidebar" },
+    { (int)GestureAction::TogglePreview, L"显示/隐藏快速预览窗格", L"Toggle Preview Pane" },
+    { (int)GestureAction::OpenTerminal, L"打开命令行 CMD", L"Open Command Prompt CMD" },
+    { (int)GestureAction::MaximizePane, L"最大化/还原当前栏", L"Maximize/Restore Pane" },
+    { (int)GestureAction::ClosePane, L"关闭当前栏", L"Close Pane" },
+    { (int)GestureAction::ScrollTop, L"滚动到列表顶部", L"Scroll to Top" },
+    { (int)GestureAction::ScrollBottom, L"滚动到列表底部", L"Scroll to Bottom" },
+    { (int)GestureAction::PageUp, L"向上翻页", L"Page Up" },
+    { (int)GestureAction::PageDown, L"向下翻页", L"Page Down" },
+    { (int)GestureAction::Copy, L"复制选中项", L"Copy" },
+    { (int)GestureAction::Cut, L"剪切选中项", L"Cut" },
+    { (int)GestureAction::Paste, L"粘贴", L"Paste" },
+    { (int)GestureAction::SelectAll, L"全选", L"Select All" },
+    { (int)GestureAction::NewFolder, L"新建文件夹", L"New Folder" },
+    { (int)GestureAction::Properties, L"属性", L"Properties" },
+    { (int)GestureAction::LayoutSingle, L"单栏模式", L"Single Pane" },
+    { (int)GestureAction::Layout2H, L"左右双栏", L"Dual Pane Horizontal" },
+    { (int)GestureAction::Layout2V, L"上下双栏", L"Dual Pane Vertical" },
+    { (int)GestureAction::Layout4Grid, L"四分栏模式", L"4 Panes Grid" },
+    { (int)GestureAction::CopyPath, L"复制当前路径", L"Copy Path" },
+    { (int)GestureAction::Delete, L"删除选中项", L"Delete" },
+    { (int)GestureAction::Rename, L"重命名", L"Rename" },
+    { (int)GestureAction::NewMD, L"新建Markdown文档", L"New Markdown Document" },
+    { (int)GestureAction::ToggleHidden, L"显示/隐藏隐藏文件", L"Toggle Hidden Files" },
+    { (int)GestureAction::OpenSettings, L"选项与设置", L"Options & Settings" },
+    { (int)GestureAction::InvertSelection, L"反向选择", L"Invert Selection" }
+};
+
+struct GestPatternDef {
+    const char* code;
+    const wchar_t* labelZh;
+    const wchar_t* labelEn;
+};
+
+static const GestPatternDef s_allPatterns[] = {
+    { "L", L"← (向左)", L"← (Left)" },
+    { "R", L"→ (向右)", L"→ (Right)" },
+    { "U", L"↑ (向上)", L"↑ (Up)" },
+    { "D", L"↓ (向下)", L"↓ (Down)" },
+    { "UD", L"↕ (上下)", L"↕ (Up-Down)" },
+    { "DU", L"↓↑ (下上)", L"↓↑ (Down-Up)" },
+    { "LR", L"↔ (左右)", L"↔ (Left-Right)" },
+    { "RL", L"←→ (右左)", L"←→ (Right-Left)" },
+    { "UL", L"↖ (上左)", L"↖ (Up-Left)" },
+    { "UR", L"↗ (上右)", L"↗ (Up-Right)" },
+    { "DL", L"↙ (下左)", L"↙ (Down-Left)" },
+    { "DR", L"↘ (下右)", L"↘ (Down-Right)" },
+    { "LU", L"左上", L"Left-Up" },
+    { "LD", L"左下", L"Left-Down" },
+    { "RU", L"右上", L"Right-Up" },
+    { "RD", L"右下", L"Right-Down" },
+    { "LDR", L"←↓→ (左下右)", L"←↓→ (Left-Down-Right)" },
+    { "RDL", L"→↓← (右下左)", L"→↓← (Right-Down-Left)" },
+    { "LUR", L"←↑→ (左上右)", L"←↑→ (Left-Up-Right)" },
+    { "RUL", L"→↑← (右上左)", L"→↑← (Right-Up-Left)" }
+};
+
+static const wchar_t* s_keyChoices[] = {
+    L"A", L"B", L"C", L"D", L"E", L"F", L"G", L"H", L"I", L"J",
+    L"K", L"L", L"M", L"N", L"O", L"P", L"Q", L"R", L"S", L"T",
+    L"U", L"V", L"W", L"X", L"Y", L"Z",
+    L"0", L"1", L"2", L"3", L"4", L"5", L"6", L"7", L"8", L"9",
+    L"F1", L"F2", L"F3", L"F4", L"F5", L"F6", L"F7", L"F8", L"F9", L"F10", L"F11", L"F12",
+    L"Tab", L"Space", L"Enter", L"Esc", L"Backspace", L"Delete", L"Insert",
+    L"Home", L"End", L"PageUp", L"PageDown",
+    L"Left", L"Right", L"Up", L"Down"
+};
+
+static void UpdateActionCombosForCurrentTarget() {
+    TargetActionConfig* pTarget = nullptr;
+    if (s_curActionTarget == 0) pTarget = &s_tempTreeAction;
+    else if (s_curActionTarget == 1) pTarget = &s_tempLinksAction;
+    else pTarget = &s_tempAddressAction;
+
+    int vals[5] = {
+        pTarget->openCurrentPane,
+        pTarget->openNewTab,
+        pTarget->openBgTab,
+        pTarget->openOtherPane,
+        pTarget->openExplorer
+    };
+
+    for (int i = 0; i < 5; ++i) {
+        if (s_hActionCombos[i]) {
+            SendMessageW(s_hActionCombos[i], CB_SETCURSEL, std::clamp(vals[i], 0, 12), 0);
+        }
+    }
+}
+
+static void SaveActionCombosForCurrentTarget() {
+    TargetActionConfig* pTarget = nullptr;
+    if (s_curActionTarget == 0) pTarget = &s_tempTreeAction;
+    else if (s_curActionTarget == 1) pTarget = &s_tempLinksAction;
+    else pTarget = &s_tempAddressAction;
+
+    pTarget->openCurrentPane = (int)SendMessageW(s_hActionCombos[0], CB_GETCURSEL, 0, 0);
+    pTarget->openNewTab = (int)SendMessageW(s_hActionCombos[1], CB_GETCURSEL, 0, 0);
+    pTarget->openBgTab = (int)SendMessageW(s_hActionCombos[2], CB_GETCURSEL, 0, 0);
+    pTarget->openOtherPane = (int)SendMessageW(s_hActionCombos[3], CB_GETCURSEL, 0, 0);
+    pTarget->openExplorer = (int)SendMessageW(s_hActionCombos[4], CB_GETCURSEL, 0, 0);
+}
+
 static void PopulateGestureList(HWND hList) {
     ListView_DeleteAllItems(hList);
+    bool zh = I18n::Get().IsChinese();
     for (size_t i = 0; i < s_tempGestures.size(); ++i) {
         LVITEMW lvi = { 0 };
         lvi.mask = LVIF_TEXT;
         lvi.iItem = (int)i;
         lvi.iSubItem = 0;
-        std::wstring pattern = GestureEngine::CodeToArrowString(s_tempGestures[i].code) + L"  (" + Util::Utf8ToWide(s_tempGestures[i].code) + L")";
+        std::wstring pattern = GestureEngine::CodeToArrowString(s_tempGestures[i].code) + L"  " + Util::Utf8ToWide(s_tempGestures[i].code);
         lvi.pszText = (LPWSTR)pattern.c_str();
         ListView_InsertItem(hList, &lvi);
 
         std::wstring actName = !s_tempGestures[i].name.empty() ? s_tempGestures[i].name : GestureEngine::GetActionName((GestureAction)s_tempGestures[i].action);
         ListView_SetItemText(hList, (int)i, 1, (LPWSTR)actName.c_str());
+        ListView_SetItemText(hList, (int)i, 2, (LPWSTR)(zh ? L"全局 / 列表" : L"Global / List"));
+    }
+}
+
+static std::wstring FormatShortcutKey(const ShortcutItem& item) {
+    std::wstring s = L"";
+    if (item.ctrl) s += L"Ctrl + ";
+    if (item.shift) s += L"Shift + ";
+    if (item.alt) s += L"Alt + ";
+    s += item.key;
+    return s;
+}
+
+static void ResetDefaultShortcuts() {
+    bool zh = I18n::Get().IsChinese();
+    s_tempShortcuts = {
+        { zh ? L"新建标签页" : L"New Tab", L"T", false, true, false, L"Ctrl + T" },
+        { zh ? L"关闭当前标签页" : L"Close Current Tab", L"W", false, true, false, L"Ctrl + W" },
+        { zh ? L"切换到下一个标签页" : L"Next Tab", L"Tab", false, true, false, L"Ctrl + Tab" },
+        { zh ? L"切换到上一个标签页" : L"Previous Tab", L"Tab", true, true, false, L"Ctrl + Shift + Tab" },
+        { zh ? L"新建窗口" : L"New Window", L"N", false, true, false, L"Ctrl + N" },
+        { zh ? L"后退" : L"Back", L"Left", false, false, true, L"Alt + Left" },
+        { zh ? L"前进" : L"Forward", L"Right", false, false, true, L"Alt + Right" },
+        { zh ? L"向上一级" : L"Up to Parent", L"Up", false, false, true, L"Alt + Up" },
+        { zh ? L"刷新" : L"Refresh", L"F5", false, false, false, L"F5" },
+        { zh ? L"聚焦到地址栏" : L"Focus Address Bar", L"D", false, false, true, L"Alt + D" },
+        { zh ? L"聚焦到搜索过滤栏" : L"Focus Filter Bar", L"F", false, true, false, L"Ctrl + F" },
+        { zh ? L"最大化/还原当前栏" : L"Maximize/Restore Pane", L"F11", false, false, false, L"F11" },
+        { zh ? L"单栏视图" : L"Single Pane", L"1", true, true, false, L"Ctrl + Shift + 1" },
+        { zh ? L"垂直双栏" : L"Dual Vertical Panes", L"2", true, true, false, L"Ctrl + Shift + 2" },
+        { zh ? L"水平双栏" : L"Dual Horizontal Panes", L"3", true, true, false, L"Ctrl + Shift + 3" },
+        { zh ? L"四分栏网格" : L"Quad Panes", L"4", true, true, false, L"Ctrl + Shift + 4" },
+        { zh ? L"滚动到列表顶部" : L"Scroll to Top", L"Home", false, false, false, L"Home" },
+        { zh ? L"滚动到列表底部" : L"Scroll to Bottom", L"End", false, false, false, L"End" },
+        { zh ? L"向上翻页" : L"Page Up", L"PageUp", false, false, false, L"PageUp" },
+        { zh ? L"向下翻页" : L"Page Down", L"PageDown", false, false, false, L"PageDown" },
+        { zh ? L"全选" : L"Select All", L"A", false, true, false, L"Ctrl + A" },
+        { zh ? L"复制选中项" : L"Copy", L"C", false, true, false, L"Ctrl + C" },
+        { zh ? L"剪切选中项" : L"Cut", L"X", false, true, false, L"Ctrl + X" },
+        { zh ? L"粘贴" : L"Paste", L"V", false, true, false, L"Ctrl + V" },
+        { zh ? L"新建文件夹" : L"New Folder", L"N", true, true, false, L"Ctrl + Shift + N" },
+        { zh ? L"属性" : L"Properties", L"Enter", false, false, true, L"Alt + Enter" }
+    };
+}
+
+static void InitDefaultShortcuts() {
+    const auto& saved = Config::Get().shortcuts;
+    if (!saved.empty()) {
+        s_tempShortcuts.clear();
+        for (const auto& item : saved) {
+            ShortcutItem sc;
+            sc.name = item.name;
+            sc.key = item.key;
+            sc.shift = item.shift;
+            sc.ctrl = item.ctrl;
+            sc.alt = item.alt;
+            sc.keyText = FormatShortcutKey(sc);
+            s_tempShortcuts.push_back(sc);
+        }
+    } else {
+        ResetDefaultShortcuts();
+    }
+}
+
+static void PopulateShortcutList(HWND hList) {
+    ListView_DeleteAllItems(hList);
+    for (size_t i = 0; i < s_tempShortcuts.size(); ++i) {
+        LVITEMW lvi = { 0 };
+        lvi.mask = LVIF_TEXT;
+        lvi.iItem = (int)i;
+        lvi.iSubItem = 0;
+        lvi.pszText = (LPWSTR)s_tempShortcuts[i].name.c_str();
+        ListView_InsertItem(hList, &lvi);
+        std::wstring k = FormatShortcutKey(s_tempShortcuts[i]);
+        ListView_SetItemText(hList, (int)i, 1, (LPWSTR)k.c_str());
     }
 }
 
 void SettingsDialog::Show(HWND hwndParent, std::function<void()> onSettingsChanged, int initialCategory) {
   s_onSettingsChanged = onSettingsChanged;
+  s_currentCategory = std::clamp(initialCategory, 0, 9);
   HINSTANCE hInst = GetModuleHandleW(nullptr);
 
   WNDCLASSEXW wc = {sizeof(wc)};
@@ -104,8 +356,8 @@ void SettingsDialog::Show(HWND hwndParent, std::function<void()> onSettingsChang
     RegisterClassExW(&wc);
   }
 
-  int w = Theme::Get().Scale(580, hwndParent);
-  int h = Theme::Get().Scale(500, hwndParent);
+  int w = Theme::Get().Scale(860, hwndParent);
+  int h = Theme::Get().Scale(680, hwndParent);
 
   RECT rcParent;
   GetWindowRect(hwndParent, &rcParent);
@@ -114,16 +366,12 @@ void SettingsDialog::Show(HWND hwndParent, std::function<void()> onSettingsChang
 
   HWND hwndDlg =
       CreateWindowExW(WS_EX_DLGMODALFRAME, SETTINGS_CLASS,
-                      I18n::Get().IsChinese() ? L"NeoMDIE 选项与设置" : L"NeoMDIE Options & Settings",
+                      I18n::Get().IsChinese() ? L"NeoMDIE 设置与选项" : L"NeoMDIE Settings & Options",
                       WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN, x,
                       y, w, h, hwndParent, nullptr, hInst, nullptr);
 
   Theme::Get().ApplyToWindow(hwndDlg);
   CreateControls(hwndDlg);
-
-  int initialTab = std::clamp(initialCategory, 0, 7);
-  TabCtrl_SetCurSel(s_hTab, initialTab);
-  SwitchTab(hwndDlg, initialTab);
 
   EnableWindow(hwndParent, FALSE);
   ShowWindow(hwndDlg, SW_SHOW);
@@ -133,12 +381,10 @@ void SettingsDialog::Show(HWND hwndParent, std::function<void()> onSettingsChang
   while (GetMessageW(&msg, nullptr, 0, 0)) {
     if (!IsWindow(hwndDlg))
       break;
-    if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
-      DestroyWindow(hwndDlg);
-      break;
+    if (!IsDialogMessageW(hwndDlg, &msg)) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
     }
-    TranslateMessage(&msg);
-    DispatchMessageW(&msg);
   }
 
   EnableWindow(hwndParent, TRUE);
@@ -146,104 +392,62 @@ void SettingsDialog::Show(HWND hwndParent, std::function<void()> onSettingsChang
 }
 
 void SettingsDialog::SwitchTab(HWND hwnd, int tabIndex) {
-  for (int p = 0; p < 8; ++p) {
+  s_currentCategory = tabIndex;
+  for (int p = 0; p < 10; ++p) {
+    int show = (p == tabIndex) ? SW_SHOW : SW_HIDE;
     for (HWND hCtrl : s_pageControls[p]) {
-      ShowWindow(hCtrl, (p == tabIndex) ? SW_SHOW : SW_HIDE);
+      if (hCtrl && IsWindow(hCtrl)) {
+        ShowWindow(hCtrl, show);
+      }
     }
   }
-}
-
-static LRESULT CALLBACK DarkHeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
-    if (msg == WM_ERASEBKGND && Theme::Get().IsDarkMode()) {
-        return 1;
-    }
-    if (msg == WM_PAINT && Theme::Get().IsDarkMode()) {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rcClient;
-        GetClientRect(hwnd, &rcClient);
-        HDC hdcMem = CreateCompatibleDC(hdc);
-        HBITMAP hbmMem = CreateCompatibleBitmap(hdc, rcClient.right, rcClient.bottom);
-        HGDIOBJ oldBm = SelectObject(hdcMem, hbmMem);
-
-        FillRect(hdcMem, &rcClient, Theme::Get().BrushSurface());
-
-        int count = Header_GetItemCount(hwnd);
-        HFONT hFont = Theme::Get().GetUIFont(hwnd);
-        HGDIOBJ oldFont = SelectObject(hdcMem, hFont);
-        SetBkMode(hdcMem, TRANSPARENT);
-        SetTextColor(hdcMem, Theme::Get().ClrTextPrimary());
-        HPEN hPenBorder = Theme::Get().PenBorder();
-        HGDIOBJ oldPen = SelectObject(hdcMem, hPenBorder);
-
-        for (int i = 0; i < count; ++i) {
-            RECT rcItem;
-            Header_GetItemRect(hwnd, i, &rcItem);
-            wchar_t text[256] = { 0 };
-            HDITEMW hdi = { sizeof(hdi) };
-            hdi.mask = HDI_TEXT | HDI_FORMAT;
-            hdi.pszText = text;
-            hdi.cchTextMax = 256;
-            Header_GetItem(hwnd, i, &hdi);
-
-            RECT rcText = rcItem;
-            rcText.left += Theme::Get().Scale(8, hwnd);
-            rcText.right -= Theme::Get().Scale(8, hwnd);
-            DrawTextW(hdcMem, text, -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-
-            MoveToEx(hdcMem, rcItem.right - 1, rcItem.top + 3, nullptr);
-            LineTo(hdcMem, rcItem.right - 1, rcItem.bottom - 3);
-        }
-        MoveToEx(hdcMem, 0, rcClient.bottom - 1, nullptr);
-        LineTo(hdcMem, rcClient.right, rcClient.bottom - 1);
-
-        BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, hdcMem, 0, 0, SRCCOPY);
-        SelectObject(hdcMem, oldPen);
-        SelectObject(hdcMem, oldFont);
-        SelectObject(hdcMem, oldBm);
-        DeleteObject(hbmMem);
-        DeleteDC(hdcMem);
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
-    return DefSubclassProc(hwnd, msg, wParam, lParam);
+  InvalidateRect(hwnd, nullptr, TRUE);
 }
 
 void SettingsDialog::CreateControls(HWND hwnd) {
-  for (int p = 0; p < 8; ++p) {
-    s_pageControls[p].clear();
-  }
-
   HINSTANCE hInst = GetModuleHandleW(nullptr);
   HFONT hFont = Theme::Get().GetUIFont(hwnd);
   HFONT hFontBold = Theme::Get().GetUIFontBold(hwnd);
 
+  for (int i = 0; i < 10; ++i) {
+    s_pageControls[i].clear();
+  }
+
   bool zh = I18n::Get().IsChinese();
+  bool isDark = Theme::Get().IsDarkMode();
   Config &cfg = Config::Get();
 
-  int marginX = Theme::Get().Scale(24, hwnd);
+  s_tempTreeAction = cfg.actionTree;
+  s_tempLinksAction = cfg.actionLinks;
+  s_tempAddressAction = cfg.actionAddress;
+  s_curActionTarget = 0;
+
+  RECT rcClient;
+  GetClientRect(hwnd, &rcClient);
+  int clientW = rcClient.right - rcClient.left;
+  int clientH = rcClient.bottom - rcClient.top;
+
+  int navW = Theme::Get().Scale(160, hwnd);
+  int navH = clientH - Theme::Get().Scale(64, hwnd);
+  int marginX = Theme::Get().Scale(185, hwnd);
+  int contentW = clientW - marginX - Theme::Get().Scale(24, hwnd);
   int lineH = Theme::Get().Scale(24, hwnd);
-  int dlgW = Theme::Get().Scale(580, hwnd);
-  int dlgH = Theme::Get().Scale(500, hwnd);
+  int spacing = Theme::Get().Scale(6, hwnd);
 
-  // Tab Control
-  s_hTab = CreateWindowExW(
-      0, WC_TABCONTROLW, L"",
-      WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP,
-      Theme::Get().Scale(12, hwnd), Theme::Get().Scale(12, hwnd),
-      dlgW - Theme::Get().Scale(40, hwnd), dlgH - Theme::Get().Scale(90, hwnd),
-      hwnd, (HMENU)200, hInst, nullptr);
-  SendMessageW(s_hTab, WM_SETFONT, (WPARAM)hFont, TRUE);
+  // 1. Left Vertical Navigation Listbox with LBS_HASSTRINGS
+  s_hCategoryList = CreateWindowExW(
+      0, L"LISTBOX", L"",
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | WS_BORDER,
+      Theme::Get().Scale(14, hwnd), Theme::Get().Scale(14, hwnd),
+      navW, navH,
+      hwnd, (HMENU)201, hInst, nullptr);
 
-  const wchar_t* tabTitlesZh[] = { L"常规", L"窗口与分屏", L"分页标签", L"侧边栏与树", L"视图与列表", L"搜索过滤", L"鼠标手势", L"外观工具栏" };
-  const wchar_t* tabTitlesEn[] = { L"General", L"Window & Split", L"Tabs", L"Sidebar & Tree", L"View & List", L"Search & Filter", L"Gestures", L"Appearance" };
+  SendMessageW(s_hCategoryList, LB_SETITEMHEIGHT, 0, Theme::Get().Scale(36, hwnd));
 
-  for (int i = 0; i < 8; ++i) {
-    TCITEMW tie = { 0 };
-    tie.mask = TCIF_TEXT;
-    tie.pszText = (LPWSTR)(zh ? tabTitlesZh[i] : tabTitlesEn[i]);
-    TabCtrl_InsertItem(s_hTab, i, &tie);
+  for (int i = 0; i < 10; ++i) {
+      SendMessageW(s_hCategoryList, LB_ADDSTRING, 0, (LPARAM)(zh ? navTitlesZh[i] : navTitlesEn[i]));
   }
+  SendMessageW(s_hCategoryList, LB_SETCURSEL, s_currentCategory, 0);
 
   // Helpers
   auto addCtrl = [&](int page, HWND hCtrl) {
@@ -251,357 +455,517 @@ void SettingsDialog::CreateControls(HWND hwnd) {
     return hCtrl;
   };
 
-  auto createLabel = [&](int page, const wchar_t *text, int y, bool bold = false) {
-    HWND hLbl = CreateWindowExW(0, L"STATIC", text, WS_CHILD,
-                                marginX, y, Theme::Get().Scale(510, hwnd),
-                                lineH, hwnd, nullptr, hInst, nullptr);
+  auto createLabel = [&](int page, const wchar_t *text, int x, int y, int w, int h, bool bold = false) {
+    HWND hLbl = CreateWindowExW(0, L"STATIC", text,
+                                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                                x, y, w, h,
+                                hwnd, nullptr, hInst, nullptr);
     SendMessageW(hLbl, WM_SETFONT, (WPARAM)(bold ? hFontBold : hFont), TRUE);
     return addCtrl(page, hLbl);
   };
 
   auto createChk = [&](int page, const wchar_t *text, int y, int id, bool checked) {
-    HWND hChk = CreateWindowExW(0, L"BUTTON", text,
-                                WS_CHILD | BS_AUTOCHECKBOX | WS_TABSTOP,
-                                marginX, y, Theme::Get().Scale(510, hwnd), lineH,
-                                hwnd, (HMENU)(INT_PTR)id, hInst, nullptr);
+    HWND hChk = CreateWindowExW(
+        0, L"BUTTON", text,
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP | WS_CLIPSIBLINGS,
+        marginX, y, contentW, lineH, hwnd, (HMENU)(INT_PTR)id, hInst, nullptr);
     SendMessageW(hChk, WM_SETFONT, (WPARAM)hFont, TRUE);
     SendMessageW(hChk, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
+    SetWindowTheme(hChk, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+    Theme::Get().ApplyToWindow(hChk);
     return addCtrl(page, hChk);
   };
 
-  int topY = Theme::Get().Scale(52, hwnd);
-  int spacing = Theme::Get().Scale(8, hwnd);
-
-  // =========================================================================
-  // Page 0: 常规 (General)
-  // =========================================================================
-  int y0 = topY;
-  createLabel(0, zh ? L"语言设置 (Language):" : L"Language:", y0, true);
-  y0 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hLangCombo = CreateWindowExW(
-      0, L"COMBOBOX", L"",
-      WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
-      marginX, y0, Theme::Get().Scale(280, hwnd), lineH * 4,
-      hwnd, (HMENU)301, hInst, nullptr);
-  SendMessageW(s_hLangCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
-  SendMessageW(s_hLangCombo, CB_ADDSTRING, 0, (LPARAM)L"简体中文 (Simplified Chinese)");
-  SendMessageW(s_hLangCombo, CB_ADDSTRING, 0, (LPARAM)L"English");
-  SendMessageW(s_hLangCombo, CB_SETCURSEL, zh ? 0 : 1, 0);
-  addCtrl(0, s_hLangCombo);
-  y0 += lineH + spacing * 2;
-
-  createLabel(0, zh ? L"启动与实例:" : L"Startup & Instance:", y0, true);
-  y0 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hChkRestoreTabs = createChk(0, zh ? L"启动时自动恢复上次会话的所有标签页" : L"Restore tabs from previous session on startup",
-                                y0, 302, cfg.restoreTabsOnStartup);
-  y0 += lineH + spacing;
-
-  s_hChkSingleInstance = createChk(0, zh ? L"单实例模式 (再次打开新窗口时激活已有主窗口)" : L"Single instance mode (activate existing window)",
-                                   y0, 303, true);
-  y0 += lineH + spacing;
-
-  s_hChkSaveWindowPos = createChk(0, zh ? L"记住窗口位置与大小" : L"Remember window position and size",
-                                  y0, 304, true);
-  y0 += lineH + spacing * 2;
-
-  createLabel(0, zh ? L"系统托盘动作:" : L"System Tray Actions:", y0, true);
-  y0 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hChkMinToTray = createChk(0, zh ? L"最小化时缩小至系统托盘" : L"Minimize to system notification tray",
-                              y0, 305, cfg.minimizeToTray);
-  y0 += lineH + spacing;
-
-  s_hChkCloseToTray = createChk(0, zh ? L"关闭窗口时最小化至托盘而非直接退出" : L"Close button minimizes to tray instead of exiting",
-                               y0, 306, cfg.closeToTray);
-
-  // =========================================================================
-  // Page 1: 窗口与分屏 (Window & Split)
-  // =========================================================================
-  int y1 = topY;
-  createLabel(1, zh ? L"默认分屏窗口模式:" : L"Default Split Window Mode:", y1, true);
-  y1 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hLayoutCombo = CreateWindowExW(
-      0, L"COMBOBOX", L"",
-      WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
-      marginX, y1, Theme::Get().Scale(280, hwnd), lineH * 6,
-      hwnd, (HMENU)311, hInst, nullptr);
-  SendMessageW(s_hLayoutCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
-  SendMessageW(s_hLayoutCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"单屏 (1x1)" : L"Single (1x1)"));
-  SendMessageW(s_hLayoutCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"左右双屏 (1x2)" : L"Dual Vertical (1x2)"));
-  SendMessageW(s_hLayoutCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"上下双屏 (2x1)" : L"Dual Horizontal (2x1)"));
-  SendMessageW(s_hLayoutCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"四分屏 (2x2)" : L"Quad (2x2)"));
-  SendMessageW(s_hLayoutCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"左一右二 (1+2)" : L"Three Panes (1+2)"));
-  SendMessageW(s_hLayoutCombo, CB_SETCURSEL, cfg.paneLayout, 0);
-  addCtrl(1, s_hLayoutCombo);
-  y1 += lineH + spacing * 2;
-
-  createLabel(1, zh ? L"窗格标题栏与控制:" : L"Pane Headers & Controls:", y1, true);
-  y1 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hChkPaneHeader = createChk(1, zh ? L"在每个分屏顶部显示路径栏及 [🗕 最小化] [🗖 最大化] [✕ 关闭] 按钮" : L"Show pane header with path & minimize/maximize/close buttons",
-                               y1, 312, true);
-  y1 += lineH + spacing;
-
-  s_hChkSyncNav = createChk(1, zh ? L"启用多窗格同步浏览 (分屏窗口同步导航至相同文件夹)" : L"Enable synchronized multi-pane navigation",
-                            y1, 313, cfg.syncNav);
-  y1 += lineH + spacing;
-
-  s_hChkLockToolbars = createChk(1, zh ? L"锁定工具栏 (禁止鼠标拖动调整地址栏与搜索栏长度)" : L"Lock toolbars (disable resizing address & search bars)",
-                                 y1, 314, cfg.lockToolbars);
-
-  // =========================================================================
-  // Page 2: 分页标签 (Tabs)
-  // =========================================================================
-  int y2 = topY;
-  createLabel(2, zh ? L"标签栏外观与控件:" : L"Tab Bar Appearance & Controls:", y2, true);
-  y2 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hChkShowNewTabBtn = createChk(2, zh ? L"在标签栏右侧显示新建标签按钮 (+)" : L"Show new tab button (+) on tab bar",
-                                  y2, 321, true);
-  y2 += lineH + spacing;
-
-  s_hChkShowCloseBtn = createChk(2, zh ? L"在每个标签页上显示关闭按钮 (✕)" : L"Show close button (✕) on active tab",
-                                 y2, 322, true);
-  y2 += lineH + spacing * 2;
-
-  createLabel(2, zh ? L"标签行为与鼠标动作:" : L"Tab Behavior & Mouse Actions:", y2, true);
-  y2 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hChkAllowDupTabs = createChk(2, zh ? L"允许重复打开相同文件夹的标签页" : L"Allow duplicate tabs for the same folder",
-                                 y2, 323, cfg.allowDuplicateTabs);
-  y2 += lineH + spacing * 2;
-
-  createLabel(2, zh ? L"双击标签页执行的动作:" : L"Double click tab action:", y2, false);
-  y2 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hTabDblClickCombo = CreateWindowExW(
-      0, L"COMBOBOX", L"",
-      WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
-      marginX, y2, Theme::Get().Scale(280, hwnd), lineH * 5,
-      hwnd, (HMENU)324, hInst, nullptr);
-  SendMessageW(s_hTabDblClickCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
-  SendMessageW(s_hTabDblClickCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"关闭标签页 (Close Tab)" : L"Close Tab"));
-  SendMessageW(s_hTabDblClickCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"锁定 / 固定标签页 (Pin Tab)" : L"Pin Tab"));
-  SendMessageW(s_hTabDblClickCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"刷新标签页 (Refresh)" : L"Refresh"));
-  SendMessageW(s_hTabDblClickCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"向上一级目录 (Go Up)" : L"Go Up"));
-  SendMessageW(s_hTabDblClickCombo, CB_SETCURSEL, cfg.tabDoubleClickAction, 0);
-  addCtrl(2, s_hTabDblClickCombo);
-
-  // =========================================================================
-  // Page 3: 目录树与侧边栏 (Sidebar & Tree)
-  // =========================================================================
-  int y3 = topY;
-  createLabel(3, zh ? L"文件夹目录树 (Directory Tree):" : L"Directory Tree:", y3, true);
-  y3 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hChkTree = createChk(3, zh ? L"启动时默认显示左侧文件夹目录树 (快捷键 F8)" : L"Show directory tree by default on launch (F8)",
-                         y3, 331, cfg.showTree);
-  y3 += lineH + spacing;
-
-  s_hChkAutoExpandTree = createChk(3, zh ? L"浏览文件列表时，目录树自动同步展开并定位对应目录" : L"Auto expand tree and select folder when navigating list",
-                                   y3, 332, cfg.autoExpandTree);
-  y3 += lineH + spacing * 2;
-
-  createLabel(3, zh ? L"快速预览窗格 (Preview Pane):" : L"Quick Preview Pane:", y3, true);
-  y3 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hChkPreview = createChk(3, zh ? L"启动时默认开启右侧快速预览窗格 (快捷键 Alt+P)" : L"Show quick preview pane by default on launch (Alt+P)",
-                            y3, 333, cfg.previewEnabled);
-  y3 += lineH + spacing;
-
-  createLabel(3, zh ? L"  * 支持 PDF, Word/Excel/PowerPoint, 图片, 纯文本/源代码, 媒体文件的极速预览" : L"  * Supports preview for PDF, Office, images, text, source code & media", y3, false);
-
-  // =========================================================================
-  // Page 4: 视图与文件列表 (View & File List)
-  // =========================================================================
-  int y4 = topY;
-  createLabel(4, zh ? L"默认查看视图样式:" : L"Default View Mode:", y4, true);
-  y4 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hViewModeCombo = CreateWindowExW(
-      0, L"COMBOBOX", L"",
-      WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
-      marginX, y4, Theme::Get().Scale(280, hwnd), lineH * 7,
-      hwnd, (HMENU)341, hInst, nullptr);
-  SendMessageW(s_hViewModeCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
-  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"详细信息 (Details)" : L"Details"));
-  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"超大图标 (Extra Large Icons)" : L"Extra Large Icons"));
-  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"大图标 (Large Icons)" : L"Large Icons"));
-  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"中等图标 (Medium Icons)" : L"Medium Icons"));
-  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"小图标 (Small Icons)" : L"Small Icons"));
-  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"列表 (List)" : L"List"));
-  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"平铺 (Tiles)" : L"Tiles"));
-  SendMessageW(s_hViewModeCombo, CB_SETCURSEL, cfg.viewMode, 0);
-  addCtrl(4, s_hViewModeCombo);
-  y4 += lineH + spacing * 2;
-
-  createLabel(4, zh ? L"文件列表显示与计算选项:" : L"File List Display & Calculation:", y4, true);
-  y4 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hChkHidden = createChk(4, zh ? L"显示隐藏的文件和系统文件" : L"Show hidden files and system files",
-                           y4, 342, cfg.showHidden);
-  y4 += lineH + spacing;
-
-  s_hChkCalcSize = createChk(4, zh ? L"在后台自动计算并显示文件夹大小" : L"Automatically calculate folder size in background",
-                             y4, 343, cfg.calcFolderSize);
-  y4 += lineH + spacing;
-
-  s_hChkFullRowSelect = createChk(4, zh ? L"详细信息视图中整行选择 (Full Row Select)" : L"Full row select in Details view",
-                                  y4, 344, true);
-  y4 += lineH + spacing;
-
-  s_hChkZebraStriping = createChk(4, zh ? L"偶数行以交替轻微底色区分 (Zebra Striping)" : L"Alternate row background color (Zebra striping)",
-                                  y4, 345, true);
-  y4 += lineH + spacing * 2;
-
-  createLabel(4, zh ? L"按键设置与快捷键分类 (MDIE 原版模式):" : L"Keyboard Shortcuts (MDIE Mode):", y4, true);
-  y4 += lineH + Theme::Get().Scale(2, hwnd);
-  createLabel(4, zh ? L"• 全体快捷键: 全局响应 (Ctrl+T 新建标签, Ctrl+W 关闭标签, Ctrl+Tab 换标签, Alt+D 地址, Ctrl+F 搜索, Ctrl+1..4 分屏, F5 刷新)"
-                    : L"• Global Shortcuts: Active everywhere (Ctrl+T New Tab, Ctrl+W, Ctrl+Tab, Alt+D, Ctrl+F, Ctrl+1..4, F5)", y4, false);
-  y4 += lineH + spacing;
-  createLabel(4, zh ? L"• 列表快捷键: 仅文件列表聚焦时生效 (Space 快速预览, Backspace 返回上一级, Enter 打开, Home/End 顶底, PgUp/Dn 翻页, F2 重命名)"
-                    : L"• List Shortcuts: Active in file list (Space preview, Backspace up, Enter open, Home/End top/bottom, PgUp/Dn, F2)", y4, false);
-
-  // =========================================================================
-  // Page 5: 搜索与即时过滤 (Search & Filter)
-  // =========================================================================
-  int y5 = topY;
-  createLabel(5, zh ? L"即时搜索与过滤选项:" : L"Incremental Search & Filter Options:", y5, true);
-  y5 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hChkIncremental = createChk(5, zh ? L"启用实时增量搜索过滤 (输入字符即刻过滤文件列表)" : L"Enable incremental search filtering while typing",
-                                y5, 351, true);
-  y5 += lineH + spacing;
-
-  s_hChkSearchSubfolders = createChk(5, zh ? L"搜索过滤时默认递归包含所有子文件夹" : L"Include subfolders recursively by default when searching",
-                                     y5, 352, cfg.searchSubfoldersDefault);
-  y5 += lineH + spacing;
-
-  s_hChkMatchCase = createChk(5, zh ? L"区分英文字母大小写 (Match Case)" : L"Match Case",
-                              y5, 353, false);
-  y5 += lineH + spacing * 2;
-
-  createLabel(5, zh ? L"  * 提示: 工具栏上的搜索栏与地址栏可通过鼠标中间的分隔条自由调整宽度。" : L"  * Tip: The search bar length can be dynamically adjusted by dragging the toolbar divider.", y5, false);
-
-  // =========================================================================
-  // Page 6: 鼠标手势 (Gestures)
-  // =========================================================================
-  int y6 = topY;
-  s_hChkGestures = createChk(6, zh ? L"启用鼠标右键划动手势 (按住鼠标右键划出轨迹)" : L"Enable mouse gestures (Right-drag)",
-                             y6, 361, cfg.gesturesEnabled);
-  y6 += lineH + spacing;
-
-  createLabel(6, zh ? L"自定义手势与映射动作 (可自由添加、修改或删除):" : L"Custom Gestures (Add, edit action, or delete):", y6, true);
-  y6 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_tempGestures = cfg.gestures;
-
-  s_hGestureList = CreateWindowExW(
-      0, WC_LISTVIEWW, L"",
-      WS_CHILD | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP,
-      marginX, y6, Theme::Get().Scale(510, hwnd), Theme::Get().Scale(140, hwnd),
-      hwnd, (HMENU)362, hInst, nullptr);
-  SendMessageW(s_hGestureList, WM_SETFONT, (WPARAM)hFont, TRUE);
-  ListView_SetExtendedListViewStyle(s_hGestureList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
-
-  LVCOLUMNW lvcG = { 0 };
-  lvcG.mask = LVCF_TEXT | LVCF_WIDTH;
-  lvcG.cx = Theme::Get().Scale(210, hwnd);
-  lvcG.pszText = (LPWSTR)(zh ? L"手势轨迹 (Pattern)" : L"Pattern");
-  ListView_InsertColumn(s_hGestureList, 0, &lvcG);
-
-  lvcG.cx = Theme::Get().Scale(280, hwnd);
-  lvcG.pszText = (LPWSTR)(zh ? L"执行动作 (Action)" : L"Action");
-  ListView_InsertColumn(s_hGestureList, 1, &lvcG);
-
-  PopulateGestureList(s_hGestureList);
-  addCtrl(6, s_hGestureList);
-
-  y6 += Theme::Get().Scale(145, hwnd);
-
-  int gBtnW = Theme::Get().Scale(118, hwnd);
-  int gBtnH = Theme::Get().Scale(26, hwnd);
-  int gBtnX = marginX;
-
-  auto createGBtn = [&](const wchar_t* txt, int id) {
-      HWND hBtn = CreateWindowExW(0, L"BUTTON", txt, WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
-                                 gBtnX, y6, gBtnW, gBtnH, hwnd, (HMENU)(INT_PTR)id, hInst, nullptr);
-      SendMessageW(hBtn, WM_SETFONT, (WPARAM)hFont, TRUE);
-      addCtrl(6, hBtn);
-      gBtnX += gBtnW + Theme::Get().Scale(10, hwnd);
-      return hBtn;
+  auto createCombo = [&](int page, int x, int y, int id, int w = 240) {
+    HWND hCmb = CreateWindowExW(
+        0, L"COMBOBOX", L"",
+        WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL | WS_CLIPSIBLINGS,
+        x, y, Theme::Get().Scale(w, hwnd), Theme::Get().Scale(240, hwnd),
+        hwnd, (HMENU)(INT_PTR)id, hInst, nullptr);
+    SendMessageW(hCmb, WM_SETFONT, (WPARAM)hFont, TRUE);
+    SetWindowTheme(hCmb, isDark ? L"DarkMode_CFD" : L"Explorer", nullptr);
+    Theme::Get().ApplyToWindow(hCmb);
+    return addCtrl(page, hCmb);
   };
 
-  s_hBtnGestureAdd   = createGBtn(zh ? L"➕ 添加手势..." : L"➕ Add...", 363);
-  s_hBtnGestureEdit  = createGBtn(zh ? L"✎ 修改动作..." : L"✎ Edit...", 364);
-  s_hBtnGestureDel   = createGBtn(zh ? L"✕ 删除手势" : L"✕ Delete", 365);
-  s_hBtnGestureReset = createGBtn(zh ? L"↺ 恢复默认" : L"↺ Defaults", 366);
+  // ----------------------------------------------------
+  // Page 0: 常规与启动 (General)
+  // ----------------------------------------------------
+  int y0 = Theme::Get().Scale(16, hwnd);
+  createLabel(0, zh ? L"界面显示语言:" : L"Interface Language:", marginX, y0, contentW, lineH, true);
+  y0 += lineH + spacing;
 
-  // =========================================================================
-  // Page 7: 外观与工具栏 (Appearance & Toolbars)
-  // =========================================================================
-  int y7 = topY;
-  createLabel(7, zh ? L"界面主题外观模式:" : L"Appearance Theme:", y7, true);
-  y7 += lineH + Theme::Get().Scale(2, hwnd);
+  s_hLangCombo = createCombo(0, marginX, y0, 301, 240);
+  SendMessageW(s_hLangCombo, CB_ADDSTRING, 0, (LPARAM)L"中文 (简体)");
+  SendMessageW(s_hLangCombo, CB_ADDSTRING, 0, (LPARAM)L"English (United States)");
+  SendMessageW(s_hLangCombo, CB_SETCURSEL, (cfg.language == 1) ? 1 : 0, 0);
+  y0 += lineH + spacing * 2;
 
-  s_hThemeCombo = CreateWindowExW(
-      0, L"COMBOBOX", L"",
-      WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
-      marginX, y7, Theme::Get().Scale(280, hwnd), lineH * 4,
-      hwnd, (HMENU)371, hInst, nullptr);
-  SendMessageW(s_hThemeCombo, WM_SETFONT, (WPARAM)hFont, TRUE);
-  SendMessageW(s_hThemeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"跟随 Windows 系统深浅模式" : L"Follow Windows System"));
-  SendMessageW(s_hThemeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"浅色模式 (Light Mode)" : L"Light Mode"));
-  SendMessageW(s_hThemeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"深色暗黑模式 (Dark Mode)" : L"Dark Mode"));
-  int themeIdx = (cfg.themeMode == 0) ? 1 : ((cfg.themeMode == 1) ? 2 : 0);
-  SendMessageW(s_hThemeCombo, CB_SETCURSEL, themeIdx, 0);
-  addCtrl(7, s_hThemeCombo);
+  createLabel(0, zh ? L"启动与系统托盘行为:" : L"Startup & System Tray:", marginX, y0, contentW, lineH, true);
+  y0 += lineH + spacing;
+
+  s_hChkRestoreTabs = createChk(0, zh ? L"启动时恢复上次会话的所有标签页" : L"Restore tabs from previous session on startup",
+                               y0, 302, cfg.restoreTabsOnStartup);
+  y0 += lineH + spacing;
+
+  s_hChkMinToTray = createChk(0, zh ? L"最小化窗口时缩至系统托盘区" : L"Minimize window to system tray",
+                             y0, 303, cfg.minimizeToTray);
+  y0 += lineH + spacing;
+
+  s_hChkCloseToTray = createChk(0, zh ? L"点击窗口关闭按钮时最小化至托盘" : L"Close button minimizes to tray",
+                               y0, 304, cfg.closeToTray);
+  y0 += lineH + spacing;
+
+  s_hChkSingleInstance = createChk(0, zh ? L"只运行一个 NeoMDIE 程序实例 (单实例模式)" : L"Single instance mode (allow only one running instance)",
+                                   y0, 306, cfg.singleInstance);
+  y0 += lineH + spacing;
+
+  s_hChkReplaceExplorer = createChk(0, zh ? L"替代系统资源管理器作为默认文件管理器" : L"Replace Windows Explorer as default file manager",
+                                   y0, 305, ShellUtils::IsExplorerReplaced());
+
+  // ----------------------------------------------------
+  // Page 1: 窗口动作设置 (Window Actions - Pure Labels)
+  // ----------------------------------------------------
+  int yAct = Theme::Get().Scale(16, hwnd);
+  createLabel(1, zh ? L"目标对象:" : L"Target Object:", marginX, yAct, contentW, lineH, true);
+  yAct += lineH + spacing;
+
+  s_hActionTargetCombo = createCombo(1, marginX, yAct, 401, 270);
+  SendMessageW(s_hActionTargetCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"侧边栏目录树" : L"Sidebar Directory Tree"));
+  SendMessageW(s_hActionTargetCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"快捷链接栏" : L"Links Bar"));
+  SendMessageW(s_hActionTargetCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"地址栏导航" : L"Address Bar"));
+  SendMessageW(s_hActionTargetCombo, CB_SETCURSEL, s_curActionTarget, 0);
+  yAct += lineH + spacing * 2;
+
+  createLabel(1, zh ? L"执行动作与鼠标按键触发设置:" : L"Action & Trigger Settings:", marginX, yAct, contentW, lineH, true);
+  yAct += lineH + spacing;
+
+  const wchar_t* actionLabelsZh[5] = {
+      L"在当前栏打开:",
+      L"在新标签页打开:",
+      L"在后台新标签页打开:",
+      L"在其他分栏中打开:",
+      L"在系统资源管理器中打开:"
+  };
+  const wchar_t* actionLabelsEn[5] = {
+      L"Open in Current Pane:",
+      L"Open in New Tab:",
+      L"Open in Background Tab:",
+      L"Open in Other Pane:",
+      L"Open in Explorer:"
+  };
+
+  const wchar_t* triggerOptionsZh[13] = {
+      L"无",
+      L"鼠标左键单击",
+      L"鼠标左键双击",
+      L"鼠标中键单击",
+      L"Shift + 单击",
+      L"Ctrl + 单击",
+      L"Alt + 单击",
+      L"Shift + Ctrl + 单击",
+      L"Shift + Alt + 单击",
+      L"Ctrl + Alt + 单击",
+      L"Shift + Ctrl + Alt + 单击",
+      L"Shift + 中键单击",
+      L"Ctrl + 中键单击"
+  };
+  const wchar_t* triggerOptionsEn[13] = {
+      L"None",
+      L"Left Click",
+      L"Double Click",
+      L"Middle Click",
+      L"Shift + Click",
+      L"Ctrl + Click",
+      L"Alt + Click",
+      L"Shift + Ctrl + Click",
+      L"Shift + Alt + Click",
+      L"Ctrl + Alt + Click",
+      L"Shift + Ctrl + Alt + Click",
+      L"Shift + Middle Click",
+      L"Ctrl + Middle Click"
+  };
+
+  int lblW = Theme::Get().Scale(160, hwnd);
+  int comboW = Theme::Get().Scale(270, hwnd);
+
+  for (int i = 0; i < 5; ++i) {
+      int rowY = yAct + i * Theme::Get().Scale(34, hwnd);
+      createLabel(1, zh ? actionLabelsZh[i] : actionLabelsEn[i], marginX, rowY + Theme::Get().Scale(3, hwnd), lblW, lineH);
+      s_hActionCombos[i] = createCombo(1, marginX + lblW + Theme::Get().Scale(10, hwnd), rowY, 410 + i, 270);
+      for (int opt = 0; opt < 13; ++opt) {
+          SendMessageW(s_hActionCombos[i], CB_ADDSTRING, 0, (LPARAM)(zh ? triggerOptionsZh[opt] : triggerOptionsEn[opt]));
+      }
+  }
+  UpdateActionCombosForCurrentTarget();
+
+  // ----------------------------------------------------
+  // Page 2: 窗口与多栏 (Window & Multi-Pane)
+  // ----------------------------------------------------
+  int y1 = Theme::Get().Scale(16, hwnd);
+  createLabel(2, zh ? L"默认分栏模式:" : L"Default Multi-Pane Mode:", marginX, y1, contentW, lineH, true);
+  y1 += lineH + spacing;
+
+  s_hLayoutCombo = createCombo(2, marginX, y1, 310, 240);
+  SendMessageW(s_hLayoutCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"单栏 (1x1)" : L"Single (1x1)"));
+  SendMessageW(s_hLayoutCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"双栏 (1x2 垂直)" : L"Dual Vertical (1x2)"));
+  SendMessageW(s_hLayoutCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"双栏 (2x1 水平)" : L"Dual Horizontal (2x1)"));
+  SendMessageW(s_hLayoutCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"四栏 (2x2 网格)" : L"Quad (2x2)"));
+  SendMessageW(s_hLayoutCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"三栏 (1左2右)" : L"Three Panes (1+2)"));
+  SendMessageW(s_hLayoutCombo, CB_SETCURSEL, std::clamp(cfg.paneLayout, 0, 4), 0);
+  y1 += lineH + spacing * 2;
+
+  createLabel(2, zh ? L"行为与布局选项:" : L"Pane Behavior & Layout Options:", marginX, y1, contentW, lineH, true);
+  y1 += lineH + spacing;
+
+  s_hChkSyncNav = createChk(2, zh ? L"同步导航 (所有分栏跟随当前路径)" : L"Synchronize navigation across all panes",
+                            y1, 311, cfg.syncNav);
+  y1 += lineH + spacing;
+
+  s_hChkLockToolbars = createChk(2, zh ? L"锁定工具栏位置与尺寸 (禁止手动拉伸)" : L"Lock toolbar layout and widths",
+                                 y1, 312, cfg.lockToolbars);
+
+  // ----------------------------------------------------
+  // Page 3: 标签页偏好 (Tabs)
+  // ----------------------------------------------------
+  int y2 = Theme::Get().Scale(16, hwnd);
+  createLabel(3, zh ? L"标签页基本行为:" : L"Tab Behavior:", marginX, y2, contentW, lineH, true);
+  y2 += lineH + spacing;
+
+  s_hChkAllowDupTabs = createChk(3, zh ? L"允许打开重复路径的标签页" : L"Allow duplicate folder tabs",
+                                y2, 320, cfg.allowDuplicateTabs);
+  y2 += lineH + spacing;
+
+  createLabel(3, zh ? L"双击标签页时的操作:" : L"Double-Click Tab Action:", marginX, y2, contentW, lineH, true);
+  y2 += lineH + spacing;
+
+  s_hTabDblClickCombo = createCombo(3, marginX, y2, 321, 240);
+  SendMessageW(s_hTabDblClickCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"关闭该标签页" : L"Close Tab"));
+  SendMessageW(s_hTabDblClickCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"刷新该标签页" : L"Refresh Tab"));
+  SendMessageW(s_hTabDblClickCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"锁定/解锁标签页" : L"Toggle Pin Tab"));
+  SendMessageW(s_hTabDblClickCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"无动作" : L"Do Nothing"));
+  SendMessageW(s_hTabDblClickCombo, CB_SETCURSEL, std::clamp(cfg.tabDoubleClickAction, 0, 3), 0);
+
+  // ----------------------------------------------------
+  // Page 4: 侧边栏与树状 (Tree & Sidebar)
+  // ----------------------------------------------------
+  int y3 = Theme::Get().Scale(16, hwnd);
+  s_hChkTree = createChk(4, zh ? L"显示侧边栏目录树" : L"Show directory tree sidebar",
+                         y3, 330, cfg.showTree);
+  y3 += lineH + spacing;
+
+  s_hChkAutoExpandTree = createChk(4, zh ? L"导航时侧边栏自动展开并定位当前文件夹" : L"Auto-expand and select active folder in tree",
+                                  y3, 331, cfg.autoExpandTree);
+  y3 += lineH + spacing;
+
+  s_hChkPreview = createChk(4, zh ? L"开启右侧文件快速预览窗格" : L"Enable file preview pane",
+                           y3, 332, cfg.previewEnabled);
+
+  // ----------------------------------------------------
+  // Page 5: 视图与外观 (View & Appearance)
+  // ----------------------------------------------------
+  int y4 = Theme::Get().Scale(16, hwnd);
+  createLabel(5, zh ? L"默认文件列表视图模式:" : L"Default View Mode:", marginX, y4, contentW, lineH, true);
+  y4 += lineH + spacing;
+
+  s_hViewModeCombo = createCombo(5, marginX, y4, 340, 240);
+  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"详细信息" : L"Details"));
+  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"大图标" : L"Large Icons"));
+  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"小图标" : L"Small Icons"));
+  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"列表" : L"List"));
+  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"平铺" : L"Tiles"));
+  SendMessageW(s_hViewModeCombo, CB_SETCURSEL, std::clamp(cfg.viewMode, 0, 4), 0);
+  y4 += lineH + spacing * 2;
+
+  createLabel(5, zh ? L"列表显示选项:" : L"List Display Options:", marginX, y4, contentW, lineH, true);
+  y4 += lineH + spacing;
+
+  s_hChkHidden = createChk(5, zh ? L"显示隐藏文件与文件夹" : L"Show hidden files and folders",
+                          y4, 341, cfg.showHidden);
+  y4 += lineH + spacing;
+
+  s_hChkCalcSize = createChk(5, zh ? L"后台自动计算文件夹真实大小" : L"Calculate folder sizes in background",
+                            y4, 342, cfg.calcFolderSize);
+  y4 += lineH + spacing;
+
+  s_hChkZebraStriping = createChk(5, zh ? L"启用隔行变色 (偶数行稍深底色区分)" : L"Enable zebra striping (alternate row colors)",
+                                  y4, 343, cfg.zebraStriping);
+  y4 += lineH + spacing;
+
+  s_hChkGridLines = createChk(5, zh ? L"显示行间网格线" : L"Show grid lines between rows",
+                              y4, 344, cfg.showGridLines);
+
+  // ----------------------------------------------------
+  // Page 6: 搜索与过滤 (Search & Filter)
+  // ----------------------------------------------------
+  int y5 = Theme::Get().Scale(16, hwnd);
+  s_hChkSearchSubfolders = createChk(6, zh ? L"搜索过滤时默认递归包含子文件夹" : L"Include subfolders in search filter by default",
+                                    y5, 350, cfg.searchSubfoldersDefault);
+  y5 += lineH + spacing;
+
+  s_hChkMatchCase = createChk(6, zh ? L"区分大小写" : L"Case sensitive search",
+                              y5, 351, false);
+
+  // ----------------------------------------------------
+  // Page 7: 快捷键自定义 (Hotkeys - MDIE Design)
+  // ----------------------------------------------------
+  int ySc = Theme::Get().Scale(14, hwnd);
+  createLabel(7, zh ? L"快捷键列表:" : L"Shortcuts List:", marginX, ySc, contentW, lineH, true);
+  ySc += lineH + spacing;
+
+  InitDefaultShortcuts();
+
+  int scListH = Theme::Get().Scale(220, hwnd);
+  s_hShortcutList = CreateWindowExW(
+      WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL,
+      marginX, ySc, contentW, scListH,
+      hwnd, (HMENU)355, hInst, nullptr);
+  ListView_SetExtendedListViewStyle(s_hShortcutList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+  SendMessageW(s_hShortcutList, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+  // Apply dark mode theme to shortcut list
+  COLORREF bgListClr = isDark ? Theme::Get().ClrSurface() : RGB(255, 255, 255);
+  COLORREF textListClr = Theme::Get().ClrTextPrimary();
+  ListView_SetBkColor(s_hShortcutList, bgListClr);
+  ListView_SetTextBkColor(s_hShortcutList, bgListClr);
+  ListView_SetTextColor(s_hShortcutList, textListClr);
+  SetWindowTheme(s_hShortcutList, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
+  HWND hScHdr = ListView_GetHeader(s_hShortcutList);
+  if (hScHdr) SetWindowTheme(hScHdr, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
+
+  LVCOLUMNW lvcSc = { 0 };
+  lvcSc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+  lvcSc.fmt = LVCFMT_LEFT;
+  lvcSc.cx = Theme::Get().Scale(240, hwnd);
+  lvcSc.pszText = (LPWSTR)(zh ? L"功能名称" : L"Action Name");
+  ListView_InsertColumn(s_hShortcutList, 0, &lvcSc);
+
+  lvcSc.cx = Theme::Get().Scale(220, hwnd);
+  lvcSc.pszText = (LPWSTR)(zh ? L"按键" : L"Shortcut Key");
+  ListView_InsertColumn(s_hShortcutList, 1, &lvcSc);
+
+  PopulateShortcutList(s_hShortcutList);
+  addCtrl(7, s_hShortcutList);
+
+  // MDIE Style Editing controls below list
+  int editY = ySc + scListH + Theme::Get().Scale(10, hwnd);
+  createLabel(7, zh ? L"功能名称:" : L"Action:", marginX, editY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(70, hwnd), lineH);
+  s_hScActionCombo = createCombo(7, marginX + Theme::Get().Scale(75, hwnd), editY, 358, 220);
+  for (size_t a = 0; a < sizeof(s_allActions)/sizeof(s_allActions[0]); ++a) {
+      SendMessageW(s_hScActionCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? s_allActions[a].nameZh : s_allActions[a].nameEn));
+  }
+  SendMessageW(s_hScActionCombo, CB_SETCURSEL, 0, 0);
+
+  editY += Theme::Get().Scale(32, hwnd);
+  createLabel(7, zh ? L"按键:" : L"Key:", marginX, editY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(70, hwnd), lineH);
+  s_hScKeyCombo = createCombo(7, marginX + Theme::Get().Scale(75, hwnd), editY, 359, 100);
+  for (size_t k = 0; k < sizeof(s_keyChoices)/sizeof(s_keyChoices[0]); ++k) {
+      SendMessageW(s_hScKeyCombo, CB_ADDSTRING, 0, (LPARAM)s_keyChoices[k]);
+  }
+  SendMessageW(s_hScKeyCombo, CB_SETCURSEL, 0, 0);
+
+  int chkX = marginX + Theme::Get().Scale(185, hwnd);
+  s_hScShift = CreateWindowExW(0, L"BUTTON", L"Shift", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                              chkX, editY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(65, hwnd), lineH, hwnd, (HMENU)367, hInst, nullptr);
+  SendMessageW(s_hScShift, WM_SETFONT, (WPARAM)hFont, TRUE);
+  SetWindowTheme(s_hScShift, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+  addCtrl(7, s_hScShift);
+
+  chkX += Theme::Get().Scale(70, hwnd);
+  s_hScCtrl = CreateWindowExW(0, L"BUTTON", L"Ctrl", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                             chkX, editY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(60, hwnd), lineH, hwnd, (HMENU)368, hInst, nullptr);
+  SendMessageW(s_hScCtrl, WM_SETFONT, (WPARAM)hFont, TRUE);
+  SetWindowTheme(s_hScCtrl, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+  addCtrl(7, s_hScCtrl);
+
+  chkX += Theme::Get().Scale(65, hwnd);
+  s_hScAlt = CreateWindowExW(0, L"BUTTON", L"Alt", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                            chkX, editY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(55, hwnd), lineH, hwnd, (HMENU)369, hInst, nullptr);
+  SendMessageW(s_hScAlt, WM_SETFONT, (WPARAM)hFont, TRUE);
+  SetWindowTheme(s_hScAlt, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+  addCtrl(7, s_hScAlt);
+
+  // Buttons Row
+  editY += Theme::Get().Scale(34, hwnd);
+  int btnW = Theme::Get().Scale(80, hwnd);
+  int btnH = Theme::Get().Scale(28, hwnd);
+  int btnX = marginX;
+
+  s_hBtnScAdd = CreateWindowExW(0, L"BUTTON", zh ? L"增加(&A)" : L"Add(&A)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                               btnX, editY, btnW, btnH, hwnd, (HMENU)356, hInst, nullptr);
+  SendMessageW(s_hBtnScAdd, WM_SETFONT, (WPARAM)hFont, TRUE);
+  addCtrl(7, s_hBtnScAdd);
+
+  btnX += btnW + Theme::Get().Scale(8, hwnd);
+  s_hBtnScMod = CreateWindowExW(0, L"BUTTON", zh ? L"修改(&M)" : L"Modify(&M)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                               btnX, editY, btnW, btnH, hwnd, (HMENU)357, hInst, nullptr);
+  SendMessageW(s_hBtnScMod, WM_SETFONT, (WPARAM)hFont, TRUE);
+  addCtrl(7, s_hBtnScMod);
+
+  btnX += btnW + Theme::Get().Scale(8, hwnd);
+  s_hBtnScDel = CreateWindowExW(0, L"BUTTON", zh ? L"删除(&D)" : L"Delete(&D)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                               btnX, editY, btnW, btnH, hwnd, (HMENU)358, hInst, nullptr);
+  SendMessageW(s_hBtnScDel, WM_SETFONT, (WPARAM)hFont, TRUE);
+  addCtrl(7, s_hBtnScDel);
+
+  btnX += btnW + Theme::Get().Scale(8, hwnd);
+  s_hBtnScReset = CreateWindowExW(0, L"BUTTON", zh ? L"恢复默认(&R)" : L"Reset(&R)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                 btnX, editY, btnW + Theme::Get().Scale(16, hwnd), btnH, hwnd, (HMENU)359, hInst, nullptr);
+  SendMessageW(s_hBtnScReset, WM_SETFONT, (WPARAM)hFont, TRUE);
+  addCtrl(7, s_hBtnScReset);
+
+  // ----------------------------------------------------
+  // Page 8: 鼠标手势设置 (Mouse Gestures - MDIE Design)
+  // ----------------------------------------------------
+  int y6 = Theme::Get().Scale(14, hwnd);
+  s_hChkGestures = createChk(8, zh ? L"启用鼠标手势 (按住鼠标右键拖动)" : L"Enable mouse gestures (Hold Right-Click and drag)",
+                             y6, 360, cfg.gesturesEnabled);
+  y6 += lineH + spacing;
+
+  s_tempGestures = cfg.gestures;
+  int gestListH = Theme::Get().Scale(210, hwnd);
+  s_hGestureList = CreateWindowExW(
+      WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL,
+      marginX, y6, contentW, gestListH,
+      hwnd, (HMENU)361, hInst, nullptr);
+  ListView_SetExtendedListViewStyle(s_hGestureList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+  SendMessageW(s_hGestureList, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+  // Dark mode theme for gesture list
+  ListView_SetBkColor(s_hGestureList, bgListClr);
+  ListView_SetTextBkColor(s_hGestureList, bgListClr);
+  ListView_SetTextColor(s_hGestureList, textListClr);
+  SetWindowTheme(s_hGestureList, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
+  HWND hGestHdr = ListView_GetHeader(s_hGestureList);
+  if (hGestHdr) SetWindowTheme(hGestHdr, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
+
+  LVCOLUMNW lvcG = { 0 };
+  lvcG.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+  lvcG.fmt = LVCFMT_LEFT;
+  lvcG.cx = Theme::Get().Scale(150, hwnd);
+  lvcG.pszText = (LPWSTR)(zh ? L"手势轨迹" : L"Gesture Pattern");
+  ListView_InsertColumn(s_hGestureList, 0, &lvcG);
+
+  lvcG.cx = Theme::Get().Scale(230, hwnd);
+  lvcG.pszText = (LPWSTR)(zh ? L"执行功能" : L"Action");
+  ListView_InsertColumn(s_hGestureList, 1, &lvcG);
+
+  lvcG.cx = Theme::Get().Scale(110, hwnd);
+  lvcG.pszText = (LPWSTR)(zh ? L"场所" : L"Scope");
+  ListView_InsertColumn(s_hGestureList, 2, &lvcG);
+
+  PopulateGestureList(s_hGestureList);
+  addCtrl(8, s_hGestureList);
+
+  // MDIE Style Gesture Edit Controls below list
+  int gEditY = y6 + gestListH + Theme::Get().Scale(10, hwnd);
+  createLabel(8, zh ? L"手势轨迹:" : L"Pattern:", marginX, gEditY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(70, hwnd), lineH);
+  s_hGestPatternCombo = createCombo(8, marginX + Theme::Get().Scale(75, hwnd), gEditY, 377, 160);
+  for (size_t p = 0; p < sizeof(s_allPatterns)/sizeof(s_allPatterns[0]); ++p) {
+      SendMessageW(s_hGestPatternCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? s_allPatterns[p].labelZh : s_allPatterns[p].labelEn));
+  }
+  SendMessageW(s_hGestPatternCombo, CB_SETCURSEL, 0, 0);
+
+  createLabel(8, zh ? L"执行功能:" : L"Action:", marginX + Theme::Get().Scale(245, hwnd), gEditY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(70, hwnd), lineH);
+  s_hGestActionCombo = createCombo(8, marginX + Theme::Get().Scale(320, hwnd), gEditY, 378, 180);
+  for (size_t a = 0; a < sizeof(s_allActions)/sizeof(s_allActions[0]); ++a) {
+      SendMessageW(s_hGestActionCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? s_allActions[a].nameZh : s_allActions[a].nameEn));
+  }
+  SendMessageW(s_hGestActionCombo, CB_SETCURSEL, 0, 0);
+
+  gEditY += Theme::Get().Scale(34, hwnd);
+  createLabel(8, zh ? L"适用场所:" : L"Scope:", marginX, gEditY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(70, hwnd), lineH);
+  s_hGestContextCombo = createCombo(8, marginX + Theme::Get().Scale(75, hwnd), gEditY, 379, 160);
+  SendMessageW(s_hGestContextCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"全局 / 列表" : L"Global / List"));
+  SendMessageW(s_hGestContextCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"仅文件列表" : L"List Only"));
+  SendMessageW(s_hGestContextCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"仅侧边栏" : L"Tree Only"));
+  SendMessageW(s_hGestContextCombo, CB_SETCURSEL, 0, 0);
+
+  // Gesture Buttons
+  int gBtnX = marginX + Theme::Get().Scale(245, hwnd);
+  int gBtnW = Theme::Get().Scale(65, hwnd);
+
+  s_hBtnGestAdd = CreateWindowExW(0, L"BUTTON", zh ? L"增加(&A)" : L"Add(&A)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                 gBtnX, gEditY, gBtnW, btnH, hwnd, (HMENU)363, hInst, nullptr);
+  SendMessageW(s_hBtnGestAdd, WM_SETFONT, (WPARAM)hFont, TRUE);
+  addCtrl(8, s_hBtnGestAdd);
+
+  gBtnX += gBtnW + Theme::Get().Scale(6, hwnd);
+  s_hBtnGestMod = CreateWindowExW(0, L"BUTTON", zh ? L"修改(&M)" : L"Modify(&M)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                 gBtnX, gEditY, gBtnW, btnH, hwnd, (HMENU)364, hInst, nullptr);
+  SendMessageW(s_hBtnGestMod, WM_SETFONT, (WPARAM)hFont, TRUE);
+  addCtrl(8, s_hBtnGestMod);
+
+  gBtnX += gBtnW + Theme::Get().Scale(6, hwnd);
+  s_hBtnGestDel = CreateWindowExW(0, L"BUTTON", zh ? L"删除(&D)" : L"Delete(&D)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                 gBtnX, gEditY, gBtnW, btnH, hwnd, (HMENU)365, hInst, nullptr);
+  SendMessageW(s_hBtnGestDel, WM_SETFONT, (WPARAM)hFont, TRUE);
+  addCtrl(8, s_hBtnGestDel);
+
+  gBtnX += gBtnW + Theme::Get().Scale(6, hwnd);
+  s_hBtnGestReset = CreateWindowExW(0, L"BUTTON", zh ? L"恢复默认(&R)" : L"Reset(&R)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                   gBtnX, gEditY, gBtnW + Theme::Get().Scale(24, hwnd), btnH, hwnd, (HMENU)366, hInst, nullptr);
+  SendMessageW(s_hBtnGestReset, WM_SETFONT, (WPARAM)hFont, TRUE);
+  addCtrl(8, s_hBtnGestReset);
+
+  // ----------------------------------------------------
+  // Page 9: 工具栏配置 (Appearance & Toolbars)
+  // ----------------------------------------------------
+  int y7 = Theme::Get().Scale(16, hwnd);
+  createLabel(9, zh ? L"深浅主题外观:" : L"Theme & Dark Mode:", marginX, y7, contentW, lineH, true);
+  y7 += lineH + spacing;
+
+  s_hThemeCombo = createCombo(9, marginX, y7, 370, 240);
+  SendMessageW(s_hThemeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"跟随系统设置" : L"System Default"));
+  SendMessageW(s_hThemeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"浅色模式" : L"Light Mode"));
+  SendMessageW(s_hThemeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"深色模式" : L"Dark Mode"));
+  int thSel = (cfg.themeMode == -1) ? 0 : ((cfg.themeMode == 1) ? 2 : 1);
+  SendMessageW(s_hThemeCombo, CB_SETCURSEL, thSel, 0);
   y7 += lineH + spacing * 2;
 
-  createLabel(7, zh ? L"工具栏与状态栏组件显示:" : L"Toolbars & Status Bar Visibility:", y7, true);
-  y7 += lineH + Theme::Get().Scale(2, hwnd);
-
-  s_hChkTBStandard = createChk(7, zh ? L"显示标准导航操作按钮栏 (后退/前进/上级/刷新/新建标签/目录树)" : L"Show standard navigation buttons bar",
-                               y7, 372, cfg.showToolbarStandard);
+  createLabel(9, zh ? L"工具栏与界面元素可见性:" : L"Toolbars & Interface Elements:", marginX, y7, contentW, lineH, true);
   y7 += lineH + spacing;
 
-  s_hChkTBAddress = createChk(7, zh ? L"显示地址面包屑导航栏" : L"Show address breadcrumb bar",
-                              y7, 373, cfg.showToolbarAddress);
+  s_hChkTBStandard = createChk(9, zh ? L"显示标准按钮工具栏 (前进、后退、刷新、新建)" : L"Show standard navigation buttons",
+                               y7, 371, cfg.showToolbarStandard);
   y7 += lineH + spacing;
 
-  s_hChkTBSearch = createChk(7, zh ? L"显示搜索与即时过滤栏" : L"Show search & incremental filter bar",
-                             y7, 374, cfg.showToolbarSearch);
+  s_hChkTBAddress = createChk(9, zh ? L"显示地址栏" : L"Show address bar & breadcrumbs",
+                              y7, 372, cfg.showToolbarAddress);
   y7 += lineH + spacing;
 
-  s_hChkTBLinks = createChk(7, zh ? L"显示常用书签与链接栏" : L"Show bookmarks & links bar",
-                            y7, 375, cfg.showToolbarLinks);
+  s_hChkTBSearch = createChk(9, zh ? L"显示搜索过滤栏" : L"Show filter & search bar",
+                             y7, 373, cfg.showToolbarSearch);
   y7 += lineH + spacing;
 
-  s_hChkStatusBar = createChk(7, zh ? L"显示底部状态栏 (项目总数、占用大小等信息)" : L"Show status bar with item counts & size",
+  s_hChkTBLinks = createChk(9, zh ? L"显示快捷链接栏" : L"Show links bar",
+                            y7, 374, cfg.showToolbarLinks);
+  y7 += lineH + spacing;
+
+  s_hChkStatusBar = createChk(9, zh ? L"显示底部状态栏" : L"Show status bar with item counts & size",
                              y7, 376, cfg.showStatusBar);
 
   // Initial tab page display
-  SwitchTab(hwnd, 0);
+  SwitchTab(hwnd, s_currentCategory);
 
-  // OK & Cancel buttons
-  int btnW = Theme::Get().Scale(96, hwnd);
-  int btnH = Theme::Get().Scale(30, hwnd);
-  int btnY = dlgH - Theme::Get().Scale(68, hwnd);
+  // Bottom OK & Cancel buttons with generous padding
+  int dlgBtnW = Theme::Get().Scale(95, hwnd);
+  int dlgBtnH = Theme::Get().Scale(32, hwnd);
+  int dlgBtnY = clientH - Theme::Get().Scale(48, hwnd);
 
   HWND hBtnOK = CreateWindowExW(
       0, L"BUTTON", I18n::Get().T(StringId::SettingsBtnOK),
-      WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP,
-      dlgW - Theme::Get().Scale(240, hwnd), btnY, btnW, btnH,
+      WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
+      clientW - Theme::Get().Scale(220, hwnd), dlgBtnY, dlgBtnW, dlgBtnH,
       hwnd, (HMENU)IDOK, hInst, nullptr);
   SendMessageW(hBtnOK, WM_SETFONT, (WPARAM)hFont, TRUE);
 
   HWND hBtnCancel = CreateWindowExW(
       0, L"BUTTON", I18n::Get().T(StringId::SettingsBtnCancel),
-      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
-      dlgW - Theme::Get().Scale(130, hwnd), btnY, btnW, btnH,
+      WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
+      clientW - Theme::Get().Scale(115, hwnd), dlgBtnY, dlgBtnW, dlgBtnH,
       hwnd, (HMENU)IDCANCEL, hInst, nullptr);
   SendMessageW(hBtnCancel, WM_SETFONT, (WPARAM)hFont, TRUE);
 }
@@ -618,38 +982,64 @@ void SettingsDialog::SaveSettings(HWND hwnd) {
   cfg.restoreTabsOnStartup = (SendMessageW(s_hChkRestoreTabs, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.minimizeToTray = (SendMessageW(s_hChkMinToTray, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.closeToTray = (SendMessageW(s_hChkCloseToTray, BM_GETCHECK, 0, 0) == BST_CHECKED);
+  cfg.singleInstance = (SendMessageW(s_hChkSingleInstance, BM_GETCHECK, 0, 0) == BST_CHECKED);
 
-  // Page 1: Window & Split
+  bool replaceExp = (SendMessageW(s_hChkReplaceExplorer, BM_GETCHECK, 0, 0) == BST_CHECKED);
+  if (replaceExp != ShellUtils::IsExplorerReplaced()) {
+      ShellUtils::SetExplorerReplaced(replaceExp);
+  }
+
+  // Page 1: Window Actions
+  SaveActionCombosForCurrentTarget();
+  cfg.actionTree = s_tempTreeAction;
+  cfg.actionLinks = s_tempLinksAction;
+  cfg.actionAddress = s_tempAddressAction;
+
+  // Page 2: Window & Panes
   cfg.paneLayout = (int)SendMessageW(s_hLayoutCombo, CB_GETCURSEL, 0, 0);
   cfg.syncNav = (SendMessageW(s_hChkSyncNav, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.lockToolbars = (SendMessageW(s_hChkLockToolbars, BM_GETCHECK, 0, 0) == BST_CHECKED);
 
-  // Page 2: Tabs
+  // Page 3: Tabs
   cfg.allowDuplicateTabs = (SendMessageW(s_hChkAllowDupTabs, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.tabDoubleClickAction = (int)SendMessageW(s_hTabDblClickCombo, CB_GETCURSEL, 0, 0);
 
-  // Page 3: Tree & Sidebar
+  // Page 4: Tree & Sidebar
   cfg.showTree = (SendMessageW(s_hChkTree, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.autoExpandTree = (SendMessageW(s_hChkAutoExpandTree, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.previewEnabled = (SendMessageW(s_hChkPreview, BM_GETCHECK, 0, 0) == BST_CHECKED);
 
-  // Page 4: View & File List
+  // Page 5: View & File List
   cfg.viewMode = (int)SendMessageW(s_hViewModeCombo, CB_GETCURSEL, 0, 0);
   cfg.showHidden = (SendMessageW(s_hChkHidden, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.calcFolderSize = (SendMessageW(s_hChkCalcSize, BM_GETCHECK, 0, 0) == BST_CHECKED);
+  cfg.zebraStriping = (SendMessageW(s_hChkZebraStriping, BM_GETCHECK, 0, 0) == BST_CHECKED);
+  cfg.showGridLines = (SendMessageW(s_hChkGridLines, BM_GETCHECK, 0, 0) == BST_CHECKED);
 
-  // Page 5: Search & Filter
+  // Page 6: Search & Filter
   cfg.searchSubfoldersDefault = (SendMessageW(s_hChkSearchSubfolders, BM_GETCHECK, 0, 0) == BST_CHECKED);
 
-  // Page 6: Gestures
+  // Page 7: Shortcuts
+  cfg.shortcuts.clear();
+  for (const auto& item : s_tempShortcuts) {
+      ShortcutItemConfig sc;
+      sc.name = item.name;
+      sc.key = item.key;
+      sc.shift = item.shift;
+      sc.ctrl = item.ctrl;
+      sc.alt = item.alt;
+      cfg.shortcuts.push_back(sc);
+  }
+
+  // Page 8: Gestures
   cfg.gesturesEnabled = (SendMessageW(s_hChkGestures, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.gestures = s_tempGestures;
 
-  // Page 7: Appearance & Toolbars
+  // Page 9: Appearance & Toolbars
   int themeSel = (int)SendMessageW(s_hThemeCombo, CB_GETCURSEL, 0, 0);
-  if (themeSel == 1) cfg.themeMode = 0;
+  if (themeSel == 0) cfg.themeMode = -1;
+  else if (themeSel == 1) cfg.themeMode = 0;
   else if (themeSel == 2) cfg.themeMode = 1;
-  else cfg.themeMode = -1;
 
   cfg.showToolbarStandard = (SendMessageW(s_hChkTBStandard, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.showToolbarAddress = (SendMessageW(s_hChkTBAddress, BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -666,195 +1056,291 @@ void SettingsDialog::SaveSettings(HWND hwnd) {
 
 LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
+  case WM_MEASUREITEM: {
+    MEASUREITEMSTRUCT* pmis = (MEASUREITEMSTRUCT*)lParam;
+    if (pmis && pmis->CtlID == 201) {
+      pmis->itemHeight = Theme::Get().Scale(36, hwnd);
+      return TRUE;
+    }
+    break;
+  }
+  case WM_DRAWITEM: {
+    DRAWITEMSTRUCT* pdis = (DRAWITEMSTRUCT*)lParam;
+    if (pdis && pdis->CtlType == ODT_BUTTON) {
+      bool isDown = (pdis->itemState & ODS_SELECTED) != 0;
+      bool isDark = Theme::Get().IsDarkMode();
+      HBRUSH hBg = isDark ? (isDown ? Theme::Get().BrushSelected() : Theme::Get().BrushSurface())
+                          : (isDown ? Theme::Get().BrushSelected() : CreateSolidBrush(RGB(240, 242, 245)));
+      FillRect(pdis->hDC, &pdis->rcItem, hBg);
+
+      HPEN hPen = isDark ? Theme::Get().PenBorder() : CreatePen(PS_SOLID, 1, RGB(180, 185, 195));
+      HGDIOBJ oldPen = SelectObject(pdis->hDC, hPen);
+      SelectObject(pdis->hDC, GetStockObject(NULL_BRUSH));
+      RoundRect(pdis->hDC, pdis->rcItem.left, pdis->rcItem.top, pdis->rcItem.right, pdis->rcItem.bottom, 4, 4);
+      SelectObject(pdis->hDC, oldPen);
+      DeleteObject(hPen);
+      if (!isDark) DeleteObject(hBg);
+
+      wchar_t btnText[128] = { 0 };
+      GetWindowTextW(pdis->hwndItem, btnText, 128);
+      SetBkMode(pdis->hDC, TRANSPARENT);
+      SetTextColor(pdis->hDC, isDark ? (isDown ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary())
+                                     : (isDown ? RGB(255, 255, 255) : RGB(20, 20, 20)));
+      HFONT hFont = Theme::Get().GetUIFont(hwnd);
+      HGDIOBJ oldFont = SelectObject(pdis->hDC, hFont);
+      DrawTextW(pdis->hDC, btnText, -1, &pdis->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+      SelectObject(pdis->hDC, oldFont);
+      return TRUE;
+    }
+    if (pdis && pdis->CtlID == 201) {
+      bool isSelected = (pdis->itemState & ODS_SELECTED);
+      bool isDark = Theme::Get().IsDarkMode();
+
+      COLORREF bgClr = isSelected ? (isDark ? RGB(0, 90, 158) : RGB(0, 120, 215))
+                                  : Theme::Get().ClrSurface();
+      COLORREF textColor = isSelected ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary();
+
+      HBRUSH hbg = CreateSolidBrush(bgClr);
+      FillRect(pdis->hDC, &pdis->rcItem, hbg);
+      DeleteObject(hbg);
+
+      SetTextColor(pdis->hDC, textColor);
+      SetBkMode(pdis->hDC, TRANSPARENT);
+
+      HFONT hFont = isSelected ? Theme::Get().GetUIFontBold(hwnd) : Theme::Get().GetUIFont(hwnd);
+      HGDIOBJ oldFont = SelectObject(pdis->hDC, hFont);
+
+      const wchar_t* title = L"";
+      bool zh = I18n::Get().IsChinese();
+      if (pdis->itemID >= 0 && pdis->itemID < 10) {
+        title = zh ? navTitlesZh[pdis->itemID] : navTitlesEn[pdis->itemID];
+      }
+
+      RECT rcText = pdis->rcItem;
+      rcText.left += Theme::Get().Scale(16, hwnd);
+      DrawTextW(pdis->hDC, title, -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+      SelectObject(pdis->hDC, oldFont);
+      return TRUE;
+    }
+    break;
+  }
+  case WM_CTLCOLORSTATIC:
+  case WM_CTLCOLORBTN: {
+    HDC hdc = (HDC)wParam;
+    SetTextColor(hdc, Theme::Get().ClrTextPrimary());
+    SetBkColor(hdc, Theme::Get().ClrBackground());
+    return (INT_PTR)Theme::Get().BrushBackground();
+  }
+  case WM_CTLCOLOREDIT:
+  case WM_CTLCOLORLISTBOX: {
+    HDC hdc = (HDC)wParam;
+    SetTextColor(hdc, Theme::Get().ClrTextPrimary());
+    SetBkColor(hdc, Theme::Get().ClrSurface());
+    return (INT_PTR)Theme::Get().BrushSurface();
+  }
+  case WM_ERASEBKGND: {
+    HDC hdc = (HDC)wParam;
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    FillRect(hdc, &rc, Theme::Get().BrushBackground());
+    return 1;
+  }
   case WM_NOTIFY: {
-    NMHDR *pnm = (NMHDR *)lParam;
-    if (pnm->idFrom == 200 && pnm->code == TCN_SELCHANGE) {
-      int cur = TabCtrl_GetCurSel(s_hTab);
-      SwitchTab(hwnd, cur);
-      return 0;
-    } else if (pnm->idFrom == 362 && pnm->code == NM_DBLCLK) {
-      SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(364, BN_CLICKED), (LPARAM)s_hBtnGestureEdit);
-      return 0;
+    NMHDR* pnm = (NMHDR*)lParam;
+    if (pnm->code == NM_CUSTOMDRAW) {
+      if (pnm->hwndFrom == ListView_GetHeader(s_hShortcutList) ||
+          pnm->hwndFrom == ListView_GetHeader(s_hGestureList)) {
+        NMCUSTOMDRAW* pnmcd = (NMCUSTOMDRAW*)lParam;
+        if (pnmcd->dwDrawStage == CDDS_PREPAINT) {
+          return CDRF_NOTIFYITEMDRAW;
+        }
+        if (pnmcd->dwDrawStage == CDDS_ITEMPREPAINT) {
+          if (Theme::Get().IsDarkMode()) {
+            SetTextColor(pnmcd->hdc, RGB(220, 220, 220));
+            SetBkColor(pnmcd->hdc, Theme::Get().ClrSurface());
+          }
+          return CDRF_DODEFAULT;
+        }
+      }
+    }
+    if (pnm->hwndFrom == s_hShortcutList && pnm->code == LVN_ITEMCHANGED) {
+      NMLISTVIEW* pnmv = (NMLISTVIEW*)lParam;
+      if ((pnmv->uNewState & LVIS_SELECTED) && pnmv->iItem >= 0 && pnmv->iItem < (int)s_tempShortcuts.size()) {
+          const auto& sc = s_tempShortcuts[pnmv->iItem];
+          // Find action index in combo
+          for (size_t a = 0; a < sizeof(s_allActions)/sizeof(s_allActions[0]); ++a) {
+              if (sc.name == (I18n::Get().IsChinese() ? s_allActions[a].nameZh : s_allActions[a].nameEn)) {
+                  SendMessageW(s_hScActionCombo, CB_SETCURSEL, (WPARAM)a, 0);
+                  break;
+              }
+          }
+          // Find key index in combo
+          for (size_t k = 0; k < sizeof(s_keyChoices)/sizeof(s_keyChoices[0]); ++k) {
+              if (sc.key == s_keyChoices[k]) {
+                  SendMessageW(s_hScKeyCombo, CB_SETCURSEL, (WPARAM)k, 0);
+                  break;
+              }
+          }
+          SendMessageW(s_hScShift, BM_SETCHECK, sc.shift ? BST_CHECKED : BST_UNCHECKED, 0);
+          SendMessageW(s_hScCtrl, BM_SETCHECK, sc.ctrl ? BST_CHECKED : BST_UNCHECKED, 0);
+          SendMessageW(s_hScAlt, BM_SETCHECK, sc.alt ? BST_CHECKED : BST_UNCHECKED, 0);
+      }
+    }
+    else if (pnm->hwndFrom == s_hGestureList && pnm->code == LVN_ITEMCHANGED) {
+      NMLISTVIEW* pnmv = (NMLISTVIEW*)lParam;
+      if ((pnmv->uNewState & LVIS_SELECTED) && pnmv->iItem >= 0 && pnmv->iItem < (int)s_tempGestures.size()) {
+          const auto& g = s_tempGestures[pnmv->iItem];
+          for (size_t p = 0; p < sizeof(s_allPatterns)/sizeof(s_allPatterns[0]); ++p) {
+              if (g.code == s_allPatterns[p].code) {
+                  SendMessageW(s_hGestPatternCombo, CB_SETCURSEL, (WPARAM)p, 0);
+                  break;
+              }
+          }
+          for (size_t a = 0; a < sizeof(s_allActions)/sizeof(s_allActions[0]); ++a) {
+              if (g.action == s_allActions[a].id) {
+                  SendMessageW(s_hGestActionCombo, CB_SETCURSEL, (WPARAM)a, 0);
+                  break;
+              }
+          }
+      }
     }
     break;
   }
   case WM_COMMAND: {
     int id = LOWORD(wParam);
+    int code = HIWORD(wParam);
+
+    if (id == 201 && code == LBN_SELCHANGE) {
+      int sel = (int)SendMessageW(s_hCategoryList, LB_GETCURSEL, 0, 0);
+      if (sel >= 0 && sel < 10) {
+        SwitchTab(hwnd, sel);
+      }
+      return 0;
+    }
+
+    if (id == 401 && code == CBN_SELCHANGE) {
+      SaveActionCombosForCurrentTarget();
+      s_curActionTarget = (int)SendMessageW(s_hActionTargetCombo, CB_GETCURSEL, 0, 0);
+      UpdateActionCombosForCurrentTarget();
+      return 0;
+    }
+
+    // --- Page 7: MDIE Shortcuts Buttons ---
+    if (id == 356) { // Add Shortcut
+      int aIdx = (int)SendMessageW(s_hScActionCombo, CB_GETCURSEL, 0, 0);
+      int kIdx = (int)SendMessageW(s_hScKeyCombo, CB_GETCURSEL, 0, 0);
+      if (aIdx >= 0 && aIdx < (int)(sizeof(s_allActions)/sizeof(s_allActions[0])) &&
+          kIdx >= 0 && kIdx < (int)(sizeof(s_keyChoices)/sizeof(s_keyChoices[0]))) {
+          ShortcutItem item;
+          item.name = I18n::Get().IsChinese() ? s_allActions[aIdx].nameZh : s_allActions[aIdx].nameEn;
+          item.key = s_keyChoices[kIdx];
+          item.shift = (SendMessageW(s_hScShift, BM_GETCHECK, 0, 0) == BST_CHECKED);
+          item.ctrl = (SendMessageW(s_hScCtrl, BM_GETCHECK, 0, 0) == BST_CHECKED);
+          item.alt = (SendMessageW(s_hScAlt, BM_GETCHECK, 0, 0) == BST_CHECKED);
+          item.keyText = FormatShortcutKey(item);
+          s_tempShortcuts.push_back(item);
+          PopulateShortcutList(s_hShortcutList);
+          ListView_SetItemState(s_hShortcutList, (int)s_tempShortcuts.size() - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+      }
+      return 0;
+    } else if (id == 357) { // Modify Shortcut
+      int sel = ListView_GetNextItem(s_hShortcutList, -1, LVNI_SELECTED);
+      int aIdx = (int)SendMessageW(s_hScActionCombo, CB_GETCURSEL, 0, 0);
+      int kIdx = (int)SendMessageW(s_hScKeyCombo, CB_GETCURSEL, 0, 0);
+      if (sel >= 0 && sel < (int)s_tempShortcuts.size() &&
+          aIdx >= 0 && aIdx < (int)(sizeof(s_allActions)/sizeof(s_allActions[0])) &&
+          kIdx >= 0 && kIdx < (int)(sizeof(s_keyChoices)/sizeof(s_keyChoices[0]))) {
+          s_tempShortcuts[sel].name = I18n::Get().IsChinese() ? s_allActions[aIdx].nameZh : s_allActions[aIdx].nameEn;
+          s_tempShortcuts[sel].key = s_keyChoices[kIdx];
+          s_tempShortcuts[sel].shift = (SendMessageW(s_hScShift, BM_GETCHECK, 0, 0) == BST_CHECKED);
+          s_tempShortcuts[sel].ctrl = (SendMessageW(s_hScCtrl, BM_GETCHECK, 0, 0) == BST_CHECKED);
+          s_tempShortcuts[sel].alt = (SendMessageW(s_hScAlt, BM_GETCHECK, 0, 0) == BST_CHECKED);
+          s_tempShortcuts[sel].keyText = FormatShortcutKey(s_tempShortcuts[sel]);
+          PopulateShortcutList(s_hShortcutList);
+          ListView_SetItemState(s_hShortcutList, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+      }
+      return 0;
+    } else if (id == 358) { // Delete Shortcut
+      int sel = ListView_GetNextItem(s_hShortcutList, -1, LVNI_SELECTED);
+      if (sel >= 0 && sel < (int)s_tempShortcuts.size()) {
+          s_tempShortcuts.erase(s_tempShortcuts.begin() + sel);
+          PopulateShortcutList(s_hShortcutList);
+      }
+      return 0;
+    } else if (id == 359) { // Reset Shortcuts
+      ResetDefaultShortcuts();
+      PopulateShortcutList(s_hShortcutList);
+      return 0;
+    }
+
+    // --- Page 8: MDIE Gestures Buttons ---
     if (id == 363) { // Add gesture
-      HMENU hPop = CreatePopupMenu();
-      struct Cand { const wchar_t* lbl; const char* c; };
-      Cand cands[] = {
-        { L"← 向左 (L)", "L" },
-        { L"→ 向右 (R)", "R" },
-        { L"↑ 向上 (U)", "U" },
-        { L"↓ 向下 (D)", "D" },
-        { L"↕ 上下 (UD)", "UD" },
-        { L"↓↑ 下上 (DU)", "DU" },
-        { L"↔ 左右 (LR)", "LR" },
-        { L"←→ 右左 (RL)", "RL" },
-        { L"↘ 下右 (DR)", "DR" },
-        { L"↙ 下左 (DL)", "DL" },
-        { L"↖ 上左 (UL)", "UL" },
-        { L"↗ 上右 (UR)", "UR" },
-        { L"←↓→ 左下右 (LDR)", "LDR" },
-        { L"→↓← 右下左 (RDL)", "RDL" },
-        { L"←↑→ 左上右 (LUR)", "LUR" },
-        { L"→↑← 右上左 (RUL)", "RUL" }
-      };
-      int candCount = (int)(sizeof(cands) / sizeof(cands[0]));
-      for (int i = 0; i < candCount; ++i) {
-        AppendMenuW(hPop, MF_STRING, 5001 + i, cands[i].lbl);
-      }
-      POINT pt;
-      GetCursorPos(&pt);
-      int pick = TrackPopupMenu(hPop, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
-      DestroyMenu(hPop);
-      if (pick >= 5001 && pick < 5001 + candCount) {
-        std::string code = cands[pick - 5001].c;
-        bool exists = false;
-        for (const auto& g : s_tempGestures) {
-          if (g.code == code) { exists = true; break; }
-        }
-        if (!exists) {
-          s_tempGestures.push_back({ code, 1, L"后退" });
+      int pIdx = (int)SendMessageW(s_hGestPatternCombo, CB_GETCURSEL, 0, 0);
+      int aIdx = (int)SendMessageW(s_hGestActionCombo, CB_GETCURSEL, 0, 0);
+      if (pIdx >= 0 && pIdx < (int)(sizeof(s_allPatterns)/sizeof(s_allPatterns[0])) &&
+          aIdx >= 0 && aIdx < (int)(sizeof(s_allActions)/sizeof(s_allActions[0]))) {
+          GestureEntry ge;
+          ge.code = s_allPatterns[pIdx].code;
+          ge.action = s_allActions[aIdx].id;
+          ge.name = I18n::Get().IsChinese() ? s_allActions[aIdx].nameZh : s_allActions[aIdx].nameEn;
+          s_tempGestures.push_back(ge);
           PopulateGestureList(s_hGestureList);
-          int lastIdx = (int)s_tempGestures.size() - 1;
-          ListView_SetItemState(s_hGestureList, lastIdx, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-        }
+          ListView_SetItemState(s_hGestureList, (int)s_tempGestures.size() - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
       }
       return 0;
-    }
-    if (id == 364) { // Edit gesture action
-      int selIdx = ListView_GetNextItem(s_hGestureList, -1, LVNI_SELECTED);
-      if (selIdx >= 0 && selIdx < (int)s_tempGestures.size()) {
-        HMENU hPop = CreatePopupMenu();
-        bool zh = I18n::Get().IsChinese();
-
-        auto addActionItem = [&](HMENU menu, GestureAction ga) {
-          int actId = (int)ga;
-          std::wstring aName = GestureEngine::GetActionName(ga);
-          AppendMenuW(menu, MF_STRING, 6000 + actId, aName.c_str());
-        };
-
-        // Submenu: Navigation
-        HMENU hNav = CreatePopupMenu();
-        addActionItem(hNav, GestureAction::NavBack);
-        addActionItem(hNav, GestureAction::NavForward);
-        addActionItem(hNav, GestureAction::NavUp);
-        addActionItem(hNav, GestureAction::Refresh);
-        AppendMenuW(hPop, MF_POPUP, (UINT_PTR)hNav, zh ? L"导航与浏览" : L"Navigation");
-
-        // Submenu: Tabs
-        HMENU hTabs = CreatePopupMenu();
-        addActionItem(hTabs, GestureAction::NewTab);
-        addActionItem(hTabs, GestureAction::CloseTab);
-        addActionItem(hTabs, GestureAction::CloseOtherTabs);
-        addActionItem(hTabs, GestureAction::DuplicateTab);
-        addActionItem(hTabs, GestureAction::ReopenClosedTab);
-        addActionItem(hTabs, GestureAction::LockTab);
-        addActionItem(hTabs, GestureAction::NextTab);
-        addActionItem(hTabs, GestureAction::PrevTab);
-        AppendMenuW(hPop, MF_POPUP, (UINT_PTR)hTabs, zh ? L"标签页管理" : L"Tabs");
-
-        // Submenu: List & Scrolling
-        HMENU hList = CreatePopupMenu();
-        addActionItem(hList, GestureAction::ScrollTop);
-        addActionItem(hList, GestureAction::ScrollBottom);
-        addActionItem(hList, GestureAction::PageUp);
-        addActionItem(hList, GestureAction::PageDown);
-        AppendMenuW(hList, MF_SEPARATOR, 0, nullptr);
-        addActionItem(hList, GestureAction::SelectAll);
-        addActionItem(hList, GestureAction::InvertSelection);
-        AppendMenuW(hPop, MF_POPUP, (UINT_PTR)hList, zh ? L"列表滚动与选择" : L"Scrolling & Selection");
-
-        // Submenu: File Operations
-        HMENU hFile = CreatePopupMenu();
-        addActionItem(hFile, GestureAction::NewFolder);
-        addActionItem(hFile, GestureAction::NewMD);
-        AppendMenuW(hFile, MF_SEPARATOR, 0, nullptr);
-        addActionItem(hFile, GestureAction::Copy);
-        addActionItem(hFile, GestureAction::Cut);
-        addActionItem(hFile, GestureAction::Paste);
-        addActionItem(hFile, GestureAction::Delete);
-        addActionItem(hFile, GestureAction::Rename);
-        addActionItem(hFile, GestureAction::CopyPath);
-        addActionItem(hFile, GestureAction::Properties);
-        AppendMenuW(hPop, MF_POPUP, (UINT_PTR)hFile, zh ? L"文件操作" : L"File Operations");
-
-        // Submenu: View & Layout
-        HMENU hView = CreatePopupMenu();
-        addActionItem(hView, GestureAction::ToggleTree);
-        addActionItem(hView, GestureAction::TogglePreview);
-        addActionItem(hView, GestureAction::MaximizePane);
-        addActionItem(hView, GestureAction::ClosePane);
-        AppendMenuW(hView, MF_SEPARATOR, 0, nullptr);
-        addActionItem(hView, GestureAction::LayoutSingle);
-        addActionItem(hView, GestureAction::Layout2H);
-        addActionItem(hView, GestureAction::Layout2V);
-        addActionItem(hView, GestureAction::Layout4Grid);
-        AppendMenuW(hView, MF_SEPARATOR, 0, nullptr);
-        addActionItem(hView, GestureAction::ToggleHidden);
-        AppendMenuW(hPop, MF_POPUP, (UINT_PTR)hView, zh ? L"视图与分栏" : L"View & Panes");
-
-        // Submenu: Tools
-        HMENU hTools = CreatePopupMenu();
-        addActionItem(hTools, GestureAction::OpenTerminal);
-        addActionItem(hTools, GestureAction::OpenSettings);
-        AppendMenuW(hPop, MF_POPUP, (UINT_PTR)hTools, zh ? L"工具与选项" : L"Tools");
-
-        POINT pt;
-        GetCursorPos(&pt);
-        int pick = TrackPopupMenu(hPop, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
-        DestroyMenu(hPop);
-        if (pick >= 6001 && pick <= 6038) {
-          s_tempGestures[selIdx].action = pick - 6000;
-          s_tempGestures[selIdx].name = GestureEngine::GetActionName((GestureAction)s_tempGestures[selIdx].action);
+    } else if (id == 364) { // Modify gesture
+      int sel = ListView_GetNextItem(s_hGestureList, -1, LVNI_SELECTED);
+      int pIdx = (int)SendMessageW(s_hGestPatternCombo, CB_GETCURSEL, 0, 0);
+      int aIdx = (int)SendMessageW(s_hGestActionCombo, CB_GETCURSEL, 0, 0);
+      if (sel >= 0 && sel < (int)s_tempGestures.size() &&
+          pIdx >= 0 && pIdx < (int)(sizeof(s_allPatterns)/sizeof(s_allPatterns[0])) &&
+          aIdx >= 0 && aIdx < (int)(sizeof(s_allActions)/sizeof(s_allActions[0]))) {
+          s_tempGestures[sel].code = s_allPatterns[pIdx].code;
+          s_tempGestures[sel].action = s_allActions[aIdx].id;
+          s_tempGestures[sel].name = I18n::Get().IsChinese() ? s_allActions[aIdx].nameZh : s_allActions[aIdx].nameEn;
           PopulateGestureList(s_hGestureList);
-          ListView_SetItemState(s_hGestureList, selIdx, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-        }
+          ListView_SetItemState(s_hGestureList, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
       }
       return 0;
-    }
-    if (id == 365) { // Delete gesture
-      int selIdx = ListView_GetNextItem(s_hGestureList, -1, LVNI_SELECTED);
-      if (selIdx >= 0 && selIdx < (int)s_tempGestures.size()) {
-        s_tempGestures.erase(s_tempGestures.begin() + selIdx);
+    } else if (id == 365) { // Delete gesture
+      int sel = ListView_GetNextItem(s_hGestureList, -1, LVNI_SELECTED);
+      if (sel >= 0 && sel < (int)s_tempGestures.size()) {
+        s_tempGestures.erase(s_tempGestures.begin() + sel);
         PopulateGestureList(s_hGestureList);
       }
       return 0;
-    }
-    if (id == 366) { // Reset gestures to default
+    } else if (id == 366) { // Reset gestures to default
       s_tempGestures = {
-        { "L", 1, L"后退" },
-        { "R", 2, L"前进" },
-        { "U", 3, L"向上一级" },
-        { "D", 4, L"关闭当前标签页" },
-        { "UD", 6, L"刷新" },
-        { "DR", 5, L"新建标签页" },
-        { "UL", 7, L"复制当前标签页" },
-        { "UR", 8, L"显示/隐藏侧边栏目录树" },
-        { "LDR", 13, L"滚动到列表顶部" },
-        { "RDL", 14, L"滚动到列表底部" },
-        { "LUR", 15, L"向上翻页" },
-        { "RUL", 16, L"向下翻页" }
+          { "L", (int)GestureAction::NavBack, L"后退" },
+          { "R", (int)GestureAction::NavForward, L"前进" },
+          { "U", (int)GestureAction::NavUp, L"向上一级" },
+          { "D", (int)GestureAction::Refresh, L"刷新" },
+          { "UD", (int)GestureAction::NewTab, L"新建标签页" },
+          { "DR", (int)GestureAction::CloseTab, L"关闭当前标签页" },
+          { "UL", (int)GestureAction::ToggleTree, L"显示/隐藏侧边栏目录树" },
+          { "UR", (int)GestureAction::TogglePreview, L"显示/隐藏快速预览窗格" }
       };
       PopulateGestureList(s_hGestureList);
       return 0;
     }
+
     if (id == IDOK) {
       SaveSettings(hwnd);
       DestroyWindow(hwnd);
       return 0;
-    }
-    if (id == IDCANCEL) {
+    } else if (id == IDCANCEL) {
       DestroyWindow(hwnd);
       return 0;
     }
     break;
   }
-  case WM_CLOSE:
+  case WM_CLOSE: {
     DestroyWindow(hwnd);
     return 0;
   }
-  return DefWindowProcW(hwnd, msg, wParam, lParam);
+  default:
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+  }
+  return 0;
 }

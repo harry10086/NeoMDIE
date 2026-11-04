@@ -1,5 +1,6 @@
 #include "DirectoryTree.h"
 #include "Theme.h"
+#include "..\core\Config.h"
 #include "..\core\I18n.h"
 #include "..\core\ShellUtils.h"
 #include "..\core\DropTarget.h"
@@ -37,8 +38,7 @@ HWND DirectoryTree::Create(HWND hwndParent, int id) {
         hwndParent, (HMENU)(INT_PTR)id, hInst, nullptr
     );
 
-    TreeView_SetExtendedStyle(m_hwnd, TVS_EX_DOUBLEBUFFER | TVS_EX_AUTOHSCROLL,
-                              TVS_EX_DOUBLEBUFFER | TVS_EX_AUTOHSCROLL);
+    TreeView_SetExtendedStyle(m_hwnd, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
 
     HIMAGELIST himlSmall = ShellUtils::GetSystemImageList(false);
     if (himlSmall) {
@@ -172,9 +172,12 @@ HTREEITEM DirectoryTree::FindOrLoadChildPath(HTREEITEM hParent, const std::wstri
 void DirectoryTree::SelectPath(const std::wstring& path) {
     if (m_syncing || !m_hwnd) return;
     m_syncing = true;
+    SendMessageW(m_hwnd, WM_SETREDRAW, FALSE, 0);
 
     if (path.empty() || path == L"此电脑" || path == L"This PC") {
         TreeView_SelectItem(m_hwnd, m_hThisPC);
+        SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
+        InvalidateRect(m_hwnd, nullptr, TRUE);
         m_syncing = false;
         return;
     }
@@ -204,6 +207,8 @@ void DirectoryTree::SelectPath(const std::wstring& path) {
         TreeView_SelectItem(m_hwnd, hCurrent);
     }
 
+    SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(m_hwnd, nullptr, TRUE);
     m_syncing = false;
 }
 
@@ -339,6 +344,8 @@ void DirectoryTree::PopulateThisPC(HTREEITEM hParent) {
 }
 
 void DirectoryTree::PopulateChildren(HTREEITEM hParent, const std::wstring& folderPath) {
+    SendMessageW(m_hwnd, WM_SETREDRAW, FALSE, 0);
+
     // Delete existing child items (including dummy)
     HTREEITEM hChild = TreeView_GetChild(m_hwnd, hParent);
     while (hChild) {
@@ -352,7 +359,10 @@ void DirectoryTree::PopulateChildren(HTREEITEM hParent, const std::wstring& fold
     HANDLE hFind = FindFirstFileExW(search.c_str(), FindExInfoBasic, &fd,
                                     FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
 
-    if (hFind == INVALID_HANDLE_VALUE) return;
+    if (hFind == INVALID_HANDLE_VALUE) {
+        SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
+        return;
+    }
 
     std::vector<std::pair<std::wstring, std::wstring>> subdirs;
     do {
@@ -364,14 +374,16 @@ void DirectoryTree::PopulateChildren(HTREEITEM hParent, const std::wstring& fold
     } while (FindNextFileW(hFind, &fd));
     FindClose(hFind);
 
+    int defaultFolderIcon = ShellUtils::GetItemIconIndex(L"", FILE_ATTRIBUTE_DIRECTORY, true);
+
     for (const auto& item : subdirs) {
         TVINSERTSTRUCTW tvis = { 0 };
         tvis.hParent = hParent;
         tvis.hInsertAfter = TVI_LAST;
         tvis.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_CHILDREN | TVIF_PARAM;
         tvis.item.pszText = (LPWSTR)item.first.c_str();
-        tvis.item.iImage = ShellUtils::GetItemIconIndex(item.second, FILE_ATTRIBUTE_DIRECTORY, true);
-        tvis.item.iSelectedImage = tvis.item.iImage;
+        tvis.item.iImage = defaultFolderIcon;
+        tvis.item.iSelectedImage = defaultFolderIcon;
         tvis.item.cChildren = 1;
 
         TreeNodeData* pData = new TreeNodeData{ item.second, false, false };
@@ -387,6 +399,8 @@ void DirectoryTree::PopulateChildren(HTREEITEM hParent, const std::wstring& fold
         dummy.item.pszText = (LPWSTR)L"";
         TreeView_InsertItem(m_hwnd, &dummy);
     }
+
+    SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
 }
 
 void DirectoryTree::Refresh() {
@@ -431,14 +445,24 @@ LRESULT CALLBACK DirectoryTree::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM w
                 break;
             }
             case TVN_SELCHANGEDW: {
-                if (pThis->m_syncing) break;
+                if (pThis->m_syncing || (GetKeyState(VK_RBUTTON) < 0)) break;
                 NMTREEVIEWW* pnmtv = (NMTREEVIEWW*)lParam;
                 TreeNodeData* pData = (TreeNodeData*)pnmtv->itemNew.lParam;
-                if (pData && pThis->onPathSelected) {
-                    if (pData->path == L"This PC" || pData->path == L"QuickAccess") {
-                        pThis->onPathSelected(L"This PC");
-                    } else if (!pData->path.empty()) {
-                        pThis->onPathSelected(pData->path);
+                if (pData) {
+                    std::wstring target = (pData->path == L"This PC" || pData->path == L"QuickAccess") ? L"This PC" : pData->path;
+                    if (!target.empty()) {
+                        ActionTrigger trigger = GetCurrentTrigger();
+                        WindowAction act = Config::Get().actionTree.ResolveAction(trigger);
+
+                        if (act == WindowAction::CurrentPane) {
+                            if (pThis->onPathSelected) pThis->onPathSelected(target);
+                        } else if (act == WindowAction::OtherPane) {
+                            if (pThis->onCustomCommand) pThis->onCustomCommand(CMD_NEOMDIE_OPEN_SPLIT, target);
+                        } else if (act == WindowAction::NewTab || act == WindowAction::BgTab) {
+                            if (pThis->onCustomCommand) pThis->onCustomCommand(CMD_NEOMDIE_OPEN_NEW_TAB, target);
+                        } else if (act == WindowAction::Explorer) {
+                            ShellExecuteW(nullptr, L"explore", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                        }
                     }
                 }
                 break;
@@ -461,31 +485,37 @@ LRESULT CALLBACK DirectoryTree::TreeSubclassProc(HWND hwnd, UINT msg, WPARAM wPa
         TVHITTESTINFO tvhti = { 0 };
         tvhti.pt = pt;
         HTREEITEM hHit = TreeView_HitTest(hwnd, &tvhti);
+        if (!hHit) hHit = tvhti.hItem;
         if (hHit) {
+            bool oldSync = pThis->m_syncing;
+            pThis->m_syncing = true; // Prevent right-click selection from navigating active pane
             TreeView_SelectItem(hwnd, hHit);
+            pThis->m_syncing = oldSync;
         }
-        break;
+        return 0;
     }
 
-    case WM_RBUTTONUP:
+    case WM_RBUTTONUP: {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        POINT ptScreen = pt;
+        ClientToScreen(hwnd, &ptScreen);
+        SendMessageW(hwnd, WM_CONTEXTMENU, (WPARAM)hwnd, MAKELPARAM(ptScreen.x, ptScreen.y));
+        return 0;
+    }
+
     case WM_CONTEXTMENU: {
-        POINT ptScreen;
-        if (msg == WM_CONTEXTMENU) {
-            ptScreen = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            if (ptScreen.x == -1 && ptScreen.y == -1) {
-                HTREEITEM hSel = TreeView_GetSelection(hwnd);
-                RECT rcItem = { 0 };
-                *(HTREEITEM*)&rcItem = hSel;
-                if (TreeView_GetItemRect(hwnd, hSel, &rcItem, TRUE)) {
-                    ptScreen.x = rcItem.left;
-                    ptScreen.y = rcItem.bottom;
-                    ClientToScreen(hwnd, &ptScreen);
-                } else {
-                    GetCursorPos(&ptScreen);
-                }
+        POINT ptScreen = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (ptScreen.x == -1 && ptScreen.y == -1) {
+            HTREEITEM hSel = TreeView_GetSelection(hwnd);
+            RECT rcItem = { 0 };
+            *(HTREEITEM*)&rcItem = hSel;
+            if (TreeView_GetItemRect(hwnd, hSel, &rcItem, TRUE)) {
+                ptScreen.x = rcItem.left;
+                ptScreen.y = rcItem.bottom;
+                ClientToScreen(hwnd, &ptScreen);
+            } else {
+                GetCursorPos(&ptScreen);
             }
-        } else {
-            GetCursorPos(&ptScreen);
         }
 
         HTREEITEM hSel = TreeView_GetSelection(hwnd);
@@ -495,9 +525,10 @@ LRESULT CALLBACK DirectoryTree::TreeSubclassProc(HWND hwnd, UINT msg, WPARAM wPa
             item.mask = TVIF_PARAM;
             if (TreeView_GetItem(hwnd, &item) && item.lParam) {
                 TreeNodeData* pData = (TreeNodeData*)item.lParam;
-                if (pData && !pData->path.empty() && pData->path != L"This PC" && pData->path != L"QuickAccess") {
-                    ShellUtils::ShowContextMenu(pThis->m_hwndParent ? pThis->m_hwndParent : hwnd,
-                                                { pData->path }, ptScreen,
+                if (pData && !pData->path.empty() && pData->path != L"QuickAccess") {
+                    std::wstring targetPath = (pData->path == L"This PC") ? L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}" : pData->path;
+                    ShellUtils::ShowContextMenu(hwnd,
+                                                { targetPath }, ptScreen,
                                                 [pThis](int cmd, const std::wstring& targetPath) {
                                                     if (pThis->onCustomCommand) {
                                                         pThis->onCustomCommand(cmd, targetPath);
@@ -507,7 +538,7 @@ LRESULT CALLBACK DirectoryTree::TreeSubclassProc(HWND hwnd, UINT msg, WPARAM wPa
                 }
             }
         }
-        break;
+        return 0;
     }
     }
 

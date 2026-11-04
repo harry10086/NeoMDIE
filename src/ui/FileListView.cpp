@@ -1,6 +1,8 @@
-#include "FileListView.h"
-#include "Theme.h"
 #include "..\core\Config.h"
+#include "FileListView.h"
+#pragma comment(lib, "msimg32.lib")
+#pragma comment(lib, "msimg32.lib")
+#include "Theme.h"
 #include "..\core\I18n.h"
 #include "..\core\ShellUtils.h"
 
@@ -8,6 +10,7 @@ const UINT FileListView::WM_NOTIFY_DIR_CHANGED;
 const UINT FileListView::WM_NOTIFY_FOLDER_SIZE;
 
 FileListView::FileListView() {
+    m_activeColumns = { ColumnId::Name, ColumnId::DateModified, ColumnId::Type, ColumnId::Size };
 }
 
 FileListView::~FileListView() {
@@ -138,39 +141,228 @@ HWND FileListView::Create(HWND hwndParent, int id) {
     return m_hwnd;
 }
 
+static std::wstring GetColumnTitle(ColumnId id) {
+    bool isZh = I18n::Get().IsChinese();
+    switch (id) {
+    case ColumnId::Name:         return isZh ? L"名称" : L"Name";
+    case ColumnId::DateModified: return isZh ? L"修改日期" : L"Date modified";
+    case ColumnId::Type:         return isZh ? L"类型" : L"Type";
+    case ColumnId::Size:         return isZh ? L"大小" : L"Size";
+    case ColumnId::DateCreated:  return isZh ? L"创建日期" : L"Date created";
+    case ColumnId::Attributes:   return isZh ? L"属性" : L"Attributes";
+    case ColumnId::Authors:      return isZh ? L"作者" : L"Authors";
+    case ColumnId::Title:        return isZh ? L"标题" : L"Title";
+    case ColumnId::Tags:         return isZh ? L"标记" : L"Tags";
+    case ColumnId::Path:         return isZh ? L"文件夹路径" : L"Folder path";
+    default:                     return L"";
+    }
+}
+
+static int GetDefaultColumnWidth(ColumnId id) {
+    switch (id) {
+    case ColumnId::Name:         return 300;
+    case ColumnId::DateModified: return 160;
+    case ColumnId::Type:         return 130;
+    case ColumnId::Size:         return 120;
+    case ColumnId::DateCreated:  return 160;
+    case ColumnId::Attributes:   return 90;
+    case ColumnId::Authors:      return 110;
+    case ColumnId::Title:        return 130;
+    case ColumnId::Tags:         return 110;
+    case ColumnId::Path:         return 260;
+    default:                     return 120;
+    }
+}
+
+struct ChooseDetailsData {
+    std::vector<ColumnId> activeCols;
+    bool confirmed = false;
+};
+
+static LRESULT CALLBACK ChooseDetailsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    ChooseDetailsData* pData = (ChooseDetailsData*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    switch (msg) {
+    case WM_NCCREATE: {
+        CREATESTRUCTW* cs = (CREATESTRUCTW*)lParam;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+    case WM_CREATE: {
+        bool isZh = I18n::Get().IsChinese();
+        HFONT hFont = Theme::Get().GetUIFont(hwnd);
+
+        HWND hLabel = CreateWindowExW(0, WC_STATICW,
+            isZh ? L"选择要在该文件夹中为此窗口显示的详细信息(&S):" : L"Select the details you want to display for the items in this folder(&S):",
+            WS_CHILD | WS_VISIBLE, 15, 15, 340, 20, hwnd, nullptr, nullptr, nullptr);
+        SendMessageW(hLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+        HWND hList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL,
+            15, 40, 340, 320, hwnd, (HMENU)1001, nullptr, nullptr);
+        ListView_SetExtendedListViewStyle(hList, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
+        SendMessageW(hList, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+        LVCOLUMNW lvc = { 0 };
+        lvc.mask = LVCF_WIDTH;
+        lvc.cx = 310;
+        ListView_InsertColumn(hList, 0, &lvc);
+
+        for (int i = 0; i < (int)ColumnId::Count; ++i) {
+            ColumnId cid = (ColumnId)i;
+            std::wstring title = GetColumnTitle(cid);
+            LVITEMW lvi = { 0 };
+            lvi.mask = LVIF_TEXT;
+            lvi.iItem = i;
+            lvi.pszText = (LPWSTR)title.c_str();
+            ListView_InsertItem(hList, &lvi);
+
+            bool checked = false;
+            if (pData) {
+                for (auto c : pData->activeCols) {
+                    if (c == cid) { checked = true; break; }
+                }
+            }
+            if (cid == ColumnId::Name) checked = true;
+            ListView_SetCheckState(hList, i, checked ? TRUE : FALSE);
+        }
+
+        HWND hBtnOk = CreateWindowExW(0, WC_BUTTONW, isZh ? L"确定" : L"OK",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            185, 375, 80, 28, hwnd, (HMENU)IDOK, nullptr, nullptr);
+        SendMessageW(hBtnOk, WM_SETFONT, (WPARAM)hFont, TRUE);
+
+        HWND hBtnCancel = CreateWindowExW(0, WC_BUTTONW, isZh ? L"取消" : L"Cancel",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            275, 375, 80, 28, hwnd, (HMENU)IDCANCEL, nullptr, nullptr);
+        SendMessageW(hBtnCancel, WM_SETFONT, (WPARAM)hFont, TRUE);
+        return 0;
+    }
+    case WM_COMMAND: {
+        int id = LOWORD(wParam);
+        if (id == IDOK) {
+            HWND hList = GetDlgItem(hwnd, 1001);
+            if (pData && hList) {
+                pData->activeCols.clear();
+                pData->activeCols.push_back(ColumnId::Name);
+                for (int i = 1; i < (int)ColumnId::Count; ++i) {
+                    if (ListView_GetCheckState(hList, i)) {
+                        pData->activeCols.push_back((ColumnId)i);
+                    }
+                }
+                pData->confirmed = true;
+            }
+            DestroyWindow(hwnd);
+            return 0;
+        } else if (id == IDCANCEL) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    }
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+void FileListView::ShowChooseColumnsDialog() {
+    bool isZh = I18n::Get().IsChinese();
+    WNDCLASSEXW wc = { sizeof(wc) };
+    HINSTANCE hInst = GetModuleHandleW(nullptr);
+    if (!GetClassInfoExW(hInst, L"NeoMDIE_ChooseDetails", &wc)) {
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        wc.lpfnWndProc = ChooseDetailsWndProc;
+        wc.hInstance = hInst;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = L"NeoMDIE_ChooseDetails";
+        RegisterClassExW(&wc);
+    }
+
+    ChooseDetailsData data;
+    data.activeCols = m_activeColumns;
+
+    RECT rcParent = { 0 };
+    GetWindowRect(m_hwndParent ? m_hwndParent : m_hwnd, &rcParent);
+    int dlgW = 385;
+    int dlgH = 455;
+    int x = rcParent.left + ((rcParent.right - rcParent.left) - dlgW) / 2;
+    int y = rcParent.top + ((rcParent.bottom - rcParent.top) - dlgH) / 2;
+
+    HWND hDlg = CreateWindowExW(
+        WS_EX_DLGMODALFRAME, L"NeoMDIE_ChooseDetails",
+        isZh ? L"选择详细信息" : L"Choose Details",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        x, y, dlgW, dlgH,
+        m_hwndParent ? m_hwndParent : m_hwnd,
+        nullptr, hInst, &data
+    );
+
+    if (!hDlg) return;
+
+    HWND hTopParent = GetAncestor(m_hwnd, GA_ROOT);
+    EnableWindow(hTopParent, FALSE);
+
+    MSG msg;
+    while (IsWindow(hDlg) && GetMessageW(&msg, nullptr, 0, 0)) {
+        if (!IsDialogMessageW(hDlg, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+
+    EnableWindow(hTopParent, TRUE);
+    SetForegroundWindow(hTopParent);
+
+    if (data.confirmed) {
+        m_activeColumns = std::move(data.activeCols);
+        RebuildColumns();
+    }
+}
+
+void FileListView::RebuildColumns() {
+    HWND hHeader = ListView_GetHeader(m_hwnd);
+    if (hHeader) {
+        int cnt = Header_GetItemCount(hHeader);
+        for (int i = cnt - 1; i >= 0; --i) {
+            ListView_DeleteColumn(m_hwnd, i);
+        }
+    }
+
+    for (size_t i = 0; i < m_activeColumns.size(); ++i) {
+        LVCOLUMNW lvc = { 0 };
+        lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
+        lvc.fmt = LVCFMT_LEFT;
+        lvc.iSubItem = (int)i;
+        lvc.cx = Theme::Get().Scale(GetDefaultColumnWidth(m_activeColumns[i]), m_hwnd);
+        std::wstring title = GetColumnTitle(m_activeColumns[i]);
+        lvc.pszText = (LPWSTR)title.c_str();
+        ListView_InsertColumn(m_hwnd, (int)i, &lvc);
+    }
+
+    UpdateHeaderSortArrow();
+    InvalidateRect(m_hwnd, nullptr, TRUE);
+}
+
+void FileListView::ToggleColumn(ColumnId id) {
+    if (id == ColumnId::Name) return;
+    auto it = std::find(m_activeColumns.begin(), m_activeColumns.end(), id);
+    if (it != m_activeColumns.end()) {
+        m_activeColumns.erase(it);
+    } else {
+        m_activeColumns.push_back(id);
+    }
+    RebuildColumns();
+}
+
 void FileListView::InitColumns() {
-    LVCOLUMNW lvc = { 0 };
-    lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
-    lvc.fmt = LVCFMT_LEFT;
-
-    lvc.iSubItem = 0;
-    lvc.cx = Theme::Get().Scale(320, m_hwnd);
-    lvc.pszText = (LPWSTR)I18n::Get().T(StringId::ColName);
-    ListView_InsertColumn(m_hwnd, 0, &lvc);
-
-    lvc.iSubItem = 1;
-    lvc.cx = Theme::Get().Scale(160, m_hwnd);
-    lvc.pszText = (LPWSTR)I18n::Get().T(StringId::ColDateModified);
-    ListView_InsertColumn(m_hwnd, 1, &lvc);
-
-    lvc.iSubItem = 2;
-    lvc.cx = Theme::Get().Scale(140, m_hwnd);
-    lvc.pszText = (LPWSTR)I18n::Get().T(StringId::ColType);
-    ListView_InsertColumn(m_hwnd, 2, &lvc);
-
-    lvc.iSubItem = 3;
-    lvc.cx = Theme::Get().Scale(180, m_hwnd);
-    lvc.fmt = LVCFMT_LEFT;
-    lvc.pszText = (LPWSTR)I18n::Get().T(StringId::ColSize);
-    ListView_InsertColumn(m_hwnd, 3, &lvc);
-
     HWND hHeader = ListView_GetHeader(m_hwnd);
     if (hHeader) {
         Theme::Get().ApplyToWindow(hHeader);
         SetWindowSubclass(hHeader, FileListView::HeaderSubclassProc, 1, (DWORD_PTR)this);
     }
-
-    UpdateHeaderSortArrow();
+    RebuildColumns();
 }
 
 void FileListView::UpdateHeaderSortArrow() {
@@ -182,8 +374,23 @@ void FileListView::UpdateHeaderSortArrow() {
         hdi.mask = HDI_FORMAT;
         Header_GetItem(hHeader, i, &hdi);
         hdi.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
-        if (i == (int)m_sortCol) {
-            hdi.fmt |= (m_sortAsc ? HDF_SORTUP : HDF_SORTDOWN);
+        if (i < (int)m_activeColumns.size()) {
+            ColumnId cid = m_activeColumns[i];
+            bool match = false;
+            switch (cid) {
+            case ColumnId::Name:         match = (m_sortCol == SortColumn::Name); break;
+            case ColumnId::DateModified: match = (m_sortCol == SortColumn::DateModified); break;
+            case ColumnId::Type:         match = (m_sortCol == SortColumn::Type); break;
+            case ColumnId::Size:         match = (m_sortCol == SortColumn::Size); break;
+            case ColumnId::DateCreated:  match = (m_sortCol == SortColumn::DateCreated); break;
+            case ColumnId::Attributes:   match = (m_sortCol == SortColumn::Attributes); break;
+            case ColumnId::Authors:      match = (m_sortCol == SortColumn::Authors); break;
+            case ColumnId::Title:        match = (m_sortCol == SortColumn::Title); break;
+            default:                     match = false; break;
+            }
+            if (match) {
+                hdi.fmt |= (m_sortAsc ? HDF_SORTUP : HDF_SORTDOWN);
+            }
         }
         Header_SetItem(hHeader, i, &hdi);
     }
@@ -192,119 +399,51 @@ void FileListView::UpdateHeaderSortArrow() {
 void FileListView::ShowColumnHeaderMenu(POINT ptScreen) {
     bool isZh = I18n::Get().IsChinese();
     HMENU hMenu = CreatePopupMenu();
-    AppendMenuW(hMenu, MF_STRING | MF_CHECKED | MF_GRAYED, 1, isZh ? L"名称" : L"Name");
-    AppendMenuW(hMenu, MF_STRING | MF_CHECKED, 2, isZh ? L"修改日期" : L"Date modified");
-    AppendMenuW(hMenu, MF_STRING | MF_CHECKED, 3, isZh ? L"类型" : L"Type");
-    AppendMenuW(hMenu, MF_STRING | MF_CHECKED, 4, isZh ? L"大小" : L"Size");
+
+    for (int i = 0; i < (int)ColumnId::Count; ++i) {
+        ColumnId cid = (ColumnId)i;
+        std::wstring title = GetColumnTitle(cid);
+        UINT flags = MF_STRING;
+
+        bool active = false;
+        for (auto c : m_activeColumns) {
+            if (c == cid) { active = true; break; }
+        }
+        if (active) flags |= MF_CHECKED;
+        if (cid == ColumnId::Name) flags |= MF_GRAYED;
+
+        AppendMenuW(hMenu, flags, 100 + i, title.c_str());
+    }
+
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, 10, isZh ? L"自动调整所有列宽(&A)" : L"Size All Columns to Fit(&A)");
+    AppendMenuW(hMenu, MF_STRING, 20, isZh ? L"其他(&M)..." : L"More(&M)...");
 
     int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, ptScreen.x, ptScreen.y, 0, m_hwnd, nullptr);
     DestroyMenu(hMenu);
 
-    if (cmd == 10) {
+    if (cmd >= 100 && cmd < 100 + (int)ColumnId::Count) {
+        ColumnId cid = (ColumnId)(cmd - 100);
+        if (cid != ColumnId::Name) {
+            ToggleColumn(cid);
+        }
+    } else if (cmd == 10) {
         HWND hHeader = ListView_GetHeader(m_hwnd);
         int cnt = Header_GetItemCount(hHeader);
         for (int i = 0; i < cnt; ++i) {
             ListView_SetColumnWidth(m_hwnd, i, LVSCW_AUTOSIZE_USEHEADER);
         }
+    } else if (cmd == 20) {
+        ShowChooseColumnsDialog();
     }
 }
 
 LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     FileListView* pThis = (FileListView*)dwRefData;
     if (msg == WM_RBUTTONUP || msg == WM_CONTEXTMENU) {
-        if (pThis) {
-            POINT pt;
-            GetCursorPos(&pt);
-            pThis->ShowColumnHeaderMenu(pt);
-            return 0;
-        }
-    }
-    if (msg == WM_ERASEBKGND && Theme::Get().IsDarkMode()) {
-        return 1;
-    }
-    if (msg == WM_PAINT && Theme::Get().IsDarkMode()) {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rcClient;
-        GetClientRect(hwnd, &rcClient);
-        
-        HDC hdcMem = CreateCompatibleDC(hdc);
-        HBITMAP hbmMem = CreateCompatibleBitmap(hdc, rcClient.right, rcClient.bottom);
-        HGDIOBJ oldBm = SelectObject(hdcMem, hbmMem);
-
-        FillRect(hdcMem, &rcClient, Theme::Get().BrushSurface());
-        
-        int count = Header_GetItemCount(hwnd);
-        HFONT hFont = Theme::Get().GetUIFont(hwnd);
-        HGDIOBJ oldFont = SelectObject(hdcMem, hFont);
-        SetBkMode(hdcMem, TRANSPARENT);
-        SetTextColor(hdcMem, Theme::Get().ClrTextPrimary());
-        HPEN hPenBorder = Theme::Get().PenBorder();
-        HGDIOBJ oldPen = SelectObject(hdcMem, hPenBorder);
-        
-        for (int i = 0; i < count; ++i) {
-            RECT rcItem;
-            Header_GetItemRect(hwnd, i, &rcItem);
-            
-            wchar_t text[256] = { 0 };
-            HDITEMW hdi = { sizeof(hdi) };
-            hdi.mask = HDI_TEXT | HDI_FORMAT;
-            hdi.pszText = text;
-            hdi.cchTextMax = 256;
-            Header_GetItem(hwnd, i, &hdi);
-            
-            RECT rcText = rcItem;
-            rcText.left += Theme::Get().Scale(8, hwnd);
-            rcText.right -= Theme::Get().Scale(8, hwnd);
-            
-            if (hdi.fmt & (HDF_SORTUP | HDF_SORTDOWN)) {
-                rcText.right -= Theme::Get().Scale(16, hwnd);
-                int arrowX = rcItem.right - Theme::Get().Scale(14, hwnd);
-                int arrowY = rcItem.top + (rcItem.bottom - rcItem.top) / 2;
-                POINT pts[3];
-                int aSize = Theme::Get().Scale(4, hwnd);
-                if (hdi.fmt & HDF_SORTUP) {
-                    pts[0] = { arrowX - aSize, arrowY + aSize / 2 };
-                    pts[1] = { arrowX + aSize, arrowY + aSize / 2 };
-                    pts[2] = { arrowX, arrowY - aSize / 2 };
-                } else {
-                    pts[0] = { arrowX - aSize, arrowY - aSize / 2 };
-                    pts[1] = { arrowX + aSize, arrowY - aSize / 2 };
-                    pts[2] = { arrowX, arrowY + aSize / 2 };
-                }
-                HBRUSH hArrowBr = CreateSolidBrush(Theme::Get().ClrTextSecondary());
-                HGDIOBJ oldBr = SelectObject(hdcMem, hArrowBr);
-                HGDIOBJ oldP = SelectObject(hdcMem, GetStockObject(NULL_PEN));
-                Polygon(hdcMem, pts, 3);
-                SelectObject(hdcMem, oldP);
-                SelectObject(hdcMem, oldBr);
-                DeleteObject(hArrowBr);
-            }
-            
-            UINT fmt = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
-            if (hdi.fmt & HDF_RIGHT) fmt = DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
-            else if (hdi.fmt & HDF_CENTER) fmt = DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
-            DrawTextW(hdcMem, text, -1, &rcText, fmt);
-            
-            // Subtle column divider line
-            MoveToEx(hdcMem, rcItem.right - 1, rcItem.top + 3, nullptr);
-            LineTo(hdcMem, rcItem.right - 1, rcItem.bottom - 3);
-        }
-        
-        // Bottom border line of header
-        MoveToEx(hdcMem, 0, rcClient.bottom - 1, nullptr);
-        LineTo(hdcMem, rcClient.right, rcClient.bottom - 1);
-        
-        BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, hdcMem, 0, 0, SRCCOPY);
-        
-        SelectObject(hdcMem, oldPen);
-        SelectObject(hdcMem, oldFont);
-        SelectObject(hdcMem, oldBm);
-        DeleteObject(hbmMem);
-        DeleteDC(hdcMem);
-        EndPaint(hwnd, &ps);
+        POINT pt;
+        GetCursorPos(&pt);
+        pThis->ShowColumnHeaderMenu(pt);
         return 0;
     }
     return DefSubclassProc(hwnd, msg, wParam, lParam);
@@ -323,24 +462,21 @@ void FileListView::ApplyTheme() {
     HWND hHeader = ListView_GetHeader(m_hwnd);
     if (hHeader) {
         Theme::Get().ApplyToWindow(hHeader);
-        SetWindowSubclass(hHeader, FileListView::HeaderSubclassProc, 1, (DWORD_PTR)this);
         SetWindowTheme(hHeader, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
-        InvalidateRect(hHeader, nullptr, TRUE);
     }
     InvalidateRect(m_hwnd, nullptr, TRUE);
 }
 
 void FileListView::UpdateColumnsLanguage() {
-    LVCOLUMNW lvc = { 0 };
-    lvc.mask = LVCF_TEXT;
-    lvc.pszText = (LPWSTR)I18n::Get().T(StringId::ColName);
-    ListView_SetColumn(m_hwnd, 0, &lvc);
-    lvc.pszText = (LPWSTR)I18n::Get().T(StringId::ColDateModified);
-    ListView_SetColumn(m_hwnd, 1, &lvc);
-    lvc.pszText = (LPWSTR)I18n::Get().T(StringId::ColType);
-    ListView_SetColumn(m_hwnd, 2, &lvc);
-    lvc.pszText = (LPWSTR)I18n::Get().T(StringId::ColSize);
-    ListView_SetColumn(m_hwnd, 3, &lvc);
+    HWND hHeader = ListView_GetHeader(m_hwnd);
+    if (!hHeader) return;
+    for (size_t i = 0; i < m_activeColumns.size(); ++i) {
+        std::wstring title = GetColumnTitle(m_activeColumns[i]);
+        LVCOLUMNW lvc = { 0 };
+        lvc.mask = LVCF_TEXT;
+        lvc.pszText = (LPWSTR)title.c_str();
+        ListView_SetColumn(m_hwnd, (int)i, &lvc);
+    }
 }
 
 bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
@@ -429,7 +565,7 @@ void FileListView::SetFilter(const std::wstring& query, bool subfolders, bool ma
         InvalidateRect(m_hwnd, nullptr, TRUE);
         SearchRecursive(m_currentPath, query, matchCase);
     } else {
-        if (m_allItems.empty() || m_allItems[0].fullPath.find(m_currentPath) == std::wstring::npos) {
+        if (query.empty() || m_allItems.empty()) {
             Refresh();
         } else {
             ApplyFilter();
@@ -438,7 +574,7 @@ void FileListView::SetFilter(const std::wstring& query, bool subfolders, bool ma
 }
 
 void FileListView::SearchRecursive(const std::wstring& rootDir, const std::wstring& query, bool matchCase) {
-    HWND hwndTarget = m_hwndParent;
+    HWND hwndTarget = m_hwnd; // Post directly to this pane's ListView so ListSubclassProc handles it
     m_searchThread = std::thread([this, rootDir, query, matchCase, hwndTarget]() {
         std::vector<std::wstring> dirsToSearch = { rootDir };
         std::wstring lowerQuery = query;
@@ -488,7 +624,7 @@ void FileListView::SearchRecursive(const std::wstring& rootDir, const std::wstri
                         totalFound++;
 
                         if (pBatch->size() >= 30) {
-                            PostMessageW(hwndTarget, WM_SEARCH_BATCH, (WPARAM)this, (LPARAM)pBatch);
+                            PostMessageW(m_hwnd, WM_SEARCH_BATCH, (WPARAM)this, (LPARAM)pBatch);
                             pBatch = new std::vector<NeoShellItem>();
                             Sleep(10);
                         }
@@ -505,9 +641,9 @@ void FileListView::SearchRecursive(const std::wstring& rootDir, const std::wstri
         if (pBatch->empty()) {
             delete pBatch;
         } else {
-            PostMessageW(hwndTarget, WM_SEARCH_BATCH, (WPARAM)this, (LPARAM)pBatch);
+            PostMessageW(m_hwnd, WM_SEARCH_BATCH, (WPARAM)this, (LPARAM)pBatch);
         }
-        PostMessageW(hwndTarget, WM_SEARCH_COMPLETE, (WPARAM)this, (LPARAM)totalFound);
+        PostMessageW(m_hwnd, WM_SEARCH_COMPLETE, (WPARAM)this, (LPARAM)totalFound);
     });
 }
 
@@ -643,42 +779,31 @@ void FileListView::StartRename() {
 }
 
 void FileListView::ScrollToTop() {
-    if (m_hwnd) {
-        SetFocus(m_hwnd);
-        SendMessageW(m_hwnd, WM_VSCROLL, SB_TOP, 0);
-        if (!m_filteredIndices.empty()) {
-            ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-            ListView_SetItemState(m_hwnd, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-            ListView_EnsureVisible(m_hwnd, 0, FALSE);
-        }
-    }
+    SendMessageW(m_hwnd, WM_KEYDOWN, VK_HOME, 0);
+    SendMessageW(m_hwnd, WM_KEYUP, VK_HOME, 0);
 }
 
 void FileListView::ScrollToBottom() {
-    if (m_hwnd) {
-        SetFocus(m_hwnd);
-        SendMessageW(m_hwnd, WM_VSCROLL, SB_BOTTOM, 0);
-        if (!m_filteredIndices.empty()) {
-            int last = (int)m_filteredIndices.size() - 1;
-            ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-            ListView_SetItemState(m_hwnd, last, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-            ListView_EnsureVisible(m_hwnd, last, FALSE);
-        }
-    }
+    SendMessageW(m_hwnd, WM_KEYDOWN, VK_END, 0);
+    SendMessageW(m_hwnd, WM_KEYUP, VK_END, 0);
 }
 
 void FileListView::ScrollPageUp() {
-    if (m_hwnd) {
-        SetFocus(m_hwnd);
-        SendMessageW(m_hwnd, WM_VSCROLL, SB_PAGEUP, 0);
-    }
+    int pageCount = ListView_GetCountPerPage(m_hwnd);
+    if (pageCount <= 0) pageCount = 10;
+    RECT rcItem = { 0 };
+    ListView_GetItemRect(m_hwnd, 0, &rcItem, LVIR_BOUNDS);
+    int itemH = (rcItem.bottom > rcItem.top) ? (rcItem.bottom - rcItem.top) : 22;
+    ListView_Scroll(m_hwnd, 0, -pageCount * itemH);
 }
 
 void FileListView::ScrollPageDown() {
-    if (m_hwnd) {
-        SetFocus(m_hwnd);
-        SendMessageW(m_hwnd, WM_VSCROLL, SB_PAGEDOWN, 0);
-    }
+    int pageCount = ListView_GetCountPerPage(m_hwnd);
+    if (pageCount <= 0) pageCount = 10;
+    RECT rcItem = { 0 };
+    ListView_GetItemRect(m_hwnd, 0, &rcItem, LVIR_BOUNDS);
+    int itemH = (rcItem.bottom > rcItem.top) ? (rcItem.bottom - rcItem.top) : 22;
+    ListView_Scroll(m_hwnd, 0, pageCount * itemH);
 }
 
 void FileListView::UpdateLayout(int x, int y, int width, int height) {
@@ -773,6 +898,18 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
             Refresh();
             break;
         }
+        case CMD_BG_NEW_MD: {
+            bool isZh = I18n::Get().IsChinese();
+            std::wstring newMd = Util::CombinePath(m_currentPath, isZh ? L"新建文档.md" : L"New Document.md");
+            int idx = 2;
+            while (PathFileExistsW(newMd.c_str())) {
+                newMd = Util::CombinePath(m_currentPath, (isZh ? L"新建文档 (" : L"New Document (") + std::to_wstring(idx++) + L").md");
+            }
+            HANDLE hF = CreateFileW(newMd.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hF != INVALID_HANDLE_VALUE) CloseHandle(hF);
+            Refresh();
+            break;
+        }
         default:
             if (onCustomCommand) {
                 onCustomCommand(cmd, targetPath);
@@ -811,6 +948,18 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
     FileListView* pThis = (FileListView*)dwRefData;
 
     switch (msg) {
+    case WM_LBUTTONDBLCLK: {
+        int x = GET_X_LPARAM(lParam);
+        int y = GET_Y_LPARAM(lParam);
+        LVHITTESTINFO lvhti = { 0 };
+        lvhti.pt = { x, y };
+        int hit = ListView_HitTest(hwnd, &lvhti);
+        if (hit < 0) {
+            pThis->GoUp();
+            return 0;
+        }
+        break;
+    }
     case WM_RBUTTONDOWN: {
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
@@ -847,8 +996,18 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         GestureAction action = GestureAction::None;
         if (pThis->m_gesture.OnRButtonUp(hwnd, x, y, action)) {
             if (action != GestureAction::None) {
-                if (pThis->onGestureAction) {
-                    pThis->onGestureAction(action);
+                switch (action) {
+                case GestureAction::NavBack:    pThis->GoBack(); break;
+                case GestureAction::NavForward: pThis->GoForward(); break;
+                case GestureAction::NavUp:      pThis->GoUp(); break;
+                case GestureAction::Refresh:    pThis->Refresh(); break;
+                case GestureAction::CloseTab:
+                case GestureAction::NewTab:
+                    if (pThis->onGestureAction) {
+                        pThis->onGestureAction(action);
+                    }
+                    break;
+                default: break;
                 }
             }
             return 0; // Handled gesture movement, suppress context menu
@@ -858,17 +1017,6 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         ClientToScreen(hwnd, &ptScreen);
         pThis->OnItemRightClicked(ptScreen);
         return 0;
-    }
-    case WM_XBUTTONUP: {
-        WORD btn = GET_XBUTTON_WPARAM(wParam);
-        if (btn == XBUTTON1) {
-            pThis->GoBack();
-            return TRUE;
-        } else if (btn == XBUTTON2) {
-            pThis->GoForward();
-            return TRUE;
-        }
-        break;
     }
     case WM_KEYDOWN: {
         bool ctrl = (GetKeyState(VK_CONTROL) < 0);
@@ -908,6 +1056,22 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         }
         break;
     }
+    case FileListView::WM_SEARCH_BATCH: {
+        auto* pBatch = (std::vector<NeoShellItem>*)lParam;
+        if (pBatch) {
+            for (auto& item : *pBatch) {
+                pThis->m_allItems.push_back(std::move(item));
+            }
+            delete pBatch;
+            pThis->ApplyFilter();
+        }
+        return 0;
+    }
+    case FileListView::WM_SEARCH_COMPLETE: {
+        pThis->SortItems();
+        pThis->ApplyFilter();
+        return 0;
+    }
     }
 
     return DefSubclassProc(hwnd, msg, wParam, lParam);
@@ -929,26 +1093,54 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     const auto& item = pThis->m_allItems[idx];
 
                     if (pDisp->item.mask & LVIF_TEXT) {
-                        static wchar_t s_buf[MAX_PATH];
+                        static wchar_t s_buf[MAX_PATH * 2];
                         s_buf[0] = L'\0';
-                        switch (pDisp->item.iSubItem) {
-                        case 0: StringCchCopyW(s_buf, MAX_PATH, item.name.c_str()); break;
-                        case 1: StringCchCopyW(s_buf, MAX_PATH, Util::FormatFileTime(item.modifiedTime).c_str()); break;
-                        case 2: StringCchCopyW(s_buf, MAX_PATH, item.typeName.c_str()); break;
-                        case 3:
-                            if (item.isDrive) {
-                                uint64_t freeBytes = 0, totalBytes = 0;
-                                if (ShellUtils::GetDriveSpace(item.fullPath, freeBytes, totalBytes) && totalBytes > 0) {
-                                    StringCchPrintfW(s_buf, MAX_PATH, L"%s 可用 / 共 %s",
-                                                     Util::FormatBytes(freeBytes).c_str(),
-                                                     Util::FormatBytes(totalBytes).c_str());
+                        int colIdx = pDisp->item.iSubItem;
+                        if (colIdx >= 0 && colIdx < (int)pThis->m_activeColumns.size()) {
+                            ColumnId colId = pThis->m_activeColumns[colIdx];
+                            switch (colId) {
+                            case ColumnId::Name:
+                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.name.c_str());
+                                break;
+                            case ColumnId::DateModified:
+                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), Util::FormatFileTime(item.modifiedTime).c_str());
+                                break;
+                            case ColumnId::Type:
+                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.typeName.c_str());
+                                break;
+                            case ColumnId::Size:
+                                if (item.isDrive) {
+                                    uint64_t freeBytes = 0, totalBytes = 0;
+                                    if (ShellUtils::GetDriveSpace(item.fullPath, freeBytes, totalBytes) && totalBytes > 0) {
+                                        StringCchPrintfW(s_buf, ARRAYSIZE(s_buf), L"%s 可用 / 共 %s",
+                                                         Util::FormatBytes(freeBytes).c_str(),
+                                                         Util::FormatBytes(totalBytes).c_str());
+                                    }
+                                } else if (item.isFolder && !item.isSizeCalculated) {
+                                    s_buf[0] = L'\0';
+                                } else {
+                                    StringCchCopyW(s_buf, ARRAYSIZE(s_buf), Util::FormatBytes(item.size).c_str());
                                 }
-                            } else if (item.isFolder && !item.isSizeCalculated) {
-                                s_buf[0] = L'\0';
-                            } else {
-                                StringCchCopyW(s_buf, MAX_PATH, Util::FormatBytes(item.size).c_str());
+                                break;
+                            case ColumnId::DateCreated:
+                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), Util::FormatFileTime(item.createdTime).c_str());
+                                break;
+                            case ColumnId::Attributes:
+                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), Util::FormatAttributes(item.attributes).c_str());
+                                break;
+                            case ColumnId::Authors:
+                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.authors.c_str());
+                                break;
+                            case ColumnId::Title:
+                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.title.c_str());
+                                break;
+                            case ColumnId::Tags:
+                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.tags.c_str());
+                                break;
+                            case ColumnId::Path:
+                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.fullPath.c_str());
+                                break;
                             }
-                            break;
                         }
                         pDisp->item.pszText = s_buf;
                     }
@@ -994,26 +1186,43 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                 case CDDS_PREPAINT:
                     return CDRF_NOTIFYITEMDRAW;
                 case CDDS_ITEMPREPAINT: {
-                    int row = (int)pcd->nmcd.dwItemSpec;
-                    bool isSelected = (pcd->nmcd.uItemState & CDIS_SELECTED) != 0;
-                    if (Config::Get().zebraStriping && !isSelected && (row % 2 == 1) && row >= 0) {
-                        RECT rcItem;
-                        ListView_GetItemRect(pThis->m_hwnd, row, &rcItem, LVIR_BOUNDS);
-                        RECT rcClient;
-                        GetClientRect(pThis->m_hwnd, &rcClient);
-                        if (rcItem.right < rcClient.right) rcItem.right = rcClient.right;
-                        COLORREF zebraClr = Theme::Get().IsDarkMode() ? RGB(45, 50, 58) : RGB(236, 241, 248);
-                        HBRUSH hbrZebra = CreateSolidBrush(zebraClr);
-                        FillRect(pcd->nmcd.hdc, &rcItem, hbrZebra);
-                        DeleteObject(hbrZebra);
-                    }
                     return CDRF_NOTIFYSUBITEMDRAW | CDRF_NOTIFYPOSTPAINT;
                 }
                 case CDDS_ITEMPOSTPAINT: {
                     int row = (int)pcd->nmcd.dwItemSpec;
                     bool isSelected = (pcd->nmcd.uItemState & CDIS_SELECTED) != 0;
 
-                    // Grid lines
+                    // 1. Zebra striping tint on odd rows
+                    if (Config::Get().zebraStriping && !isSelected && (row % 2 == 1) && row >= 0) {
+                        RECT rcItem;
+                        ListView_GetItemRect(pThis->m_hwnd, row, &rcItem, LVIR_BOUNDS);
+                        int w = rcItem.right - rcItem.left;
+                        int h = rcItem.bottom - rcItem.top;
+                        if (w > 0 && h > 0) {
+                            HDC hdcMem = CreateCompatibleDC(pcd->nmcd.hdc);
+                            HBITMAP hbmMem = CreateCompatibleBitmap(pcd->nmcd.hdc, w, h);
+                            HGDIOBJ oldBm = SelectObject(hdcMem, hbmMem);
+
+                            COLORREF tintClr = Theme::Get().IsDarkMode() ? RGB(255, 255, 255) : RGB(10, 80, 200);
+                            HBRUSH hbrTint = CreateSolidBrush(tintClr);
+                            RECT rcLocal = { 0, 0, w, h };
+                            FillRect(hdcMem, &rcLocal, hbrTint);
+                            DeleteObject(hbrTint);
+
+                            BLENDFUNCTION bf = { 0 };
+                            bf.BlendOp = AC_SRC_OVER;
+                            bf.SourceConstantAlpha = Theme::Get().IsDarkMode() ? 18 : 22;
+
+                            AlphaBlend(pcd->nmcd.hdc, rcItem.left, rcItem.top, w, h,
+                                       hdcMem, 0, 0, w, h, bf);
+
+                            SelectObject(hdcMem, oldBm);
+                            DeleteObject(hbmMem);
+                            DeleteDC(hdcMem);
+                        }
+                    }
+
+                    // 2. Grid lines
                     if (Config::Get().showGridLines && row >= 0) {
                         RECT rcItem;
                         ListView_GetItemRect(pThis->m_hwnd, row, &rcItem, LVIR_BOUNDS);
@@ -1023,8 +1232,8 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                         MoveToEx(pcd->nmcd.hdc, rcItem.left, rcItem.bottom - 1, nullptr);
                         LineTo(pcd->nmcd.hdc, rcItem.right, rcItem.bottom - 1);
                         int curX = rcItem.left;
-                        for (int col = 0; col < 4; ++col) {
-                            int w = ListView_GetColumnWidth(pThis->m_hwnd, col);
+                        for (size_t col = 0; col < pThis->m_activeColumns.size(); ++col) {
+                            int w = ListView_GetColumnWidth(pThis->m_hwnd, (int)col);
                             curX += w;
                             MoveToEx(pcd->nmcd.hdc, curX - 1, rcItem.top, nullptr);
                             LineTo(pcd->nmcd.hdc, curX - 1, rcItem.bottom);
@@ -1037,12 +1246,20 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                 case CDDS_SUBITEM | CDDS_ITEMPREPAINT: {
                     int row = (int)pcd->nmcd.dwItemSpec;
                     bool isSelected = (pcd->nmcd.uItemState & CDIS_SELECTED) != 0;
-                    LRESULT ret = CDRF_DODEFAULT;
                     if (Config::Get().zebraStriping && !isSelected && (row % 2 == 1)) {
-                        COLORREF zebraClr = Theme::Get().IsDarkMode() ? RGB(45, 50, 58) : RGB(236, 241, 248);
+                        COLORREF zebraClr = Theme::Get().IsDarkMode() ? RGB(38, 42, 48) : RGB(238, 243, 250);
                         pcd->clrTextBk = zebraClr;
                         pcd->clrText = Theme::Get().ClrTextPrimary();
-                        ret = CDRF_NEWFONT;
+                        RECT rcCell;
+                        if (pcd->iSubItem == 0) {
+                            ListView_GetItemRect(pThis->m_hwnd, row, &rcCell, LVIR_BOUNDS);
+                            rcCell.right = rcCell.left + ListView_GetColumnWidth(pThis->m_hwnd, 0);
+                        } else {
+                            ListView_GetSubItemRect(pThis->m_hwnd, row, pcd->iSubItem, LVIR_BOUNDS, &rcCell);
+                        }
+                        HBRUSH hZebra = CreateSolidBrush(zebraClr);
+                        FillRect(pcd->nmcd.hdc, &rcCell, hZebra);
+                        DeleteObject(hZebra);
                     }
                     if (pcd->iSubItem == 3 && row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
                         int idx = pThis->m_filteredIndices[row];
@@ -1095,7 +1312,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                             }
                         }
                     }
-                    return ret;
+                    return CDRF_DODEFAULT;
                 }
                 }
                 return CDRF_DODEFAULT;
@@ -1103,7 +1320,11 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
 
             case NM_DBLCLK: {
                 NMITEMACTIVATE* pia = (NMITEMACTIVATE*)lParam;
-                pThis->OnItemDoubleClicked(pia->iItem);
+                if (pia->iItem < 0) {
+                    pThis->GoUp();
+                } else {
+                    pThis->OnItemDoubleClicked(pia->iItem);
+                }
                 return 0;
             }
 
@@ -1123,16 +1344,31 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
 
             case LVN_COLUMNCLICK: {
                 NMLISTVIEW* pnlv = (NMLISTVIEW*)lParam;
-                SortColumn newCol = (SortColumn)pnlv->iSubItem;
-                if (pThis->m_sortCol == newCol) {
-                    pThis->m_sortAsc = !pThis->m_sortAsc;
-                } else {
-                    pThis->m_sortCol = newCol;
-                    pThis->m_sortAsc = true;
+                if (pnlv->iSubItem >= 0 && pnlv->iSubItem < (int)pThis->m_activeColumns.size()) {
+                    ColumnId colId = pThis->m_activeColumns[pnlv->iSubItem];
+                    SortColumn clickedCol = SortColumn::Name;
+                    switch (colId) {
+                    case ColumnId::Name:         clickedCol = SortColumn::Name; break;
+                    case ColumnId::DateModified: clickedCol = SortColumn::DateModified; break;
+                    case ColumnId::Type:         clickedCol = SortColumn::Type; break;
+                    case ColumnId::Size:         clickedCol = SortColumn::Size; break;
+                    case ColumnId::DateCreated:  clickedCol = SortColumn::DateCreated; break;
+                    case ColumnId::Attributes:   clickedCol = SortColumn::Attributes; break;
+                    case ColumnId::Authors:      clickedCol = SortColumn::Authors; break;
+                    case ColumnId::Title:        clickedCol = SortColumn::Title; break;
+                    default:                     clickedCol = SortColumn::Name; break;
+                    }
+
+                    if (pThis->m_sortCol == clickedCol) {
+                        pThis->m_sortAsc = !pThis->m_sortAsc;
+                    } else {
+                        pThis->m_sortCol = clickedCol;
+                        pThis->m_sortAsc = true;
+                    }
+                    pThis->SortItems();
+                    pThis->ApplyFilter();
+                    pThis->UpdateHeaderSortArrow();
                 }
-                pThis->SortItems();
-                pThis->ApplyFilter();
-                pThis->UpdateHeaderSortArrow();
                 return 0;
             }
             }
