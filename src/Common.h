@@ -73,6 +73,45 @@ namespace Util {
         return result;
     }
 
+    inline std::wstring AnsiToWide(const std::string& str) {
+        if (str.empty()) return std::wstring();
+        int size = MultiByteToWideChar(CP_ACP, 0, str.c_str(), (int)str.size(), nullptr, 0);
+        std::wstring result(size, 0);
+        MultiByteToWideChar(CP_ACP, 0, str.c_str(), (int)str.size(), &result[0], size);
+        return result;
+    }
+
+    inline std::string WideToAnsi(const std::wstring& wstr) {
+        if (wstr.empty()) return std::string();
+        int size = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), (int)wstr.size(), nullptr, 0, nullptr, nullptr);
+        std::string result(size, 0);
+        WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), (int)wstr.size(), &result[0], size, nullptr, nullptr);
+        return result;
+    }
+
+    inline std::wstring DecodeOutput(const std::string& str) {
+        if (str.empty()) return std::wstring();
+        int utf8Size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, str.c_str(), (int)str.size(), nullptr, 0);
+        if (utf8Size > 0) {
+            std::wstring result(utf8Size, 0);
+            MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &result[0], utf8Size);
+            return result;
+        }
+        int ansiSize = MultiByteToWideChar(CP_ACP, 0, str.c_str(), (int)str.size(), nullptr, 0);
+        if (ansiSize > 0) {
+            std::wstring result(ansiSize, 0);
+            MultiByteToWideChar(CP_ACP, 0, str.c_str(), (int)str.size(), &result[0], ansiSize);
+            return result;
+        }
+        int oemSize = MultiByteToWideChar(CP_OEMCP, 0, str.c_str(), (int)str.size(), nullptr, 0);
+        if (oemSize > 0) {
+            std::wstring result(oemSize, 0);
+            MultiByteToWideChar(CP_OEMCP, 0, str.c_str(), (int)str.size(), &result[0], oemSize);
+            return result;
+        }
+        return std::wstring();
+    }
+
     inline std::wstring FormatBytes(uint64_t bytes) {
         const wchar_t* units[] = { L"B", L"KB", L"MB", L"GB", L"TB" };
         int idx = 0;
@@ -91,8 +130,13 @@ namespace Util {
     }
 
     inline std::wstring FormatFileTime(const FILETIME& ft) {
+        if (ft.dwLowDateTime == 0 && ft.dwHighDateTime == 0) {
+            return L"";
+        }
         SYSTEMTIME stUTC, stLocal;
-        FileTimeToSystemTime(&ft, &stUTC);
+        if (!FileTimeToSystemTime(&ft, &stUTC)) {
+            return L"";
+        }
         SystemTimeToTzSpecificLocalTime(nullptr, &stUTC, &stLocal);
         wchar_t buf[64];
         StringCchPrintfW(buf, 64, L"%04d-%02d-%02d %02d:%02d",

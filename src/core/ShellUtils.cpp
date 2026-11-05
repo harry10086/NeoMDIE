@@ -1,12 +1,421 @@
 #include "ShellUtils.h"
 #include "I18n.h"
+#include <set>
 
 namespace ShellUtils {
 
 static HIMAGELIST s_himlSmall = nullptr;
 static HIMAGELIST s_himlLarge = nullptr;
 
+static void SanitizeRegistryShellVerb() {
+    const wchar_t* shellParents[] = {
+        L"Software\\Classes\\Directory\\shell",
+        L"Software\\Classes\\Folder\\shell",
+        L"Software\\Classes\\Drive\\shell"
+    };
+
+    for (const auto* sp : shellParents) {
+        HKEY hKey = nullptr;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, sp, 0, KEY_READ | KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+            wchar_t val[MAX_PATH] = { 0 };
+            DWORD size = sizeof(val);
+            DWORD type = 0;
+            if (RegQueryValueExW(hKey, nullptr, nullptr, &type, (LPBYTE)val, &size) == ERROR_SUCCESS) {
+                // If default verb is open_NeoMDIE, or points to something invalid
+                if (_wcsicmp(val, L"open_NeoMDIE") == 0) {
+                    RegDeleteValueW(hKey, nullptr);
+                }
+            }
+            RegCloseKey(hKey);
+        }
+    }
+
+    // Also remove legacy open_NeoMDIE subkeys if present
+    RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open_NeoMDIE\\command");
+    RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open_NeoMDIE");
+    RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\open_NeoMDIE\\command");
+    RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\open_NeoMDIE");
+    RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open_NeoMDIE\\command");
+    RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open_NeoMDIE");
+}
+
+static std::vector<ShellNewItem> s_shellNewItems;
+static bool s_shellNewLoaded = false;
+static std::mutex s_shellNewMutex;
+
+static HBITMAP s_hbmFolder = nullptr;
+static HBITMAP s_hbmShortcut = nullptr;
+static HBITMAP s_hbmMd = nullptr;
+static HBITMAP s_hbmText = nullptr;
+
+static HBITMAP IconToBitmap(HICON hIcon, int size) {
+    if (!hIcon) return nullptr;
+    HDC hdcScreen = GetDC(nullptr);
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+    BITMAPINFO bi = { 0 };
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = size;
+    bi.bmiHeader.biHeight = size;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    DWORD* pBits = nullptr;
+    HBITMAP hbm = CreateDIBSection(hdcMem, &bi, DIB_RGB_COLORS, (void**)&pBits, nullptr, 0);
+    if (hbm && pBits) {
+        memset(pBits, 0, size * size * sizeof(DWORD));
+        HBITMAP oldBmp = (HBITMAP)SelectObject(hdcMem, hbm);
+        DrawIconEx(hdcMem, 0, 0, hIcon, size, size, 0, nullptr, DI_NORMAL);
+        SelectObject(hdcMem, oldBmp);
+
+        bool hasAlpha = false;
+        int totalPixels = size * size;
+        for (int i = 0; i < totalPixels; ++i) {
+            if ((pBits[i] & 0xFF000000) != 0) {
+                hasAlpha = true;
+                break;
+            }
+        }
+        if (!hasAlpha) {
+            for (int i = 0; i < totalPixels; ++i) {
+                if ((pBits[i] & 0x00FFFFFF) != 0) {
+                    pBits[i] |= 0xFF000000;
+                }
+            }
+        }
+    }
+    DeleteDC(hdcMem);
+    ReleaseDC(nullptr, hdcScreen);
+    return hbm;
+}
+
+static void ParseShellNewKey(HKEY hShellNew, const std::wstring& ext, int iconSize, std::vector<ShellNewItem>& outList) {
+    bool isZh = I18n::Get().IsChinese();
+    DWORD type = 0;
+
+    // Check MenuText
+    wchar_t menuText[256] = { 0 };
+    DWORD sz = sizeof(menuText);
+    if (RegQueryValueExW(hShellNew, L"MenuText", nullptr, &type, (LPBYTE)menuText, &sz) == ERROR_SUCCESS) {
+        wchar_t res[256] = { 0 };
+        if (SHLoadIndirectString(menuText, res, 256, nullptr) == S_OK) {
+            wcscpy_s(menuText, res);
+        }
+    }
+
+    // Check ItemName
+    wchar_t itemName[256] = { 0 };
+    sz = sizeof(itemName);
+    if (RegQueryValueExW(hShellNew, L"ItemName", nullptr, &type, (LPBYTE)itemName, &sz) == ERROR_SUCCESS) {
+        wchar_t res[256] = { 0 };
+        if (SHLoadIndirectString(itemName, res, 256, nullptr) == S_OK) {
+            wcscpy_s(itemName, res);
+        }
+    }
+
+    if (menuText[0] == 0) {
+        sz = 256;
+        AssocQueryStringW(ASSOCF_NONE, ASSOCSTR_FRIENDLYDOCNAME, ext.c_str(), nullptr, menuText, &sz);
+    }
+    if (menuText[0] == 0 && itemName[0] != 0) {
+        wcscpy_s(menuText, itemName);
+    }
+    if (menuText[0] == 0) {
+        swprintf_s(menuText, isZh ? L"%s 文档" : L"%s Document", ext.c_str());
+    }
+
+    ShellNewItem item;
+    item.ext = ext;
+    item.menuText = menuText;
+
+    if (itemName[0] != 0) {
+        item.defaultName = itemName;
+    } else {
+        item.defaultName = (isZh ? L"新建 " : L"New ") + item.menuText;
+    }
+
+    wchar_t val[MAX_PATH] = { 0 };
+    sz = sizeof(val);
+    if (RegQueryValueExW(hShellNew, L"FileName", nullptr, &type, (LPBYTE)val, &sz) == ERROR_SUCCESS) {
+        wchar_t expVal[MAX_PATH] = { 0 };
+        ExpandEnvironmentStringsW(val, expVal, MAX_PATH);
+        item.action = ShellNewAction::FileName;
+        item.templatePath = expVal;
+    } else if (RegQueryValueExW(hShellNew, L"NullFile", nullptr, &type, nullptr, nullptr) == ERROR_SUCCESS) {
+        item.action = ShellNewAction::NullFile;
+    } else if (RegQueryValueExW(hShellNew, L"Data", nullptr, &type, nullptr, &sz) == ERROR_SUCCESS) {
+        item.action = ShellNewAction::Data;
+        if (sz > 0) {
+            item.data.resize(sz);
+            RegQueryValueExW(hShellNew, L"Data", nullptr, &type, item.data.data(), &sz);
+        }
+    } else if (RegQueryValueExW(hShellNew, L"Command", nullptr, &type, (LPBYTE)val, &sz) == ERROR_SUCCESS) {
+        wchar_t expVal[MAX_PATH] = { 0 };
+        ExpandEnvironmentStringsW(val, expVal, MAX_PATH);
+        item.action = ShellNewAction::Command;
+        item.command = expVal;
+    } else {
+        return;
+    }
+
+    SHFILEINFOW sfi = { 0 };
+    SHGetFileInfoW(ext.c_str(), FILE_ATTRIBUTE_NORMAL, &sfi, sizeof(sfi),
+                   SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_SMALLICON);
+    if (sfi.hIcon) {
+        item.hBitmap = IconToBitmap(sfi.hIcon, iconSize);
+        DestroyIcon(sfi.hIcon);
+    }
+
+    outList.push_back(item);
+}
+
+static void LoadShellNewItemsInternal() {
+    std::lock_guard<std::mutex> lock(s_shellNewMutex);
+    for (auto& it : s_shellNewItems) {
+        if (it.hBitmap) DeleteObject(it.hBitmap);
+    }
+    s_shellNewItems.clear();
+
+    int iconSize = GetSystemMetrics(SM_CXSMICON);
+    if (iconSize <= 0) iconSize = 16;
+
+    if (!s_hbmFolder) {
+        SHFILEINFOW sfi = { 0 };
+        SHGetFileInfoW(L"folder", FILE_ATTRIBUTE_DIRECTORY, &sfi, sizeof(sfi),
+                       SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_SMALLICON);
+        if (sfi.hIcon) {
+            s_hbmFolder = IconToBitmap(sfi.hIcon, iconSize);
+            DestroyIcon(sfi.hIcon);
+        }
+    }
+    if (!s_hbmShortcut) {
+        SHFILEINFOW sfi = { 0 };
+        SHGetFileInfoW(L"dummy.lnk", FILE_ATTRIBUTE_NORMAL, &sfi, sizeof(sfi),
+                       SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_SMALLICON);
+        if (sfi.hIcon) {
+            s_hbmShortcut = IconToBitmap(sfi.hIcon, iconSize);
+            DestroyIcon(sfi.hIcon);
+        }
+    }
+    if (!s_hbmMd) {
+        SHFILEINFOW sfi = { 0 };
+        SHGetFileInfoW(L"dummy.md", FILE_ATTRIBUTE_NORMAL, &sfi, sizeof(sfi),
+                       SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_SMALLICON);
+        if (sfi.hIcon) {
+            s_hbmMd = IconToBitmap(sfi.hIcon, iconSize);
+            DestroyIcon(sfi.hIcon);
+        }
+    }
+    if (!s_hbmText) {
+        SHFILEINFOW sfi = { 0 };
+        SHGetFileInfoW(L"dummy.txt", FILE_ATTRIBUTE_NORMAL, &sfi, sizeof(sfi),
+                       SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_SMALLICON);
+        if (sfi.hIcon) {
+            s_hbmText = IconToBitmap(sfi.hIcon, iconSize);
+            DestroyIcon(sfi.hIcon);
+        }
+    }
+
+    std::set<std::wstring> seenExts;
+    DWORD idx = 0;
+    wchar_t keyName[256];
+    DWORD keyNameLen = 256;
+
+    while (RegEnumKeyExW(HKEY_CLASSES_ROOT, idx++, keyName, &keyNameLen, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
+        keyNameLen = 256;
+        if (keyName[0] != L'.') continue;
+        std::wstring ext = keyName;
+        if (seenExts.count(ext)) continue;
+
+        if (_wcsicmp(ext.c_str(), L".lnk") == 0 ||
+            _wcsicmp(ext.c_str(), L".library-ms") == 0 ||
+            _wcsicmp(ext.c_str(), L".txt") == 0 ||
+            _wcsicmp(ext.c_str(), L".md") == 0) {
+            continue;
+        }
+
+        HKEY hExt = nullptr;
+        if (RegOpenKeyExW(HKEY_CLASSES_ROOT, ext.c_str(), 0, KEY_READ, &hExt) == ERROR_SUCCESS) {
+            HKEY hSN = nullptr;
+            if (RegOpenKeyExW(hExt, L"ShellNew", 0, KEY_READ, &hSN) == ERROR_SUCCESS) {
+                ParseShellNewKey(hSN, ext, iconSize, s_shellNewItems);
+                seenExts.insert(ext);
+                RegCloseKey(hSN);
+            }
+
+            DWORD subIdx = 0;
+            wchar_t subName[256];
+            DWORD subLen = 256;
+            while (RegEnumKeyExW(hExt, subIdx++, subName, &subLen, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
+                subLen = 256;
+                if (_wcsicmp(subName, L"ShellNew") == 0) continue;
+                HKEY hSub = nullptr;
+                if (RegOpenKeyExW(hExt, subName, 0, KEY_READ, &hSub) == ERROR_SUCCESS) {
+                    HKEY hSubSN = nullptr;
+                    if (RegOpenKeyExW(hSub, L"ShellNew", 0, KEY_READ, &hSubSN) == ERROR_SUCCESS) {
+                        if (!seenExts.count(ext)) {
+                            ParseShellNewKey(hSubSN, ext, iconSize, s_shellNewItems);
+                            seenExts.insert(ext);
+                        }
+                        RegCloseKey(hSubSN);
+                    }
+                    RegCloseKey(hSub);
+                }
+            }
+
+            wchar_t progId[256] = { 0 };
+            DWORD progSz = sizeof(progId);
+            if (RegQueryValueExW(hExt, nullptr, nullptr, nullptr, (LPBYTE)progId, &progSz) == ERROR_SUCCESS && progId[0]) {
+                HKEY hProg = nullptr;
+                if (RegOpenKeyExW(HKEY_CLASSES_ROOT, progId, 0, KEY_READ, &hProg) == ERROR_SUCCESS) {
+                    HKEY hProgSN = nullptr;
+                    if (RegOpenKeyExW(hProg, L"ShellNew", 0, KEY_READ, &hProgSN) == ERROR_SUCCESS) {
+                        if (!seenExts.count(ext)) {
+                            ParseShellNewKey(hProgSN, ext, iconSize, s_shellNewItems);
+                            seenExts.insert(ext);
+                        }
+                        RegCloseKey(hProgSN);
+                    }
+                    RegCloseKey(hProg);
+                }
+            }
+
+            RegCloseKey(hExt);
+        }
+    }
+
+    std::sort(s_shellNewItems.begin(), s_shellNewItems.end(), [](const ShellNewItem& a, const ShellNewItem& b) {
+        return _wcsicmp(a.menuText.c_str(), b.menuText.c_str()) < 0;
+    });
+
+    s_shellNewLoaded = true;
+}
+
+const std::vector<ShellNewItem>& GetShellNewItems() {
+    if (!s_shellNewLoaded) {
+        LoadShellNewItemsInternal();
+    }
+    return s_shellNewItems;
+}
+
+void ReloadShellNewItems() {
+    LoadShellNewItemsInternal();
+}
+
+HBITMAP GetShellNewFolderBitmap() {
+    if (!s_shellNewLoaded) GetShellNewItems();
+    return s_hbmFolder;
+}
+
+HBITMAP GetShellNewShortcutBitmap() {
+    if (!s_shellNewLoaded) GetShellNewItems();
+    return s_hbmShortcut;
+}
+
+HBITMAP GetShellNewMdBitmap() {
+    if (!s_shellNewLoaded) GetShellNewItems();
+    return s_hbmMd;
+}
+
+HBITMAP GetShellNewTextBitmap() {
+    if (!s_shellNewLoaded) GetShellNewItems();
+    return s_hbmText;
+}
+
+static std::wstring ResolveTemplatePath(const std::wstring& filename) {
+    if (PathFileExistsW(filename.c_str())) {
+        return filename;
+    }
+    wchar_t winDir[MAX_PATH];
+    if (GetWindowsDirectoryW(winDir, MAX_PATH)) {
+        wchar_t candidate[MAX_PATH];
+        PathCombineW(candidate, winDir, L"ShellNew");
+        PathAppendW(candidate, filename.c_str());
+        if (PathFileExistsW(candidate)) return candidate;
+    }
+    wchar_t appData[MAX_PATH];
+    if (SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, appData) == S_OK) {
+        wchar_t candidate[MAX_PATH];
+        PathCombineW(candidate, appData, L"Microsoft\\Windows\\Templates");
+        PathAppendW(candidate, filename.c_str());
+        if (PathFileExistsW(candidate)) return candidate;
+    }
+    wchar_t commonTemplates[MAX_PATH];
+    if (SHGetFolderPathW(nullptr, CSIDL_COMMON_TEMPLATES, nullptr, 0, commonTemplates) == S_OK) {
+        wchar_t candidate[MAX_PATH];
+        PathCombineW(candidate, commonTemplates, filename.c_str());
+        if (PathFileExistsW(candidate)) return candidate;
+    }
+    return L"";
+}
+
+bool CreateShellNewFile(const ShellNewItem& item, const std::wstring& targetDir, std::wstring& outCreatedPath) {
+    if (targetDir.empty() || !PathFileExistsW(targetDir.c_str())) return false;
+
+    std::wstring baseName = item.defaultName;
+    if (baseName.empty()) {
+        bool isZh = I18n::Get().IsChinese();
+        baseName = (isZh ? L"新建 " : L"New ") + item.menuText;
+    }
+    if (item.ext.length() > 0) {
+        if (baseName.length() < item.ext.length() ||
+            _wcsicmp(baseName.c_str() + baseName.length() - item.ext.length(), item.ext.c_str()) != 0) {
+            baseName += item.ext;
+        }
+    }
+
+    std::wstring newFilePath = Util::CombinePath(targetDir, baseName);
+    if (PathFileExistsW(newFilePath.c_str())) {
+        std::wstring nameWithoutExt = baseName;
+        if (item.ext.length() > 0 && nameWithoutExt.length() > item.ext.length()) {
+            nameWithoutExt = nameWithoutExt.substr(0, nameWithoutExt.length() - item.ext.length());
+        }
+        int idx = 2;
+        while (PathFileExistsW(newFilePath.c_str())) {
+            newFilePath = Util::CombinePath(targetDir, nameWithoutExt + L" (" + std::to_wstring(idx++) + L")" + item.ext);
+        }
+    }
+
+    bool created = false;
+    if (item.action == ShellNewAction::FileName) {
+        std::wstring tplPath = ResolveTemplatePath(item.templatePath);
+        if (!tplPath.empty() && PathFileExistsW(tplPath.c_str())) {
+            created = CopyFileW(tplPath.c_str(), newFilePath.c_str(), FALSE) != FALSE;
+        }
+        if (!created) {
+            HANDLE hF = CreateFileW(newFilePath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hF != INVALID_HANDLE_VALUE) {
+                CloseHandle(hF);
+                created = true;
+            }
+        }
+    } else if (item.action == ShellNewAction::Data) {
+        HANDLE hF = CreateFileW(newFilePath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hF != INVALID_HANDLE_VALUE) {
+            if (!item.data.empty()) {
+                DWORD written = 0;
+                WriteFile(hF, item.data.data(), (DWORD)item.data.size(), &written, nullptr);
+            }
+            CloseHandle(hF);
+            created = true;
+        }
+    } else {
+        HANDLE hF = CreateFileW(newFilePath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hF != INVALID_HANDLE_VALUE) {
+            CloseHandle(hF);
+            created = true;
+        }
+    }
+
+    if (created && PathFileExistsW(newFilePath.c_str())) {
+        outCreatedPath = newFilePath;
+        return true;
+    }
+    return false;
+}
+
 void Initialize() {
+    SanitizeRegistryShellVerb();
+
     HMODULE hShell32 = GetModuleHandleW(L"shell32.dll");
     if (hShell32) {
         typedef BOOL(WINAPI* fnFileIconInit)(BOOL fRestoreCache);
@@ -19,6 +428,9 @@ void Initialize() {
     SHFILEINFOW sfi = { 0 };
     s_himlSmall = (HIMAGELIST)SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
     s_himlLarge = (HIMAGELIST)SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_LARGEICON);
+
+    // Warm up ShellNew registry items
+    GetShellNewItems();
 }
 
 HIMAGELIST GetSystemImageList(bool large) {
@@ -151,7 +563,7 @@ bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<N
     outItems.clear();
 
     // Check if it's "This PC" / My Computer
-    if (path == L"此电脑" || path == L"This PC" || path.empty()) {
+    if (path == L"此电脑" || path == L"This PC" || path == L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}" || path.empty()) {
         EnumerateDrives(outItems);
         return true;
     }
@@ -222,9 +634,40 @@ bool OpenItem(HWND hwnd, const std::wstring& path) {
 }
 
 bool ShowItemProperties(HWND hwnd, const std::wstring& path) {
+    if (path.empty()) return false;
+
+    // 1. Special handling for "This PC" / Computer
+    if (path == L"This PC" || path == L"此电脑" || path == L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") {
+        HINSTANCE hInst = ShellExecuteW(hwnd, L"open", L"ms-settings:about", nullptr, nullptr, SW_SHOWNORMAL);
+        if ((INT_PTR)hInst > 32) return true;
+        hInst = ShellExecuteW(hwnd, L"open", L"control.exe", L"/name Microsoft.System", nullptr, SW_SHOWNORMAL);
+        return (INT_PTR)hInst > 32;
+    }
+
+    // 2. Normal files and folders: use official SHObjectProperties API
+    if (SHObjectProperties(hwnd, SHOP_FILEPATH, path.c_str(), nullptr)) {
+        return true;
+    }
+
+    // 3. Fallback: ShellExecuteEx with PIDL
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (SUCCEEDED(SHParseDisplayName(path.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
+        SHELLEXECUTEINFOW sei = { 0 };
+        sei.cbSize = sizeof(sei);
+        sei.fMask = SEE_MASK_IDLIST | SEE_MASK_INVOKEIDLIST | SEE_MASK_FLAG_NO_UI;
+        sei.hwnd = hwnd;
+        sei.lpVerb = L"properties";
+        sei.lpIDList = pidl;
+        sei.nShow = SW_SHOWNORMAL;
+        BOOL ok = ShellExecuteExW(&sei);
+        ILFree(pidl);
+        if (ok) return true;
+    }
+
+    // 4. Fallback: ShellExecuteEx with lpFile
     SHELLEXECUTEINFOW sei = { 0 };
     sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_INVOKEIDLIST;
+    sei.fMask = SEE_MASK_INVOKEIDLIST | SEE_MASK_FLAG_NO_UI;
     sei.hwnd = hwnd;
     sei.lpVerb = L"properties";
     sei.lpFile = path.c_str();
@@ -311,11 +754,12 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
                 // 1. Elevate NeoMDIE Custom Commands TO THE VERY TOP
                 if (isDir) {
                     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, isZh ? L"在新标签页中打开(&T)" : L"Open in New Tab(&T)");
+                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_BG_TAB, isZh ? L"在后台新标签页中打开(&B)" : L"Open in Background Tab(&B)");
                     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_SPLIT, isZh ? L"在新栏中打开(&S)" : L"Open in New Pane(&S)");
                 }
                 AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, isZh ? L"复制完整路径(&A)" : L"Copy Full Path(&A)");
-                AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_TERMINAL, isZh ? L"在此处打开命令提示符 CMD(&C)" : L"Open CMD Here(&C)");
                 AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, isZh ? L"添加到链接栏(&L)" : L"Add to Links Bar(&L)");
+                AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_TERMINAL, isZh ? L"打开命令CMD(&C)" : L"Open CMD(&C)");
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
                 int topItemsCount = GetMenuItemCount(hMenu);
@@ -335,7 +779,7 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
                 if (g_pContextMenu3) { g_pContextMenu3->Release(); g_pContextMenu3 = nullptr; }
                 if (g_pContextMenu2) { g_pContextMenu2->Release(); g_pContextMenu2 = nullptr; }
 
-                if (cmd >= 0x7101 && cmd <= 0x7108) {
+                if (cmd >= 0x7101 && cmd <= 0x71FF) {
                     DestroyMenu(hMenu);
                     pContextMenu->Release();
                     for (auto p : extraPidls) ILFree(p);
@@ -410,9 +854,10 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     HMENU hMenu = CreatePopupMenu();
 
     // 0. Top NeoMDIE shortcuts
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_CMD, isZh ? L"在此处打开命令提示符 CMD(&C)" : L"Open CMD Here(&C)");
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, isZh ? L"复制当前路径(&A)" : L"Copy Current Path(&A)");
     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, isZh ? L"新建标签页(&T)\tCtrl+T" : L"New Tab(&T)\tCtrl+T");
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, isZh ? L"复制当前路径(&A)" : L"Copy Current Path(&A)");
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, isZh ? L"添加到链接栏(&L)" : L"Add to Links Bar(&L)");
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_CMD, isZh ? L"打开命令CMD(&C)" : L"Open CMD(&C)");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
     // 1. View submenu
@@ -461,11 +906,48 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     AppendMenuW(hMenu, MF_STRING | MF_GRAYED, CMD_BG_UNDO, isZh ? L"撤消(&U)\tCtrl+Z" : L"Undo(&U)\tCtrl+Z");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
-    // 5. Query Shell Background Context Menu (Modern IShellItem pipeline)
+    // 5. Complete "新建 (New)" Submenu (Fully synchronized with Windows Explorer + NeoMDIE Markdown)
+    bool canCreate = (!currentDir.empty() && currentDir != L"This PC" && currentDir != L"此电脑" && PathFileExistsW(currentDir.c_str()));
+    if (canCreate) {
+        HMENU hSubNew = CreatePopupMenu();
+        const auto& shellNewItems = GetShellNewItems();
+
+        auto addMenuItem = [&](UINT cmd, const std::wstring& text, HBITMAP hbm) {
+            MENUITEMINFOW mii = { sizeof(mii) };
+            mii.fMask = MIIM_STRING | MIIM_ID | (hbm ? MIIM_BITMAP : 0);
+            mii.wID = cmd;
+            mii.hbmpItem = hbm;
+            mii.dwTypeData = (LPWSTR)text.c_str();
+            InsertMenuItemW(hSubNew, GetMenuItemCount(hSubNew), TRUE, &mii);
+        };
+
+        // Standard Top items: Folder & Shortcut
+        addMenuItem(CMD_BG_NEW_FOLDER, isZh ? L"文件夹(&F)\tCtrl+Shift+N" : L"Folder(&F)\tCtrl+Shift+N", GetShellNewFolderBitmap());
+        addMenuItem(CMD_BG_NEW_SHORTCUT, isZh ? L"快捷方式(&S)" : L"Shortcut(&S)", GetShellNewShortcutBitmap());
+        AppendMenuW(hSubNew, MF_SEPARATOR, 0, nullptr);
+
+        // NeoMDIE special item (Markdown) & Standard Text Document
+        addMenuItem(CMD_BG_NEW_MD, isZh ? L"Markdown 文档(&M)" : L"Markdown Document(&M)", GetShellNewMdBitmap());
+        addMenuItem(CMD_BG_NEW_FILE, isZh ? L"文本文档(&T)" : L"Text Document(&T)", GetShellNewTextBitmap());
+
+        // Full system ShellNew items from registry scan (Office docx/xlsx/pptx/pdf, SolidWorks, Zip, etc.)
+        if (!shellNewItems.empty()) {
+            AppendMenuW(hSubNew, MF_SEPARATOR, 0, nullptr);
+            for (size_t i = 0; i < shellNewItems.size() && (CMD_BG_NEW_DYNAMIC_BASE + (UINT)i <= CMD_BG_NEW_DYNAMIC_MAX); ++i) {
+                const auto& it = shellNewItems[i];
+                addMenuItem(CMD_BG_NEW_DYNAMIC_BASE + (UINT)i, it.menuText, it.hBitmap);
+            }
+        }
+
+        AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSubNew, isZh ? L"新建(&W)" : L"New(&W)");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    }
+
+    // 6. Query Shell Background Context Menu (for 3rd-party extensions like Git, VSCode, Terminal, etc.)
     IContextMenu* pContextMenu = nullptr;
     IShellFolder* pFolder = nullptr;
 
-    if (!currentDir.empty() && currentDir != L"This PC" && currentDir != L"此电脑") {
+    if (canCreate) {
         IShellItem* pItem = nullptr;
         HRESULT hr = SHCreateItemFromParsingName(Util::NormalizePath(currentDir).c_str(), nullptr, IID_PPV_ARGS(&pItem));
         if (SUCCEEDED(hr) && pItem) {
@@ -481,24 +963,46 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
         pContextMenu->QueryInterface(IID_PPV_ARGS(&g_pContextMenu2));
         pContextMenu->QueryInterface(IID_PPV_ARGS(&g_pContextMenu3));
         int shellPos = GetMenuItemCount(hMenu);
-        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
         pContextMenu->QueryContextMenu(hMenu, shellPos, 1, 0x6FFF, CMF_NORMAL);
-        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
-    } else {
-        // Fallback New submenu if shell COM not available
-        HMENU hSubNew = CreatePopupMenu();
-        AppendMenuW(hSubNew, MF_STRING, CMD_BG_NEW_FOLDER, I18n::Get().T(StringId::MenuNewFolder));
-        AppendMenuW(hSubNew, MF_STRING, CMD_BG_NEW_FILE, I18n::Get().T(StringId::MenuNewFile));
-        AppendMenuW(hSubNew, MF_STRING, CMD_BG_NEW_MD, isZh ? L"新建 Markdown 文档 (.md)" : L"New Markdown Document (.md)");
-        AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSubNew, isZh ? L"新建(&W)" : L"New(&W)");
-        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+
+        // Filter out broken / duplicate Shell items:
+        // Shell's duplicate "View", "Sort by", "Refresh", "Paste", and shell's broken "New" / "New Folder"
+        int totalItems = GetMenuItemCount(hMenu);
+        for (int i = totalItems - 1; i >= shellPos; --i) {
+            wchar_t itemText[256] = { 0 };
+            MENUITEMINFOW mii = { sizeof(mii) };
+            mii.fMask = MIIM_STRING | MIIM_SUBMENU | MIIM_ID;
+            mii.dwTypeData = itemText;
+            mii.cch = 256;
+            if (GetMenuItemInfoW(hMenu, i, TRUE, &mii)) {
+                std::wstring s = itemText;
+                if (s.find(L"新建") != std::wstring::npos ||
+                    s.find(L"New Folder") != std::wstring::npos ||
+                    s.find(L"New") != std::wstring::npos ||
+                    s.find(L"查看") != std::wstring::npos ||
+                    s.find(L"View") != std::wstring::npos ||
+                    s.find(L"排序") != std::wstring::npos ||
+                    s.find(L"Sort") != std::wstring::npos ||
+                    s.find(L"刷新") != std::wstring::npos ||
+                    s.find(L"Refresh") != std::wstring::npos ||
+                    s.find(L"粘贴") != std::wstring::npos ||
+                    s.find(L"Paste") != std::wstring::npos ||
+                    s.find(L"属性") != std::wstring::npos ||
+                    s.find(L"Properties") != std::wstring::npos) {
+                    DeleteMenu(hMenu, i, MF_BYPOSITION);
+                }
+            }
+        }
+    }
+
+    // Properties
+    if (canCreate) {
         AppendMenuW(hMenu, MF_STRING, CMD_BG_PROPERTIES, I18n::Get().T(StringId::MenuProperties));
     }
 
     // Append NeoMDIE specific commands
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, isZh ? L"添加到链接栏(&L)" : L"Add to Links Bar(&L)");
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_SETTINGS, isZh ? L"选项与设置(&S)..." : L"Options & Settings(&S)...");
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_SETTINGS, isZh ? L"NeoMDIE设置(&S)..." : L"NeoMDIE Settings(&S)...");
 
     SetWindowSubclass(hwnd, ContextMenuSubclassProc, 9999, 0);
     SetCursor(LoadCursorW(nullptr, IDC_ARROW));
@@ -524,12 +1028,21 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     } else if (cmd > 0 && pContextMenu) {
         CMINVOKECOMMANDINFOEX cmi = { 0 };
         cmi.cbSize = sizeof(cmi);
-        cmi.fMask = CMIC_MASK_UNICODE;
+        cmi.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
         cmi.hwnd = hwnd;
+        cmi.ptInvoke = ptScreen;
+        std::string ansiDir = Util::WideToAnsi(currentDir);
+        cmi.lpDirectory = ansiDir.c_str();
+        cmi.lpDirectoryW = currentDir.c_str();
         cmi.lpVerb = MAKEINTRESOURCEA(cmd - 1);
         cmi.lpVerbW = MAKEINTRESOURCEW(cmd - 1);
         cmi.nShow = SW_SHOWNORMAL;
         pContextMenu->InvokeCommand((LPCMINVOKECOMMANDINFO)&cmi);
+
+        // Always notify to refresh view after invoking shell command!
+        if (onCustomCommand) {
+            onCustomCommand(CMD_BG_REFRESH, currentDir);
+        }
     }
 
     if (pContextMenu) pContextMenu->Release();
@@ -586,77 +1099,115 @@ bool CopyFilesToClipboard(HWND hwnd, const std::vector<std::wstring>& paths, boo
 }
 
 bool CanPasteFromClipboard() {
-    return IsClipboardFormatAvailable(CF_HDROP) != FALSE;
+    if (IsClipboardFormatAvailable(CF_HDROP)) return true;
+    static UINT s_uFmtDescriptorW = RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW);
+    if (s_uFmtDescriptorW && IsClipboardFormatAvailable(s_uFmtDescriptorW)) return true;
+    static UINT s_uFmtDescriptorA = RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORA);
+    if (s_uFmtDescriptorA && IsClipboardFormatAvailable(s_uFmtDescriptorA)) return true;
+    static UINT s_uFmtShellIDList = RegisterClipboardFormatW(CFSTR_SHELLIDLIST);
+    if (s_uFmtShellIDList && IsClipboardFormatAvailable(s_uFmtShellIDList)) return true;
+    return false;
 }
 
 bool PasteFilesFromClipboard(HWND hwnd, const std::wstring& destDir) {
     if (destDir.empty() || !PathFileExistsW(destDir.c_str())) return false;
-    if (!OpenClipboard(hwnd)) return false;
 
-    HDROP hDrop = (HDROP)GetClipboardData(CF_HDROP);
-    if (!hDrop) {
-        CloseClipboard();
-        return false;
-    }
-
-    // Check if it's cut or copy
-    bool isMove = false;
-    UINT uDropEffect = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
-    HGLOBAL hEffect = (HGLOBAL)GetClipboardData(uDropEffect);
-    if (hEffect) {
-        DWORD* pdwEffect = (DWORD*)GlobalLock(hEffect);
-        if (pdwEffect && (*pdwEffect & DROPEFFECT_MOVE)) {
-            isMove = true;
-        }
-        GlobalUnlock(hEffect);
-    }
-
-    UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
-    std::vector<std::wstring> filesToPaste;
-    for (UINT i = 0; i < count; ++i) {
-        wchar_t buf[MAX_PATH];
-        if (DragQueryFileW(hDrop, i, buf, MAX_PATH)) {
-            filesToPaste.push_back(buf);
-        }
-    }
-    CloseClipboard();
-
-    if (filesToPaste.empty()) return false;
-
-    // Use IFileOperation for native Windows progress dialog & undo
-    IFileOperation* pfo = nullptr;
-    HRESULT hr = CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pfo));
-    if (SUCCEEDED(hr) && pfo) {
-        pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR);
-        pfo->SetOwnerWindow(hwnd);
-
-        IShellItem* psiDest = nullptr;
-        hr = SHCreateItemFromParsingName(destDir.c_str(), nullptr, IID_PPV_ARGS(&psiDest));
-        if (SUCCEEDED(hr) && psiDest) {
-            for (const auto& src : filesToPaste) {
-                IShellItem* psiSrc = nullptr;
-                if (SUCCEEDED(SHCreateItemFromParsingName(src.c_str(), nullptr, IID_PPV_ARGS(&psiSrc)))) {
-                    if (isMove) {
-                        pfo->MoveItem(psiSrc, psiDest, nullptr, nullptr);
-                    } else {
-                        pfo->CopyItem(psiSrc, psiDest, nullptr, nullptr);
+    // 1. If standard physical files (CF_HDROP) are on the clipboard,
+    // prefer IFileOperation for synchronous execution, native progress dialog, and full undo support (Ctrl+Z)
+    if (IsClipboardFormatAvailable(CF_HDROP)) {
+        if (OpenClipboard(hwnd)) {
+            HDROP hDrop = (HDROP)GetClipboardData(CF_HDROP);
+            if (hDrop) {
+                bool isMove = false;
+                UINT uDropEffect = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+                HGLOBAL hEffect = (HGLOBAL)GetClipboardData(uDropEffect);
+                if (hEffect) {
+                    DWORD* pdwEffect = (DWORD*)GlobalLock(hEffect);
+                    if (pdwEffect && (*pdwEffect & DROPEFFECT_MOVE)) {
+                        isMove = true;
                     }
-                    psiSrc->Release();
+                    GlobalUnlock(hEffect);
                 }
-            }
-            pfo->PerformOperations();
-            psiDest->Release();
-        }
-        pfo->Release();
 
-        // If it was cut, clear the clipboard after moving
-        if (isMove) {
-            if (OpenClipboard(hwnd)) {
-                EmptyClipboard();
+                UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+                std::vector<std::wstring> filesToPaste;
+                for (UINT i = 0; i < count; ++i) {
+                    wchar_t buf[MAX_PATH];
+                    if (DragQueryFileW(hDrop, i, buf, MAX_PATH)) {
+                        filesToPaste.push_back(buf);
+                    }
+                }
+                CloseClipboard();
+
+                if (!filesToPaste.empty()) {
+                    IFileOperation* pfo = nullptr;
+                    HRESULT hr = CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pfo));
+                    if (SUCCEEDED(hr) && pfo) {
+                        pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR);
+                        pfo->SetOwnerWindow(hwnd);
+
+                        IShellItem* psiDest = nullptr;
+                        hr = SHCreateItemFromParsingName(destDir.c_str(), nullptr, IID_PPV_ARGS(&psiDest));
+                        if (SUCCEEDED(hr) && psiDest) {
+                            for (const auto& src : filesToPaste) {
+                                IShellItem* psiSrc = nullptr;
+                                if (SUCCEEDED(SHCreateItemFromParsingName(src.c_str(), nullptr, IID_PPV_ARGS(&psiSrc)))) {
+                                    if (isMove) {
+                                        pfo->MoveItem(psiSrc, psiDest, nullptr, nullptr);
+                                    } else {
+                                        pfo->CopyItem(psiSrc, psiDest, nullptr, nullptr);
+                                    }
+                                    psiSrc->Release();
+                                }
+                            }
+                            hr = pfo->PerformOperations();
+                            psiDest->Release();
+                        }
+                        pfo->Release();
+
+                        if (SUCCEEDED(hr)) {
+                            if (isMove) {
+                                if (OpenClipboard(hwnd)) {
+                                    EmptyClipboard();
+                                    CloseClipboard();
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                }
+            } else {
                 CloseClipboard();
             }
         }
-        return true;
+    }
+
+    // 2. Virtual remote streams (UU远程, 向日葵, ToDesk, Windows远程桌面 RDP, VMware, Outlook attachments)
+    // Handle via native Windows Shell IDropTarget from OleGetClipboard
+    IDataObject* pDataObj = nullptr;
+    if (SUCCEEDED(OleGetClipboard(&pDataObj)) && pDataObj) {
+        IShellItem* psiDest = nullptr;
+        if (SUCCEEDED(SHCreateItemFromParsingName(destDir.c_str(), nullptr, IID_PPV_ARGS(&psiDest))) && psiDest) {
+            IDropTarget* pDropTarget = nullptr;
+            if (SUCCEEDED(psiDest->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&pDropTarget))) && pDropTarget) {
+                POINTL pt = { 0, 0 };
+                DWORD dwEffect = DROPEFFECT_COPY | DROPEFFECT_MOVE;
+                if (SUCCEEDED(pDropTarget->DragEnter(pDataObj, MK_LBUTTON, pt, &dwEffect)) && dwEffect != DROPEFFECT_NONE) {
+                    HRESULT hrDrop = pDropTarget->Drop(pDataObj, 0, pt, &dwEffect);
+                    pDropTarget->Release();
+                    psiDest->Release();
+                    pDataObj->Release();
+                    if (SUCCEEDED(hrDrop)) {
+                        return true;
+                    }
+                } else {
+                    pDropTarget->DragLeave();
+                    pDropTarget->Release();
+                }
+            }
+            psiDest->Release();
+        }
+        pDataObj->Release();
     }
 
     return false;
@@ -833,6 +1384,180 @@ bool CreateShortcut(const std::wstring& shortcutPath, const std::wstring& target
     return SUCCEEDED(hr);
 }
 
+// Fallback IDataObject supporting CF_HDROP
+class SimpleFileDataObject : public IDataObject {
+public:
+    SimpleFileDataObject(const std::vector<std::wstring>& paths) : m_refCount(1), m_paths(paths) {}
+
+    // IUnknown
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IDataObject) {
+            *ppv = static_cast<IDataObject*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override {
+        return InterlockedIncrement(&m_refCount);
+    }
+    STDMETHODIMP_(ULONG) Release() override {
+        LONG r = InterlockedDecrement(&m_refCount);
+        if (r == 0) delete this;
+        return r;
+    }
+
+    // IDataObject
+    STDMETHODIMP GetData(FORMATETC* pFormatetc, STGMEDIUM* pmedium) override {
+        if (!pFormatetc || !pmedium) return E_POINTER;
+        pmedium->pUnkForRelease = nullptr;
+
+        if (pFormatetc->cfFormat == CF_HDROP && (pFormatetc->tymed & TYMED_HGLOBAL)) {
+            size_t totalBytes = sizeof(DROPFILES);
+            for (const auto& p : m_paths) {
+                totalBytes += (p.length() + 1) * sizeof(wchar_t);
+            }
+            totalBytes += sizeof(wchar_t); // Double null
+
+            HGLOBAL hGlobal = GlobalAlloc(GHND | GMEM_SHARE, totalBytes);
+            if (!hGlobal) return E_OUTOFMEMORY;
+
+            DROPFILES* pdf = (DROPFILES*)GlobalLock(hGlobal);
+            pdf->pFiles = sizeof(DROPFILES);
+            pdf->fWide = TRUE;
+            wchar_t* pDest = (wchar_t*)((BYTE*)pdf + sizeof(DROPFILES));
+            for (const auto& p : m_paths) {
+                StringCchCopyW(pDest, p.length() + 1, p.c_str());
+                pDest += p.length() + 1;
+            }
+            *pDest = L'\0';
+            GlobalUnlock(hGlobal);
+
+            pmedium->tymed = TYMED_HGLOBAL;
+            pmedium->hGlobal = hGlobal;
+            return S_OK;
+        }
+        return DV_E_FORMATETC;
+    }
+
+    STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override { return E_NOTIMPL; }
+
+    STDMETHODIMP QueryGetData(FORMATETC* pFormatetc) override {
+        if (!pFormatetc) return E_POINTER;
+        if (pFormatetc->cfFormat == CF_HDROP && (pFormatetc->tymed & TYMED_HGLOBAL)) {
+            return S_OK;
+        }
+        return DV_E_FORMATETC;
+    }
+
+    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC*) override { return DATA_S_SAMEFORMATETC; }
+    STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+    STDMETHODIMP EnumFormatEtc(DWORD dwDirection, IEnumFORMATETC** ppenumFormatEtc) override {
+        if (dwDirection == DATADIR_GET) {
+            FORMATETC fmt = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+            return SHCreateStdEnumFmtEtc(1, &fmt, ppenumFormatEtc);
+        }
+        return E_NOTIMPL;
+    }
+    STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
+
+private:
+    LONG m_refCount;
+    std::vector<std::wstring> m_paths;
+};
+
+class SimpleDropSource : public IDropSource {
+public:
+    SimpleDropSource() : m_refCount(1) {}
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IDropSource) {
+            *ppv = static_cast<IDropSource*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override {
+        return InterlockedIncrement(&m_refCount);
+    }
+    STDMETHODIMP_(ULONG) Release() override {
+        LONG r = InterlockedDecrement(&m_refCount);
+        if (r == 0) delete this;
+        return r;
+    }
+    STDMETHODIMP QueryContinueDrag(BOOL fEscapePressed, DWORD grfKeyState) override {
+        if (fEscapePressed) return DRAGDROP_S_CANCEL;
+        if (!(grfKeyState & (MK_LBUTTON | MK_RBUTTON))) return DRAGDROP_S_DROP;
+        return S_OK;
+    }
+    STDMETHODIMP GiveFeedback(DWORD) override {
+        return DRAGDROP_S_USEDEFAULTCURSORS;
+    }
+private:
+    LONG m_refCount;
+};
+
+IDataObject* CreateFileDataObject(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths) {
+    if (paths.empty()) return nullptr;
+
+    std::vector<PIDLIST_ABSOLUTE> pidls;
+    for (const auto& p : paths) {
+        PIDLIST_ABSOLUTE pidl = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(p.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
+            pidls.push_back(pidl);
+        }
+    }
+
+    IDataObject* pDataObj = nullptr;
+    if (!pidls.empty()) {
+        IShellItemArray* pArray = nullptr;
+        if (SUCCEEDED(SHCreateShellItemArrayFromIDLists((UINT)pidls.size(), (PCIDLIST_ABSOLUTE_ARRAY)pidls.data(), &pArray)) && pArray) {
+            pArray->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&pDataObj));
+            pArray->Release();
+        }
+        for (auto pidl : pidls) {
+            CoTaskMemFree(pidl);
+        }
+    }
+
+    if (!pDataObj) {
+        pDataObj = new SimpleFileDataObject(paths);
+    }
+    return pDataObj;
+}
+
+HRESULT DoFileDragDrop(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths, bool isRightClick, DWORD* pdwEffectOut) {
+    if (paths.empty()) return E_INVALIDARG;
+
+    IDataObject* pDataObj = CreateFileDataObject(hwnd, currentDir, paths);
+    if (!pDataObj) return E_FAIL;
+
+    SimpleDropSource* pDropSource = new SimpleDropSource();
+
+    IDragSourceHelper* pdsh = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pdsh)))) {
+        POINT pt;
+        GetCursorPos(&pt);
+        pdsh->InitializeFromWindow(hwnd, &pt, pDataObj);
+        pdsh->Release();
+    }
+
+    DWORD dwEffect = 0;
+    DWORD dwOK = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
+    HRESULT hr = DoDragDrop(pDataObj, pDropSource, dwOK, &dwEffect);
+    if (pdwEffectOut) *pdwEffectOut = dwEffect;
+
+    pDropSource->Release();
+    pDataObj->Release();
+    return hr;
+}
+
 bool IsExplorerReplaced() {
     HKEY hKey = nullptr;
     // On Win 10 & 11, check HKCU\Software\Classes\Directory\shell\open\command
@@ -845,6 +1570,80 @@ bool IsExplorerReplaced() {
         if (hasCmd && wcsstr(val, L"NeoMDIE") != nullptr) {
             return true;
         }
+    }
+    return false;
+}
+
+static std::wstring GetLauncherScriptPath() {
+    PWSTR pAppData = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &pAppData)) && pAppData) {
+        std::wstring dir = std::wstring(pAppData) + L"\\NeoMDIE";
+        CreateDirectoryW(dir.c_str(), nullptr);
+        std::wstring script = dir + L"\\open_folder.vbs";
+        CoTaskMemFree(pAppData);
+        return script;
+    }
+    return L"";
+}
+
+static bool CreateLauncherScript(const std::wstring& scriptPath, const std::wstring& exePath) {
+    std::string vbs;
+    vbs += "' NeoMDIE Explorer Replacement Self-Healing Launcher\r\n";
+    vbs += "Set fso = CreateObject(\"Scripting.FileSystemObject\")\r\n";
+    vbs += "Set shell = CreateObject(\"WScript.Shell\")\r\n";
+    vbs += "Dim target\r\n";
+    vbs += "target = \"\"\r\n";
+    vbs += "If WScript.Arguments.Count > 0 Then\r\n";
+    vbs += "    target = WScript.Arguments(0)\r\n";
+    vbs += "End If\r\n\r\n";
+
+    std::string utf8Exe = Util::WideToUtf8(exePath);
+    std::string cleanExe;
+    for (char c : utf8Exe) {
+        if (c == '"') cleanExe += "\"\"";
+        else cleanExe += c;
+    }
+
+    vbs += "exePath = \"" + cleanExe + "\"\r\n\r\n";
+    vbs += "If fso.FileExists(exePath) Then\r\n";
+    vbs += "    If target = \"\" Then\r\n";
+    vbs += "        shell.Run \"\"\"\" & exePath & \"\"\"\", 1, False\r\n";
+    vbs += "    Else\r\n";
+    vbs += "        shell.Run \"\"\"\" & exePath & \"\"\" \"\"\" & target & \"\"\"\", 1, False\r\n";
+    vbs += "    End If\r\n";
+    vbs += "Else\r\n";
+    vbs += "    ' NeoMDIE was deleted or moved: open native Windows Explorer and self-heal!\r\n";
+    vbs += "    If target = \"\" Then\r\n";
+    vbs += "        shell.Run \"explorer.exe\", 1, False\r\n";
+    vbs += "    Else\r\n";
+    vbs += "        shell.Run \"explorer.exe \"\"\" & target & \"\"\"\", 1, False\r\n";
+    vbs += "    End If\r\n";
+    vbs += "    On Error Resume Next\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Directory\\shell\\open\\command\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Directory\\shell\\open\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Folder\\shell\\open\\command\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Folder\\shell\\open\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Drive\\shell\\open\\command\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Drive\\shell\\open\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Directory\\shell\\open_NeoMDIE\\command\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Directory\\shell\\open_NeoMDIE\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Folder\\shell\\open_NeoMDIE\\command\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Folder\\shell\\open_NeoMDIE\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Drive\\shell\\open_NeoMDIE\\command\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Drive\\shell\\open_NeoMDIE\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\open\\command\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\open\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\\"\r\n";
+    vbs += "    shell.RegDelete \"HKCU\\Software\\Classes\\Folder\\shell\\\"\r\n";
+    vbs += "End If\r\n";
+
+    HANDLE hFile = CreateFileW(scriptPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        DWORD bytesWritten = 0;
+        WriteFile(hFile, vbs.c_str(), (DWORD)vbs.length(), &bytesWritten, nullptr);
+        CloseHandle(hFile);
+        return true;
     }
     return false;
 }
@@ -863,11 +1662,36 @@ bool SetExplorerReplaced(bool enable) {
         L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\open\\command"
     };
 
+    const wchar_t* shellParents[] = {
+        L"Software\\Classes\\Directory\\shell",
+        L"Software\\Classes\\Folder\\shell",
+        L"Software\\Classes\\Drive\\shell"
+    };
+
     if (enable) {
         wchar_t exePath[MAX_PATH];
         GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-        std::wstring cmdStr = L"\"" + std::wstring(exePath) + L"\" \"%1\"";
+
+        std::wstring scriptPath = GetLauncherScriptPath();
+        std::wstring cmdStr;
+        if (!scriptPath.empty() && CreateLauncherScript(scriptPath, exePath)) {
+            // Use silent VBS launcher which self-heals if NeoMDIE is deleted/moved
+            cmdStr = L"wscript.exe //B \"" + scriptPath + L"\" \"%1\"";
+        } else {
+            // Fallback direct invocation
+            cmdStr = L"\"" + std::wstring(exePath) + L"\" \"%1\"";
+        }
+
         const wchar_t* emptyDelegate = L"";
+
+        // First clean any stale default verb or ghost verbs
+        for (const auto* sp : shellParents) {
+            HKEY hKey = nullptr;
+            if (RegOpenKeyExW(HKEY_CURRENT_USER, sp, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+                RegDeleteValueW(hKey, nullptr);
+                RegCloseKey(hKey);
+            }
+        }
 
         for (const auto* k : openCmdKeys) {
             HKEY hKey = nullptr;
@@ -885,6 +1709,9 @@ bool SetExplorerReplaced(bool enable) {
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\open");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\open");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}");
 
         // Clean up legacy open_NeoMDIE if present
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open_NeoMDIE\\command");
@@ -893,6 +1720,22 @@ bool SetExplorerReplaced(bool enable) {
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\open_NeoMDIE");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open_NeoMDIE\\command");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open_NeoMDIE");
+
+        // CRITICAL: Clear (Default) value on shell parents to eliminate "找不到应用程序"
+        for (const auto* sp : shellParents) {
+            HKEY hKey = nullptr;
+            if (RegOpenKeyExW(HKEY_CURRENT_USER, sp, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+                RegDeleteValueW(hKey, nullptr);
+                RegCloseKey(hKey);
+            }
+        }
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell");
+
+        // Clean launcher script
+        std::wstring scriptPath = GetLauncherScriptPath();
+        if (!scriptPath.empty()) {
+            DeleteFileW(scriptPath.c_str());
+        }
     }
 
     std::thread([]() {
@@ -971,8 +1814,8 @@ void CheckForUpdates(HWND hwndParent) {
         const std::wstring currentVer = L"v1.0.0";
         if (!wTagName.empty() && wTagName != currentVer) {
             std::wstring msg = isZh
-                ? (L"发现 NeoMDIE 新版本: " + wTagName + L" (当前版本: " + currentVer + L")\n\n是否立即前往 GitHub 下载更新？")
-                : (L"New version found: " + wTagName + L" (Current: " + currentVer + L")\n\nOpen GitHub release page to download?");
+                ? (L"发现 NeoMDIE 新版本: " + wTagName + L" (当前版本: " + currentVer + L")\n\n下载路径与发布页面:\n" + wHtmlUrl + L"\n\n是否立即前往 GitHub 下载更新？")
+                : (L"New version found: " + wTagName + L" (Current: " + currentVer + L")\n\nDownload URL:\n" + wHtmlUrl + L"\n\nOpen download page now?");
             int res = MessageBoxW(hwndParent, msg.c_str(), isZh ? L"发现新版本" : L"Update Available", MB_YESNO | MB_ICONINFORMATION);
             if (res == IDYES) {
                 ShellExecuteW(nullptr, L"open", wHtmlUrl.c_str(), nullptr, nullptr, SW_SHOWNORMAL);

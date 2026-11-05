@@ -1,5 +1,0 @@
-
-# NeoMDIE runtime & intermediates
-bin/*.ini
-*.res
-tools/*.exe

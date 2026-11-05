@@ -1,5 +1,7 @@
 #include "..\core\Config.h"
 #include "FileListView.h"
+#include "resource.h"
+#include <unordered_set>
 #pragma comment(lib, "msimg32.lib")
 #pragma comment(lib, "msimg32.lib")
 #include "Theme.h"
@@ -117,6 +119,12 @@ HWND FileListView::Create(HWND hwndParent, int id) {
             IShellItem* psiDest = nullptr;
             if (SUCCEEDED(SHCreateItemFromParsingName(targetDir.c_str(), nullptr, IID_PPV_ARGS(&psiDest)))) {
                 for (const auto& src : files) {
+                    if (isMove) {
+                        wchar_t sDir[MAX_PATH];
+                        StringCchCopyW(sDir, MAX_PATH, src.c_str());
+                        PathRemoveFileSpecW(sDir);
+                        if (_wcsicmp(sDir, targetDir.c_str()) == 0) continue;
+                    }
                     IShellItem* psiSrc = nullptr;
                     if (SUCCEEDED(SHCreateItemFromParsingName(src.c_str(), nullptr, IID_PPV_ARGS(&psiSrc)))) {
                         if (isMove) {
@@ -131,6 +139,15 @@ HWND FileListView::Create(HWND hwndParent, int id) {
                 psiDest->Release();
             }
             pfo->Release();
+        }
+        SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, targetDir.c_str(), nullptr);
+        if (isMove) {
+            for (const auto& src : files) {
+                wchar_t sDir[MAX_PATH];
+                StringCchCopyW(sDir, MAX_PATH, src.c_str());
+                PathRemoveFileSpecW(sDir);
+                SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, sDir, nullptr);
+            }
         }
         Refresh();
     };
@@ -443,8 +460,83 @@ LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wP
     if (msg == WM_RBUTTONUP || msg == WM_CONTEXTMENU) {
         POINT pt;
         GetCursorPos(&pt);
-        pThis->ShowColumnHeaderMenu(pt);
+        if (pThis) pThis->ShowColumnHeaderMenu(pt);
         return 0;
+    }
+    if (Theme::Get().IsDarkMode()) {
+        if (msg == WM_ERASEBKGND) return 1;
+        if (msg == WM_PAINT) {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rcClient;
+            GetClientRect(hwnd, &rcClient);
+
+            HDC memDC = CreateCompatibleDC(hdc);
+            HBITMAP memBM = CreateCompatibleBitmap(hdc, rcClient.right, rcClient.bottom);
+            HGDIOBJ oldBM = SelectObject(memDC, memBM);
+
+            FillRect(memDC, &rcClient, Theme::Get().BrushSurface());
+
+            HFONT hFont = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+            if (!hFont) hFont = Theme::Get().GetUIFont(hwnd);
+            HGDIOBJ oldFont = SelectObject(memDC, hFont);
+            SetBkMode(memDC, TRANSPARENT);
+            SetTextColor(memDC, Theme::Get().ClrTextPrimary());
+
+            HPEN hPenBorder = CreatePen(PS_SOLID, 1, Theme::Get().ClrBorder());
+            HGDIOBJ oldPen = SelectObject(memDC, hPenBorder);
+
+            int count = Header_GetItemCount(hwnd);
+            for (int i = 0; i < count; ++i) {
+                RECT rcItem;
+                if (!Header_GetItemRect(hwnd, i, &rcItem)) continue;
+
+                // Column divider
+                MoveToEx(memDC, rcItem.right - 1, rcItem.top + 3, nullptr);
+                LineTo(memDC, rcItem.right - 1, rcItem.bottom - 3);
+
+                wchar_t text[256] = { 0 };
+                HDITEMW hdi = { sizeof(hdi) };
+                hdi.mask = HDI_TEXT | HDI_FORMAT;
+                hdi.pszText = text;
+                hdi.cchTextMax = 256;
+                if (Header_GetItem(hwnd, i, &hdi)) {
+                    RECT rcText = rcItem;
+                    rcText.left += Theme::Get().Scale(6, hwnd);
+                    rcText.right -= Theme::Get().Scale(6, hwnd);
+
+                    std::wstring displayText = text;
+                    if (hdi.fmt & HDF_SORTUP) {
+                        displayText += L" ▲";
+                    } else if (hdi.fmt & HDF_SORTDOWN) {
+                        displayText += L" ▼";
+                    }
+
+                    UINT format = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
+                    if (hdi.fmt & HDF_RIGHT) format |= DT_RIGHT;
+                    else if (hdi.fmt & HDF_CENTER) format |= DT_CENTER;
+                    else format |= DT_LEFT;
+
+                    DrawTextW(memDC, displayText.c_str(), -1, &rcText, format);
+                }
+            }
+
+            // Bottom border
+            MoveToEx(memDC, 0, rcClient.bottom - 1, nullptr);
+            LineTo(memDC, rcClient.right, rcClient.bottom - 1);
+
+            SelectObject(memDC, oldPen);
+            DeleteObject(hPenBorder);
+            SelectObject(memDC, oldFont);
+
+            BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, memDC, 0, 0, SRCCOPY);
+            SelectObject(memDC, oldBM);
+            DeleteObject(memBM);
+            DeleteDC(memDC);
+
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
     }
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
@@ -453,10 +545,13 @@ void FileListView::ApplyTheme() {
     if (!m_hwnd) return;
     bool isDark = Theme::Get().IsDarkMode();
     Theme::Get().ApplyToWindow(m_hwnd);
+    SetWindowTheme(m_hwnd, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+    SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     COLORREF bg = Theme::Get().ClrBackground();
     COLORREF text = Theme::Get().ClrTextPrimary();
     ListView_SetBkColor(m_hwnd, bg);
-    ListView_SetTextBkColor(m_hwnd, Config::Get().zebraStriping ? CLR_NONE : bg);
+    ListView_SetTextBkColor(m_hwnd, bg);
     ListView_SetTextColor(m_hwnd, text);
 
     HWND hHeader = ListView_GetHeader(m_hwnd);
@@ -500,14 +595,16 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
     }
 
     SortItems();
+    ListView_SetItemCountEx(m_hwnd, 0, 0);
+    ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     ApplyFilter();
 
-    m_watcher.Watch(normalized, m_hwndParent, WM_NOTIFY_DIR_CHANGED);
+    m_watcher.Watch(normalized, m_hwnd, WM_NOTIFY_DIR_CHANGED);
 
     if (m_calcFolderSize && normalized != L"此电脑" && normalized != L"This PC") {
         for (const auto& item : m_allItems) {
             if (item.isFolder && !item.isDrive) {
-                m_calcSize.RequestFolderSize(item.fullPath, m_hwndParent, WM_NOTIFY_FOLDER_SIZE);
+                m_calcSize.RequestFolderSize(item.fullPath, m_hwnd, WM_NOTIFY_FOLDER_SIZE);
             }
         }
     }
@@ -523,11 +620,38 @@ void FileListView::Refresh() {
     if (m_searchThread.joinable()) {
         m_searchThread.detach();
     }
+    m_calcSize.CancelAll();
+
     std::vector<NeoShellItem> items;
-    if (ShellUtils::EnumerateDirectory(m_currentPath, m_showHidden, items)) {
-        m_allItems = std::move(items);
-        SortItems();
-        ApplyFilter();
+    if (!ShellUtils::EnumerateDirectory(m_currentPath, m_showHidden, items)) {
+        if (m_currentPath != L"This PC" && m_currentPath != L"此电脑" && m_currentPath != L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") {
+            std::wstring parent = ShellUtils::GetParentPath(m_currentPath);
+            if (parent.empty() || !PathFileExistsW(parent.c_str())) {
+                NavigateTo(L"This PC", true);
+            } else {
+                NavigateTo(parent, true);
+            }
+        }
+        return;
+    }
+
+    m_allItems = std::move(items);
+    SortItems();
+
+    // Reset item count to 0 first to force SysListView32 to flush all cached row visuals
+    ListView_SetItemCountEx(m_hwnd, 0, 0);
+    ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+
+    ApplyFilter();
+
+    m_watcher.Watch(m_currentPath, m_hwnd, WM_NOTIFY_DIR_CHANGED);
+
+    if (m_calcFolderSize && m_currentPath != L"此电脑" && m_currentPath != L"This PC" && m_currentPath != L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") {
+        for (const auto& item : m_allItems) {
+            if (item.isFolder && !item.isDrive) {
+                m_calcSize.RequestFolderSize(item.fullPath, m_hwnd, WM_NOTIFY_FOLDER_SIZE);
+            }
+        }
     }
 }
 
@@ -658,8 +782,12 @@ void FileListView::ApplyFilter() {
         }
     }
 
-    ListView_SetItemCountEx(m_hwnd, (int)m_filteredIndices.size(), LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
+    ListView_SetItemCountEx(m_hwnd, (int)m_filteredIndices.size(), LVSICF_NOSCROLL);
+    if (!m_filteredIndices.empty()) {
+        ListView_RedrawItems(m_hwnd, 0, (int)m_filteredIndices.size() - 1);
+    }
     InvalidateRect(m_hwnd, nullptr, TRUE);
+    UpdateWindow(m_hwnd);
 
     if (onStatusUpdated) {
         onStatusUpdated((int)m_filteredIndices.size(), totalSize);
@@ -730,6 +858,40 @@ void FileListView::InvertSelection() {
     }
 }
 
+void FileListView::ClearSelection() {
+    ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+}
+
+void FileListView::SetSelectedPaths(const std::vector<std::wstring>& paths) {
+    ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    if (paths.empty()) return;
+
+    std::unordered_set<std::wstring> selSet;
+    for (const auto& p : paths) {
+        std::wstring lower = p;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
+        selSet.insert(lower);
+    }
+
+    bool focusedSet = false;
+    for (int row = 0; row < (int)m_filteredIndices.size(); ++row) {
+        int idx = m_filteredIndices[row];
+        if (idx >= 0 && idx < (int)m_allItems.size()) {
+            std::wstring lower = m_allItems[idx].fullPath;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
+            if (selSet.count(lower)) {
+                UINT state = LVIS_SELECTED;
+                if (!focusedSet) {
+                    state |= LVIS_FOCUSED;
+                    focusedSet = true;
+                    ListView_EnsureVisible(m_hwnd, row, FALSE);
+                }
+                ListView_SetItemState(m_hwnd, row, state, state);
+            }
+        }
+    }
+}
+
 void FileListView::CopySelected(bool isCut) {
     auto sel = GetSelectedPaths();
     if (!sel.empty()) {
@@ -741,6 +903,9 @@ void FileListView::PasteToCurrent() {
     if (m_currentPath != L"此电脑" && m_currentPath != L"This PC") {
         if (ShellUtils::PasteFilesFromClipboard(m_hwnd, m_currentPath)) {
             Refresh();
+            // In case of async virtual stream drop (UU remote / RDP etc.), trigger delayed catch-up refreshes
+            SetTimer(m_hwnd, 701, 300, nullptr);
+            SetTimer(m_hwnd, 702, 1200, nullptr);
         }
     }
 }
@@ -779,31 +944,39 @@ void FileListView::StartRename() {
 }
 
 void FileListView::ScrollToTop() {
-    SendMessageW(m_hwnd, WM_KEYDOWN, VK_HOME, 0);
-    SendMessageW(m_hwnd, WM_KEYUP, VK_HOME, 0);
+    if (m_hwnd) {
+        SetFocus(m_hwnd);
+        int count = ListView_GetItemCount(m_hwnd);
+        if (count > 0) {
+            ListView_SetItemState(m_hwnd, 0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+            ListView_EnsureVisible(m_hwnd, 0, FALSE);
+        }
+        SendMessageW(m_hwnd, WM_VSCROLL, SB_TOP, 0);
+    }
 }
 
 void FileListView::ScrollToBottom() {
-    SendMessageW(m_hwnd, WM_KEYDOWN, VK_END, 0);
-    SendMessageW(m_hwnd, WM_KEYUP, VK_END, 0);
+    if (m_hwnd) {
+        SetFocus(m_hwnd);
+        int count = ListView_GetItemCount(m_hwnd);
+        if (count > 0) {
+            ListView_SetItemState(m_hwnd, count - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+            ListView_EnsureVisible(m_hwnd, count - 1, FALSE);
+        }
+        SendMessageW(m_hwnd, WM_VSCROLL, SB_BOTTOM, 0);
+    }
 }
 
 void FileListView::ScrollPageUp() {
-    int pageCount = ListView_GetCountPerPage(m_hwnd);
-    if (pageCount <= 0) pageCount = 10;
-    RECT rcItem = { 0 };
-    ListView_GetItemRect(m_hwnd, 0, &rcItem, LVIR_BOUNDS);
-    int itemH = (rcItem.bottom > rcItem.top) ? (rcItem.bottom - rcItem.top) : 22;
-    ListView_Scroll(m_hwnd, 0, -pageCount * itemH);
+    if (m_hwnd) {
+        SendMessageW(m_hwnd, WM_VSCROLL, SB_PAGEUP, 0);
+    }
 }
 
 void FileListView::ScrollPageDown() {
-    int pageCount = ListView_GetCountPerPage(m_hwnd);
-    if (pageCount <= 0) pageCount = 10;
-    RECT rcItem = { 0 };
-    ListView_GetItemRect(m_hwnd, 0, &rcItem, LVIR_BOUNDS);
-    int itemH = (rcItem.bottom > rcItem.top) ? (rcItem.bottom - rcItem.top) : 22;
-    ListView_Scroll(m_hwnd, 0, pageCount * itemH);
+    if (m_hwnd) {
+        SendMessageW(m_hwnd, WM_VSCROLL, SB_PAGEDOWN, 0);
+    }
 }
 
 void FileListView::UpdateLayout(int x, int y, int width, int height) {
@@ -818,7 +991,17 @@ void FileListView::OnItemDoubleClicked(int itemIndex) {
     const auto& item = m_allItems[idx];
 
     if (item.isFolder) {
-        NavigateTo(item.fullPath, true);
+        bool ctrl = (GetKeyState(VK_CONTROL) < 0);
+        bool shift = (GetKeyState(VK_SHIFT) < 0);
+        if (ctrl && shift) {
+            if (onCustomCommand) onCustomCommand(CMD_NEOMDIE_OPEN_BG_TAB, item.fullPath);
+        } else if (ctrl) {
+            if (onCustomCommand) onCustomCommand(CMD_NEOMDIE_OPEN_NEW_TAB, item.fullPath);
+        } else if (shift) {
+            if (onCustomCommand) onCustomCommand(CMD_NEOMDIE_OPEN_SPLIT, item.fullPath);
+        } else {
+            NavigateTo(item.fullPath, true);
+        }
     } else {
         ShellUtils::OpenItem(m_hwnd, item.fullPath);
     }
@@ -826,6 +1009,20 @@ void FileListView::OnItemDoubleClicked(int itemIndex) {
 
 void FileListView::OnItemRightClicked(POINT ptScreen) {
     auto handleNeoCmd = [this](int cmd, const std::wstring& targetPath) {
+        if (cmd >= CMD_BG_NEW_DYNAMIC_BASE && cmd <= CMD_BG_NEW_DYNAMIC_MAX) {
+            size_t idx = (size_t)(cmd - CMD_BG_NEW_DYNAMIC_BASE);
+            const auto& items = ShellUtils::GetShellNewItems();
+            if (idx < items.size()) {
+                std::wstring newFilePath;
+                if (ShellUtils::CreateShellNewFile(items[idx], m_currentPath, newFilePath)) {
+                    Refresh();
+                    SelectItemByPath(newFilePath);
+                    StartRename();
+                }
+            }
+            return;
+        }
+
         switch (cmd) {
         case CMD_NEOMDIE_COPY_PATH:
             ShellUtils::CopyToClipboard(targetPath);
@@ -873,41 +1070,110 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
             SortItems(); ApplyFilter(); UpdateHeaderSortArrow();
             break;
 
-        case CMD_BG_REFRESH: Refresh(); break;
+        case CMD_BG_REFRESH: {
+            Refresh();
+            HWND hTop = GetAncestor(m_hwnd, GA_ROOT);
+            SendMessageW(hTop, WM_COMMAND, ID_VIEW_REFRESH, 0);
+            break;
+        }
         case CMD_BG_PASTE: PasteToCurrent(); break;
         case CMD_BG_PASTE_SHORTCUT: PasteShortcut(); break;
         case CMD_BG_PROPERTIES: ShellUtils::ShowItemProperties(m_hwnd, targetPath); break;
+        case CMD_BG_NEW_SHORTCUT: {
+            std::wstring args = L"appwiz.cpl,NewLinkHere \"" + m_currentPath + L"\"";
+            ShellExecuteW(nullptr, L"open", L"rundll32.exe", args.c_str(), m_currentPath.c_str(), SW_SHOWNORMAL);
+            break;
+        }
         case CMD_BG_NEW_FOLDER: {
             std::wstring newDir = Util::CombinePath(m_currentPath, I18n::Get().T(StringId::NewFolder));
             int idx = 2;
             while (PathFileExistsW(newDir.c_str())) {
                 newDir = Util::CombinePath(m_currentPath, std::wstring(I18n::Get().T(StringId::NewFolder)) + L" (" + std::to_wstring(idx++) + L")");
             }
-            CreateDirectoryW(newDir.c_str(), nullptr);
-            Refresh();
+            if (CreateDirectoryW(newDir.c_str(), nullptr)) {
+                Refresh();
+                SelectItemByPath(newDir);
+                StartRename();
+            }
             break;
         }
         case CMD_BG_NEW_FILE: {
-            std::wstring newFile = Util::CombinePath(m_currentPath, I18n::Get().T(StringId::NewTextFile));
+            bool isZh = I18n::Get().IsChinese();
+            std::wstring baseName = isZh ? L"新建文本文档.txt" : L"New Text Document.txt";
+            std::wstring newFile = Util::CombinePath(m_currentPath, baseName);
             int idx = 2;
             while (PathFileExistsW(newFile.c_str())) {
-                newFile = Util::CombinePath(m_currentPath, L"New (" + std::to_wstring(idx++) + L").txt");
+                newFile = Util::CombinePath(m_currentPath, (isZh ? L"新建文本文档 (" : L"New Text Document (") + std::to_wstring(idx++) + L").txt");
             }
             HANDLE hF = CreateFileW(newFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (hF != INVALID_HANDLE_VALUE) CloseHandle(hF);
-            Refresh();
+            if (hF != INVALID_HANDLE_VALUE) {
+                CloseHandle(hF);
+                Refresh();
+                SelectItemByPath(newFile);
+                StartRename();
+            }
             break;
         }
         case CMD_BG_NEW_MD: {
             bool isZh = I18n::Get().IsChinese();
-            std::wstring newMd = Util::CombinePath(m_currentPath, isZh ? L"新建文档.md" : L"New Document.md");
+            std::wstring baseName = isZh ? L"新建 Markdown 文档.md" : L"New Markdown Document.md";
+            std::wstring newMd = Util::CombinePath(m_currentPath, baseName);
             int idx = 2;
             while (PathFileExistsW(newMd.c_str())) {
-                newMd = Util::CombinePath(m_currentPath, (isZh ? L"新建文档 (" : L"New Document (") + std::to_wstring(idx++) + L").md");
+                newMd = Util::CombinePath(m_currentPath, (isZh ? L"新建 Markdown 文档 (" : L"New Markdown Document (") + std::to_wstring(idx++) + L").md");
             }
             HANDLE hF = CreateFileW(newMd.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (hF != INVALID_HANDLE_VALUE) CloseHandle(hF);
-            Refresh();
+            if (hF != INVALID_HANDLE_VALUE) {
+                const char* initContent = "# Title\n\n";
+                DWORD written = 0;
+                WriteFile(hF, initContent, (DWORD)strlen(initContent), &written, nullptr);
+                CloseHandle(hF);
+                Refresh();
+                SelectItemByPath(newMd);
+                StartRename();
+            }
+            break;
+        }
+        case CMD_BG_NEW_CSV: {
+            bool isZh = I18n::Get().IsChinese();
+            std::wstring baseName = isZh ? L"新建表格.csv" : L"New Spreadsheet.csv";
+            std::wstring newCsv = Util::CombinePath(m_currentPath, baseName);
+            int idx = 2;
+            while (PathFileExistsW(newCsv.c_str())) {
+                newCsv = Util::CombinePath(m_currentPath, (isZh ? L"新建表格 (" : L"New Spreadsheet (") + std::to_wstring(idx++) + L").csv");
+            }
+            HANDLE hF = CreateFileW(newCsv.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hF != INVALID_HANDLE_VALUE) {
+                const unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
+                DWORD written = 0;
+                WriteFile(hF, bom, sizeof(bom), &written, nullptr);
+                std::string header = isZh ? "序号,项目名称,创建时间,备注\r\n" : "ID,Name,CreatedTime,Notes\r\n";
+                WriteFile(hF, header.c_str(), (DWORD)header.length(), &written, nullptr);
+                CloseHandle(hF);
+                Refresh();
+                SelectItemByPath(newCsv);
+                StartRename();
+            }
+            break;
+        }
+        case CMD_BG_NEW_RTF: {
+            bool isZh = I18n::Get().IsChinese();
+            std::wstring baseName = isZh ? L"新建富文本文档.rtf" : L"New Rich Text.rtf";
+            std::wstring newRtf = Util::CombinePath(m_currentPath, baseName);
+            int idx = 2;
+            while (PathFileExistsW(newRtf.c_str())) {
+                newRtf = Util::CombinePath(m_currentPath, (isZh ? L"新建富文本文档 (" : L"New Rich Text (") + std::to_wstring(idx++) + L").rtf");
+            }
+            HANDLE hF = CreateFileW(newRtf.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hF != INVALID_HANDLE_VALUE) {
+                const char* rtfHeader = "{\\rtf1\\ansi\\ansicpg936\\deff0\\nouicompat\\deflang1033\\deflangfe2052{\\fonttbl{\\f0\\fnil\\fcharset134 \\'cb\\'ce\\'cc\\'e5;}}\r\n{\\*\\generator NeoMDIE}\\viewkind4\\uc1 \r\n\\pard\\lang2052\\f0\\fs22\\par\r\n}\r\n";
+                DWORD written = 0;
+                WriteFile(hF, rtfHeader, (DWORD)strlen(rtfHeader), &written, nullptr);
+                CloseHandle(hF);
+                Refresh();
+                SelectItemByPath(newRtf);
+                StartRename();
+            }
             break;
         }
         default:
@@ -924,6 +1190,20 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
     } else {
         ShellUtils::ShowBackgroundContextMenu(m_hwnd, m_currentPath, ptScreen,
                                               m_viewMode, (int)m_sortCol, m_sortAsc, handleNeoCmd);
+    }
+}
+
+void FileListView::SelectItemByPath(const std::wstring& path) {
+    ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    for (int row = 0; row < (int)m_filteredIndices.size(); ++row) {
+        int idx = m_filteredIndices[row];
+        if (idx >= 0 && idx < (int)m_allItems.size()) {
+            if (_wcsicmp(m_allItems[idx].fullPath.c_str(), path.c_str()) == 0) {
+                ListView_SetItemState(m_hwnd, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                ListView_EnsureVisible(m_hwnd, row, FALSE);
+                break;
+            }
+        }
     }
 }
 
@@ -948,6 +1228,53 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
     FileListView* pThis = (FileListView*)dwRefData;
 
     switch (msg) {
+    case WM_MOUSEACTIVATE:
+        return MA_ACTIVATE;
+
+    case WM_LBUTTONDOWN: {
+        int x = GET_X_LPARAM(lParam);
+        int y = GET_Y_LPARAM(lParam);
+
+        LVHITTESTINFO lvhti = { 0 };
+        lvhti.pt = { x, y };
+        int hit = ListView_HitTest(hwnd, &lvhti);
+
+        bool wasFocused = (GetFocus() == hwnd);
+        if (!wasFocused) {
+            SetFocus(hwnd);
+        }
+
+        bool ctrl = (GetKeyState(VK_CONTROL) < 0);
+        bool shift = (GetKeyState(VK_SHIFT) < 0);
+
+        if (hit >= 0) {
+            if (!ctrl && !shift) {
+                UINT state = ListView_GetItemState(hwnd, hit, LVIS_SELECTED);
+                if (!wasFocused || !(state & LVIS_SELECTED) || ListView_GetSelectedCount(hwnd) > 1) {
+                    ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
+                    ListView_SetItemState(hwnd, hit, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                    ListView_EnsureVisible(hwnd, hit, FALSE);
+                    if (pThis->onSelectionChanged && hit < (int)pThis->m_filteredIndices.size()) {
+                        int idx = pThis->m_filteredIndices[hit];
+                        pThis->onSelectionChanged(pThis->m_allItems[idx].fullPath);
+                    }
+                }
+            } else if (ctrl) {
+                UINT state = ListView_GetItemState(hwnd, hit, LVIS_SELECTED);
+                ListView_SetItemState(hwnd, hit, (state & LVIS_SELECTED) ? 0 : LVIS_SELECTED, LVIS_SELECTED);
+                ListView_SetItemState(hwnd, hit, LVIS_FOCUSED, LVIS_FOCUSED);
+                if (pThis->onSelectionChanged && hit < (int)pThis->m_filteredIndices.size()) {
+                    int idx = pThis->m_filteredIndices[hit];
+                    pThis->onSelectionChanged(pThis->m_allItems[idx].fullPath);
+                }
+            }
+        } else {
+            if (!ctrl && !shift) {
+                ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
+            }
+        }
+        break;
+    }
     case WM_LBUTTONDBLCLK: {
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
@@ -961,6 +1288,9 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         break;
     }
     case WM_RBUTTONDOWN: {
+        if (GetFocus() != hwnd) {
+            SetFocus(hwnd);
+        }
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
 
@@ -978,36 +1308,79 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
             ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
         }
 
+        pThis->m_rBtnDownPoint = { x, y };
+        pThis->m_rBtnDownOnItem = (hit >= 0);
         pThis->m_gesture.OnRButtonDown(hwnd, x, y);
         return 0;
     }
     case WM_MOUSEMOVE: {
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
+
+        if ((wParam & MK_RBUTTON) && pThis->m_rBtnDownOnItem) {
+            int dx = abs(x - pThis->m_rBtnDownPoint.x);
+            int dy = abs(y - pThis->m_rBtnDownPoint.y);
+            if (dx > GetSystemMetrics(SM_CXDRAG) || dy > GetSystemMetrics(SM_CYDRAG)) {
+                pThis->m_rBtnDownOnItem = false;
+                pThis->m_gesture.Detach();
+                pThis->StartDragDrop(-1, true);
+                pThis->m_gesture.Attach(hwnd);
+                return 0;
+            }
+        }
+
         bool rDown = (wParam & MK_RBUTTON) != 0;
         if (pThis->m_gesture.OnMouseMove(hwnd, x, y, rDown)) {
             return 0;
         }
         break;
     }
+    case WM_MBUTTONUP: {
+        int x = GET_X_LPARAM(lParam);
+        int y = GET_Y_LPARAM(lParam);
+        LVHITTESTINFO hti = { 0 };
+        hti.pt.x = x;
+        hti.pt.y = y;
+        int hitIndex = ListView_HitTest(hwnd, &hti);
+        if (hitIndex >= 0 && (hti.flags & (LVHT_ONITEM | LVHT_ONITEMICON | LVHT_ONITEMLABEL))) {
+            if (hitIndex < (int)pThis->m_filteredIndices.size()) {
+                int idx = pThis->m_filteredIndices[hitIndex];
+                const auto& item = pThis->m_allItems[idx];
+                if (item.isFolder) {
+                    bool ctrl = (GetKeyState(VK_CONTROL) < 0);
+                    bool shift = (GetKeyState(VK_SHIFT) < 0);
+                    if (shift || ctrl) {
+                        if (pThis->onCustomCommand) pThis->onCustomCommand(CMD_NEOMDIE_OPEN_NEW_TAB, item.fullPath);
+                    } else {
+                        if (pThis->onCustomCommand) pThis->onCustomCommand(CMD_NEOMDIE_OPEN_BG_TAB, item.fullPath);
+                    }
+                    return 0;
+                }
+            }
+        }
+        break;
+    }
     case WM_RBUTTONUP: {
+        pThis->m_rBtnDownOnItem = false;
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
         GestureAction action = GestureAction::None;
         if (pThis->m_gesture.OnRButtonUp(hwnd, x, y, action)) {
             if (action != GestureAction::None) {
-                switch (action) {
-                case GestureAction::NavBack:    pThis->GoBack(); break;
-                case GestureAction::NavForward: pThis->GoForward(); break;
-                case GestureAction::NavUp:      pThis->GoUp(); break;
-                case GestureAction::Refresh:    pThis->Refresh(); break;
-                case GestureAction::CloseTab:
-                case GestureAction::NewTab:
-                    if (pThis->onGestureAction) {
-                        pThis->onGestureAction(action);
+                if (pThis->onGestureAction) {
+                    pThis->onGestureAction(action);
+                } else {
+                    switch (action) {
+                    case GestureAction::NavBack:      pThis->GoBack(); break;
+                    case GestureAction::NavForward:   pThis->GoForward(); break;
+                    case GestureAction::NavUp:        pThis->GoUp(); break;
+                    case GestureAction::Refresh:      pThis->Refresh(); break;
+                    case GestureAction::ScrollTop:    pThis->ScrollToTop(); break;
+                    case GestureAction::ScrollBottom: pThis->ScrollToBottom(); break;
+                    case GestureAction::PageUp:       pThis->ScrollPageUp(); break;
+                    case GestureAction::PageDown:     pThis->ScrollPageDown(); break;
+                    default: break;
                     }
-                    break;
-                default: break;
                 }
             }
             return 0; // Handled gesture movement, suppress context menu
@@ -1018,9 +1391,33 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         pThis->OnItemRightClicked(ptScreen);
         return 0;
     }
+    case WM_SYSKEYDOWN:
     case WM_KEYDOWN: {
         bool ctrl = (GetKeyState(VK_CONTROL) < 0);
         bool shift = (GetKeyState(VK_SHIFT) < 0);
+        bool alt = (GetKeyState(VK_MENU) < 0);
+
+        if (wParam == VK_RETURN && alt) { // Alt + Enter
+            auto sel = pThis->GetSelectedPaths();
+            if (!sel.empty()) {
+                ShellUtils::ShowItemProperties(hwnd, sel[0]);
+            } else {
+                ShellUtils::ShowItemProperties(hwnd, pThis->GetCurrentPath());
+            }
+            return 0;
+        }
+
+        if (wParam == VK_F5) {
+            HWND hTop = GetAncestor(hwnd, GA_ROOT);
+            SendMessageW(hTop, WM_COMMAND, ID_VIEW_REFRESH, 0);
+            return 0;
+        }
+
+        if (wParam == VK_F11) {
+            HWND hTop = GetAncestor(hwnd, GA_ROOT);
+            SendMessageW(hTop, WM_COMMAND, ID_WINDOW_MAXIMIZE, 0);
+            return 0;
+        }
 
         if (ctrl && wParam == 'C') {
             pThis->CopySelected(false);
@@ -1038,16 +1435,9 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
             pThis->StartRename();
             return 0;
         } else if (wParam == VK_RETURN) {
-            if (GetKeyState(VK_MENU) < 0) { // Alt + Enter
-                auto sel = pThis->GetSelectedPaths();
-                if (!sel.empty()) {
-                    ShellUtils::ShowItemProperties(hwnd, sel[0]);
-                }
-            } else {
-                int selected = ListView_GetNextItem(hwnd, -1, LVNI_SELECTED);
-                if (selected != -1) {
-                    pThis->OnItemDoubleClicked(selected);
-                }
+            int selected = ListView_GetNextItem(hwnd, -1, LVNI_SELECTED);
+            if (selected != -1) {
+                pThis->OnItemDoubleClicked(selected);
             }
             return 0;
         } else if (wParam == VK_BACK) {
@@ -1056,6 +1446,20 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         }
         break;
     }
+    case WM_TIMER: {
+        if (wParam == 701 || wParam == 702) {
+            KillTimer(hwnd, wParam);
+            pThis->Refresh();
+            return 0;
+        }
+        break;
+    }
+    case FileListView::WM_NOTIFY_DIR_CHANGED:
+        pThis->Refresh();
+        return 0;
+    case FileListView::WM_NOTIFY_FOLDER_SIZE:
+        pThis->OnFolderSizeReady((FolderSizeResult*)lParam);
+        return 0;
     case FileListView::WM_SEARCH_BATCH: {
         auto* pBatch = (std::vector<NeoShellItem>*)lParam;
         if (pBatch) {
@@ -1085,6 +1489,16 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
         NMHDR* pnm = (NMHDR*)lParam;
         if (pnm->hwndFrom == pThis->m_hwnd) {
             switch (pnm->code) {
+            case LVN_BEGINDRAG: {
+                NMLISTVIEW* pnmv = (NMLISTVIEW*)lParam;
+                pThis->StartDragDrop(pnmv->iItem, false);
+                return 0;
+            }
+            case LVN_BEGINRDRAG: {
+                NMLISTVIEW* pnmv = (NMLISTVIEW*)lParam;
+                pThis->StartDragDrop(pnmv->iItem, true);
+                return 0;
+            }
             case LVN_GETDISPINFOW: {
                 NMLVDISPINFOW* pDisp = (NMLVDISPINFOW*)lParam;
                 int row = pDisp->item.iItem;
@@ -1192,35 +1606,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     int row = (int)pcd->nmcd.dwItemSpec;
                     bool isSelected = (pcd->nmcd.uItemState & CDIS_SELECTED) != 0;
 
-                    // 1. Zebra striping tint on odd rows
-                    if (Config::Get().zebraStriping && !isSelected && (row % 2 == 1) && row >= 0) {
-                        RECT rcItem;
-                        ListView_GetItemRect(pThis->m_hwnd, row, &rcItem, LVIR_BOUNDS);
-                        int w = rcItem.right - rcItem.left;
-                        int h = rcItem.bottom - rcItem.top;
-                        if (w > 0 && h > 0) {
-                            HDC hdcMem = CreateCompatibleDC(pcd->nmcd.hdc);
-                            HBITMAP hbmMem = CreateCompatibleBitmap(pcd->nmcd.hdc, w, h);
-                            HGDIOBJ oldBm = SelectObject(hdcMem, hbmMem);
 
-                            COLORREF tintClr = Theme::Get().IsDarkMode() ? RGB(255, 255, 255) : RGB(10, 80, 200);
-                            HBRUSH hbrTint = CreateSolidBrush(tintClr);
-                            RECT rcLocal = { 0, 0, w, h };
-                            FillRect(hdcMem, &rcLocal, hbrTint);
-                            DeleteObject(hbrTint);
-
-                            BLENDFUNCTION bf = { 0 };
-                            bf.BlendOp = AC_SRC_OVER;
-                            bf.SourceConstantAlpha = Theme::Get().IsDarkMode() ? 18 : 22;
-
-                            AlphaBlend(pcd->nmcd.hdc, rcItem.left, rcItem.top, w, h,
-                                       hdcMem, 0, 0, w, h, bf);
-
-                            SelectObject(hdcMem, oldBm);
-                            DeleteObject(hbmMem);
-                            DeleteDC(hdcMem);
-                        }
-                    }
 
                     // 2. Grid lines
                     if (Config::Get().showGridLines && row >= 0) {
@@ -1246,21 +1632,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                 case CDDS_SUBITEM | CDDS_ITEMPREPAINT: {
                     int row = (int)pcd->nmcd.dwItemSpec;
                     bool isSelected = (pcd->nmcd.uItemState & CDIS_SELECTED) != 0;
-                    if (Config::Get().zebraStriping && !isSelected && (row % 2 == 1)) {
-                        COLORREF zebraClr = Theme::Get().IsDarkMode() ? RGB(38, 42, 48) : RGB(238, 243, 250);
-                        pcd->clrTextBk = zebraClr;
-                        pcd->clrText = Theme::Get().ClrTextPrimary();
-                        RECT rcCell;
-                        if (pcd->iSubItem == 0) {
-                            ListView_GetItemRect(pThis->m_hwnd, row, &rcCell, LVIR_BOUNDS);
-                            rcCell.right = rcCell.left + ListView_GetColumnWidth(pThis->m_hwnd, 0);
-                        } else {
-                            ListView_GetSubItemRect(pThis->m_hwnd, row, pcd->iSubItem, LVIR_BOUNDS, &rcCell);
-                        }
-                        HBRUSH hZebra = CreateSolidBrush(zebraClr);
-                        FillRect(pcd->nmcd.hdc, &rcCell, hZebra);
-                        DeleteObject(hZebra);
-                    }
+
                     if (pcd->iSubItem == 3 && row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
                         int idx = pThis->m_filteredIndices[row];
                         const auto& item = pThis->m_allItems[idx];
@@ -1377,12 +1749,11 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
     }
     case FileListView::WM_NOTIFY_DIR_CHANGED:
         pThis->Refresh();
-        return 0;
+        break;
 
     case FileListView::WM_NOTIFY_FOLDER_SIZE:
         pThis->OnFolderSizeReady((FolderSizeResult*)lParam);
-        return 0;
-
+        break;
     case FileListView::WM_SEARCH_BATCH: {
         auto* pBatch = (std::vector<NeoShellItem>*)lParam;
         if (pBatch) {
@@ -1403,4 +1774,39 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
     }
 
     return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
+void FileListView::StartDragDrop(int itemIndex, bool isRightClick) {
+    if (m_currentPath.empty() || m_currentPath == L"This PC" || m_currentPath == L"此电脑") {
+        return;
+    }
+
+    if (itemIndex >= 0 && itemIndex < (int)m_filteredIndices.size()) {
+        UINT state = ListView_GetItemState(m_hwnd, itemIndex, LVIS_SELECTED);
+        if (!(state & LVIS_SELECTED)) {
+            ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED);
+            ListView_SetItemState(m_hwnd, itemIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        }
+    }
+
+    std::vector<std::wstring> sel = GetSelectedPaths();
+    if (sel.empty() && itemIndex >= 0 && itemIndex < (int)m_filteredIndices.size()) {
+        int idx = m_filteredIndices[itemIndex];
+        sel.push_back(m_allItems[idx].fullPath);
+    }
+
+    std::vector<std::wstring> validPaths;
+    for (const auto& p : sel) {
+        if (PathFileExistsW(p.c_str())) {
+            validPaths.push_back(p);
+        }
+    }
+    if (validPaths.empty()) return;
+
+    DWORD dwEffect = 0;
+    HRESULT hr = ShellUtils::DoFileDragDrop(m_hwnd, m_currentPath, validPaths, isRightClick, &dwEffect);
+    if (SUCCEEDED(hr) && dwEffect == DROPEFFECT_MOVE) {
+        Refresh();
+        SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, m_currentPath.c_str(), nullptr);
+    }
 }

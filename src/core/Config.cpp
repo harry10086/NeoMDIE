@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "GestureEngine.h"
 
 Config& Config::Get() {
     static Config instance;
@@ -21,6 +22,12 @@ Config::Config() {
             m_iniPath = dir + L"\\NeoMDIE.ini";
         }
     } else {
+        LARGE_INTEGER size;
+        if (GetFileSizeEx(hFile, &size) && size.QuadPart == 0) {
+            unsigned char bom[2] = { 0xFF, 0xFE };
+            DWORD written = 0;
+            WriteFile(hFile, bom, 2, &written, nullptr);
+        }
         CloseHandle(hFile);
     }
 }
@@ -98,14 +105,13 @@ void Config::Load() {
         }
     }
 
-    if (sessionTabs.empty()) {
-        // Default to Computer / User profile
-        wchar_t userProfile[MAX_PATH];
-        if (GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH) > 0) {
-            sessionTabs.push_back(userProfile);
-        } else {
-            sessionTabs.push_back(L"C:\\");
-        }
+    wchar_t userProfile[MAX_PATH] = { 0 };
+    GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH);
+
+    if (sessionTabs.empty() || (sessionTabs.size() == 1 && userProfile[0] && _wcsicmp(sessionTabs[0].c_str(), userProfile) == 0)) {
+        // Default to "This PC" / My Computer, matching standard Windows Explorer behavior
+        sessionTabs.clear();
+        sessionTabs.push_back(L"This PC");
     }
 
     // Gestures
@@ -125,24 +131,36 @@ void Config::Load() {
             int vAct = GetPrivateProfileIntW(secGestures, kAct, 0, m_iniPath.c_str());
 
             if (wcslen(vCode) > 0) {
-                gestures.push_back({ Util::WideToUtf8(vCode), vAct, vName });
+                std::wstring nameStr = vName;
+                if (nameStr == L"滚动到列表首端") nameStr = L"滚动到列表顶部";
+                else if (nameStr == L"滚动到列表末端") nameStr = L"滚动到列表底部";
+                std::string codeStr = Util::WideToUtf8(vCode);
+                if (codeStr == "LDR" && vAct == (int)GestureAction::ScrollTop) codeStr = "RU";
+                else if (codeStr == "RDL" && vAct == (int)GestureAction::ScrollBottom) codeStr = "RD";
+                else if (codeStr == "LUR" && vAct == (int)GestureAction::PageUp) codeStr = "LU";
+                else if (codeStr == "RUL" && vAct == (int)GestureAction::PageDown) codeStr = "LD";
+                gestures.push_back({ codeStr, vAct, nameStr });
             }
         }
     }
-    if (gestures.empty()) {
+    bool gestCorrupted = false;
+    for (const auto& g : gestures) {
+        if (g.name.length() <= 1) { gestCorrupted = true; break; }
+    }
+    if (gestures.empty() || gestCorrupted) {
         gestures = {
-            { "L", 1, L"后退" },
-            { "R", 2, L"前进" },
-            { "U", 3, L"向上一级" },
-            { "D", 4, L"关闭标签页" },
-            { "UD", 6, L"刷新" },
-            { "DR", 5, L"新建标签页" },
-            { "UL", 7, L"复制标签页" },
-            { "UR", 8, L"切换目录树" },
-            { "LDR", 13, L"滚动到列表首端" },
-            { "RDL", 14, L"滚动到列表末端" },
-            { "LUR", 15, L"向上翻页" },
-            { "RUL", 16, L"向下翻页" }
+            { "L", (int)GestureAction::NavBack, L"后退" },
+            { "R", (int)GestureAction::NavForward, L"前进" },
+            { "U", (int)GestureAction::NavUp, L"向上一级" },
+            { "D", (int)GestureAction::Refresh, L"刷新" },
+            { "UD", (int)GestureAction::NewTab, L"新建标签页" },
+            { "DR", (int)GestureAction::CloseTab, L"关闭当前标签页" },
+            { "UL", (int)GestureAction::ToggleTree, L"显示/隐藏侧边栏目录树" },
+            { "UR", (int)GestureAction::TogglePreview, L"显示/隐藏快速预览窗格" },
+            { "RU", (int)GestureAction::ScrollTop, L"滚动到列表顶部" },
+            { "RD", (int)GestureAction::ScrollBottom, L"滚动到列表底部" },
+            { "LU", (int)GestureAction::PageUp, L"向上翻页" },
+            { "LD", (int)GestureAction::PageDown, L"向下翻页" }
         };
     }
 
@@ -170,6 +188,40 @@ void Config::Load() {
                 shortcuts.push_back({ vName, vKey, vShift, vCtrl, vAlt });
             }
         }
+    }
+    bool scCorrupted = false;
+    for (const auto& sc : shortcuts) {
+        if (sc.name.length() <= 1) { scCorrupted = true; break; }
+    }
+    if (shortcuts.empty() || scCorrupted) {
+        shortcuts = {
+            { L"新建标签页", L"T", false, true, false },
+            { L"关闭当前标签页", L"W", false, true, false },
+            { L"切换到下一个标签页", L"Tab", false, true, false },
+            { L"切换到上一个标签页", L"Tab", true, true, false },
+            { L"新建窗口", L"N", false, true, false },
+            { L"后退", L"Left", false, false, true },
+            { L"前进", L"Right", false, false, true },
+            { L"向上一级", L"Up", false, false, true },
+            { L"刷新", L"F5", false, false, false },
+            { L"聚焦到地址栏", L"D", false, false, true },
+            { L"聚焦到搜索过滤栏", L"F", false, true, false },
+            { L"最大化/还原当前栏", L"F11", false, false, false },
+            { L"单栏模式", L"1", true, true, false },
+            { L"左右双栏", L"2", true, true, false },
+            { L"上下双栏", L"3", true, true, false },
+            { L"四分栏模式", L"4", true, true, false },
+            { L"滚动到列表顶部", L"Home", false, false, false },
+            { L"滚动到列表底部", L"End", false, false, false },
+            { L"向上翻页", L"PageUp", false, false, false },
+            { L"向下翻页", L"PageDown", false, false, false },
+            { L"全选", L"A", false, true, false },
+            { L"复制选中项", L"C", false, true, false },
+            { L"剪切选中项", L"X", false, true, false },
+            { L"粘贴", L"V", false, true, false },
+            { L"新建文件夹", L"N", true, true, false },
+            { L"属性", L"Enter", false, false, true }
+        };
     }
 }
 

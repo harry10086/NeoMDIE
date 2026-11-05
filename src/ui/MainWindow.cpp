@@ -43,7 +43,7 @@ MainWindow::~MainWindow() {
     if (m_hAccel) DestroyAcceleratorTable(m_hAccel);
 }
 
-HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
+HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& initialPath) {
     m_hInstance = hInstance;
     WNDCLASSEXW wc = { sizeof(wc) };
     wc.lpfnWndProc = MainWindow::WndProc;
@@ -64,6 +64,20 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
     m_treeWidth = cfg.treeWidth;
     m_previewVisible = cfg.previewEnabled;
     m_previewWidth = cfg.previewWidth;
+
+    // Ensure restored window size is sane (not taking entire screen)
+    HMONITOR hPrimaryMon = MonitorFromWindow(nullptr, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO pmi = { sizeof(pmi) };
+    if (GetMonitorInfoW(hPrimaryMon, &pmi)) {
+        int workW = pmi.rcWork.right - pmi.rcWork.left;
+        int workH = pmi.rcWork.bottom - pmi.rcWork.top;
+        if (cfg.window.width >= workW || cfg.window.height >= workH || cfg.window.width <= 200 || cfg.window.height <= 200) {
+            cfg.window.width = (workW * 4) / 5;
+            cfg.window.height = (workH * 4) / 5;
+            cfg.window.x = pmi.rcWork.left + (workW - cfg.window.width) / 2;
+            cfg.window.y = pmi.rcWork.top + (workH - cfg.window.height) / 2;
+        }
+    }
 
     m_hwnd = CreateWindowExW(
         0, MAINWINDOW_CLASS, L"NeoMDIE",
@@ -114,19 +128,23 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
         CoUninitialize();
     }).detach();
 
-    std::wstring cmdPath;
-    if (__argc > 1 && __wargv && __wargv[1]) {
+    std::wstring cmdPath = initialPath;
+    if (cmdPath.empty() && __argc > 1 && __wargv && __wargv[1]) {
         std::wstring arg = __wargv[1];
-        if (arg.length() >= 2 && arg.front() == L'"' && arg.back() == L'"') {
-            arg = arg.substr(1, arg.length() - 2);
-        }
-        if (PathFileExistsW(arg.c_str())) {
+        while (!arg.empty() && (arg.back() == L'"' || arg.back() == L' ')) arg.pop_back();
+        while (!arg.empty() && arg.front() == L'"') arg.erase(arg.begin());
+        if (arg.length() == 2 && arg[1] == L':') arg += L"\\";
+        if (PathFileExistsW(arg.c_str()) || arg == L"此电脑" || arg == L"This PC") {
             cmdPath = arg;
         }
     }
 
     if (!cmdPath.empty()) {
         m_tabBar.AddTab(cmdPath, true);
+        FileListView* activePane = m_multiPane.GetActivePane();
+        if (activePane) {
+            activePane->NavigateTo(cmdPath, false);
+        }
     } else {
         if (cfg.restoreTabsOnStartup) {
             for (const auto& tabPath : cfg.sessionTabs) {
@@ -139,7 +157,13 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
             int act = std::clamp(cfg.activeTabIndex, 0, m_tabBar.GetTabCount() - 1);
             m_tabBar.SetActiveTab(act);
         }
+        std::wstring activePath = m_tabBar.GetTabPath(m_tabBar.GetActiveIndex());
+        FileListView* activePane = m_multiPane.GetActivePane();
+        if (activePane) {
+            activePane->NavigateTo(activePath, false);
+        }
     }
+    m_currentTabIndex = m_tabBar.GetActiveIndex();
     std::wstring activePath = m_tabBar.GetTabPath(m_tabBar.GetActiveIndex());
     UpdateWindowTitle(activePath);
 
@@ -174,6 +198,7 @@ void MainWindow::UpdateWindowTitle(const std::wstring& path) {
 
 void MainWindow::ApplyTheme() {
     Theme::Get().ApplyToWindow(m_hwnd);
+    m_multiPane.ApplyTheme();
     for (int p = 0; p < 4; ++p) {
         m_multiPane.GetPane(p).ApplyTheme();
     }
@@ -185,6 +210,46 @@ void MainWindow::ApplyTheme() {
     InvalidateRect(m_breadcrumb.GetHwnd(), nullptr, TRUE);
     InvalidateRect(m_hwnd, nullptr, TRUE);
     DrawMenuBar(m_hwnd);
+}
+
+void MainWindow::OnSettingsApplied() {
+    Config& cfg = Config::Get();
+    if (cfg.themeMode == 0) {
+        Theme::Get().SetDarkMode(false);
+    } else if (cfg.themeMode == 1) {
+        Theme::Get().SetDarkMode(true);
+    } else {
+        Theme::Get().Initialize();
+    }
+    ApplyTheme();
+    BuildMenu();
+    DrawMenuBar(m_hwnd);
+
+    m_treeVisible = cfg.showTree;
+    ShowWindow(m_tree.GetHwnd(), m_treeVisible ? SW_SHOW : SW_HIDE);
+
+    m_previewVisible = cfg.previewEnabled;
+    ShowWindow(m_preview.GetHwnd(), m_previewVisible ? SW_SHOW : SW_HIDE);
+    if (m_previewVisible) {
+        FileListView* active = m_multiPane.GetActivePane();
+        if (active) {
+            auto sel = active->GetSelectedPaths();
+            if (!sel.empty()) {
+                m_preview.SetFile(sel[0]);
+            }
+        }
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        m_multiPane.GetPane(i).SetCalcFolderSize(cfg.calcFolderSize);
+    }
+
+    RebuildAccelerators();
+    if (ShellUtils::IsExplorerReplaced()) {
+        RegisterHotKey(m_hwnd, 9001, MOD_WIN, 'E');
+    }
+    UpdateLanguageUI();
+    LayoutAll();
 }
 
 void MainWindow::AddToHistory(const std::wstring& path) {
@@ -247,7 +312,6 @@ void MainWindow::BuildMenu() {
     HMENU hNewSubmenu = CreatePopupMenu();
     AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FOLDER, isZh ? L"文件夹(&F)\tCtrl+Shift+N" : L"Folder(&F)\tCtrl+Shift+N");
     AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FILE, isZh ? L"文本文档(&T)" : L"Text Document(&T)");
-    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_MD, isZh ? L"Markdown 文档(&M)" : L"Markdown Document(&M)");
     AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_MD, isZh ? L"Markdown 文档(&M)" : L"Markdown Document(&M)");
     AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hNewSubmenu, isZh ? L"新建(&W)" : L"New(&W)");
 
@@ -380,10 +444,10 @@ void MainWindow::BuildMenu() {
                 ID_VIEW_CALC_FOLDER_SIZE, isZh ? L"计算文件夹大小(&C)" : L"Calculate Folder Sizes(&C)");
         // 滚动 (X)
     HMENU hScrollSubmenu = CreatePopupMenu();
-    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_TOP, isZh ? L"列表开头(&T)\tHome" : L"Top of List(&T)\tHome");
-    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_PAGEUP, isZh ? L"此页开头(&U)\tPage Up" : L"Top of Page(&U)\tPage Up");
-    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_PAGEDOWN, isZh ? L"此页结尾(&D)\tPage Down" : L"Bottom of Page(&D)\tPage Down");
-    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_BOTTOM, isZh ? L"列表结尾(&B)\tEnd" : L"Bottom of List(&B)\tEnd");
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_TOP, isZh ? L"列表顶部(&T)\tHome" : L"List Top(&T)\tHome");
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_BOTTOM, isZh ? L"列表底部(&B)\tEnd" : L"List Bottom(&B)\tEnd");
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_PAGEUP, isZh ? L"向上翻页(&U)\tPage Up" : L"Page Up(&U)\tPage Up");
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_PAGEDOWN, isZh ? L"向下翻页(&D)\tPage Down" : L"Page Down(&D)\tPage Down");
     AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hScrollSubmenu, isZh ? L"滚动(&X)" : L"Scroll(&X)");
     AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hViewMenu, MF_STRING, ID_VIEW_REFRESH, isZh ? L"刷新(&R)\tF5" : L"Refresh(&R)\tF5");
@@ -443,7 +507,6 @@ void MainWindow::BuildMenu() {
     // 窗口操作 (W)
     HMENU hWinOpsSubmenu = CreatePopupMenu();
     AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAXIMIZE, isZh ? L"当前窗格最大化(&M)" : L"Maximize Pane(&M)");
-    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MINIMIZE, isZh ? L"当前窗格最小化(&I)" : L"Minimize Pane(&I)");
     AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_CLOSE, isZh ? L"关闭当前窗格(&C)" : L"Close Pane(&C)");
     AppendMenuW(hWinOpsSubmenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAIN_MAXIMIZE, isZh ? L"主窗口最大化(&A)" : L"Maximize Main Window(&A)");
@@ -528,7 +591,6 @@ void MainWindow::CreateControls() {
     m_hwndBtnForward = createBtn(L"\uE72A", IDC_BTN_FORWARD);
     m_hwndBtnUp      = createBtn(L"\uE74A", IDC_BTN_UP);
     m_hwndBtnRefresh = createBtn(L"\uE72C", IDC_BTN_REFRESH);
-    m_hwndBtnNewTab  = createBtn(L"\uE710", IDC_BTN_NEWTAB);
     m_hwndBtnTree    = createBtn(L"\uE8A7", IDC_BTN_TREE);
     m_hwndBtnSplit   = createBtn(L"\uE740", IDC_BTN_SPLIT);
     m_hwndBtnPreview = createBtn(L"\uE896", IDC_BTN_PREVIEW);
@@ -556,7 +618,6 @@ void MainWindow::CreateControls() {
     addTip(m_hwndBtnForward, isZh ? L"前进 (Alt+Right)" : L"Forward (Alt+Right)");
     addTip(m_hwndBtnUp, isZh ? L"向上一级 (Backspace / Alt+Up)" : L"Up (Backspace / Alt+Up)");
     addTip(m_hwndBtnRefresh, isZh ? L"刷新 (F5)" : L"Refresh (F5)");
-    addTip(m_hwndBtnNewTab, isZh ? L"新建标签页 (Ctrl+T)" : L"New Tab (Ctrl+T)");
     addTip(m_hwndBtnTree, isZh ? L"文件夹目录树 (F8)" : L"Directory Tree (F8)");
     addTip(m_hwndBtnSplit, isZh ? L"多栏布局 (F4)" : L"Split View (F4)");
     addTip(m_hwndBtnPreview, isZh ? L"快速预览 (Alt+P)" : L"Preview Pane (Alt+P)");
@@ -598,6 +659,9 @@ void MainWindow::CreateControls() {
     m_linksBar.onOpenNewTab = [this](const std::wstring& path) {
         m_tabBar.AddTab(path, true);
     };
+    m_linksBar.onOpenBgTab = [this](const std::wstring& path) {
+        m_tabBar.AddTab(path, false);
+    };
     m_linksBar.onOpenSplit = [this](const std::wstring& path) {
         m_multiPane.SetLayout(PaneLayout::DualVertical);
         m_multiPane.GetPane(1).NavigateTo(path);
@@ -611,11 +675,60 @@ void MainWindow::CreateControls() {
 
     // Wire up tab bar callbacks
     m_tabBar.onTabChanged = [this](int idx) {
-        std::wstring path = m_tabBar.GetTabPath(idx);
-        FileListView* activeView = m_multiPane.GetActivePane();
-        if (activeView) {
-            activeView->NavigateTo(path);
+        if (m_currentTabIndex >= 0 && m_currentTabIndex < m_tabBar.GetTabCount() && m_currentTabIndex != idx) {
+            auto& oldTab = m_tabBar.GetTabItemRef(m_currentTabIndex);
+            oldTab.layout = (int)m_multiPane.GetLayout();
+            oldTab.activePaneIndex = m_multiPane.GetActiveIndex();
+            oldTab.panePaths.clear();
+            oldTab.paneHistories.clear();
+            oldTab.paneSelectedPaths.clear();
+            int pCount = m_multiPane.GetPaneCount();
+            for (int p = 0; p < pCount; ++p) {
+                oldTab.panePaths.push_back(m_multiPane.GetPane(p).GetCurrentPath());
+                PaneHistory ph;
+                ph.history = m_multiPane.GetPane(p).GetHistory();
+                ph.historyIndex = m_multiPane.GetPane(p).GetHistoryIndex();
+                oldTab.paneHistories.push_back(ph);
+                oldTab.paneSelectedPaths.push_back(m_multiPane.GetPane(p).GetSelectedPaths());
+            }
+            if (!oldTab.panePaths.empty()) {
+                int aIdx = std::clamp(oldTab.activePaneIndex, 0, (int)oldTab.panePaths.size() - 1);
+                oldTab.path = oldTab.panePaths[aIdx];
+            }
         }
+
+        m_currentTabIndex = idx;
+
+        const auto& newTab = m_tabBar.GetTabItem(idx);
+        m_multiPane.SetLayout((PaneLayout)newTab.layout);
+        if (newTab.panePaths.empty()) {
+            std::wstring fallback = newTab.path.empty() ? L"This PC" : newTab.path;
+            m_multiPane.GetPane(0).NavigateTo(fallback, false);
+            m_multiPane.GetPane(0).ClearHistory(fallback);
+            m_multiPane.GetPane(0).ClearSelection();
+        } else {
+            for (size_t p = 0; p < newTab.panePaths.size() && p < 4; ++p) {
+                if (_wcsicmp(m_multiPane.GetPane((int)p).GetCurrentPath().c_str(), newTab.panePaths[p].c_str()) != 0) {
+                    m_multiPane.GetPane((int)p).NavigateTo(newTab.panePaths[p], false);
+                }
+                if (p < newTab.paneHistories.size() && !newTab.paneHistories[p].history.empty()) {
+                    m_multiPane.GetPane((int)p).SetHistory(newTab.paneHistories[p].history, newTab.paneHistories[p].historyIndex);
+                } else {
+                    m_multiPane.GetPane((int)p).ClearHistory(newTab.panePaths[p]);
+                }
+                if (p < newTab.paneSelectedPaths.size() && !newTab.paneSelectedPaths[p].empty()) {
+                    m_multiPane.GetPane((int)p).SetSelectedPaths(newTab.paneSelectedPaths[p]);
+                } else {
+                    m_multiPane.GetPane((int)p).ClearSelection();
+                }
+            }
+        }
+        m_multiPane.SetActivePane(newTab.activePaneIndex, true);
+        SetFocus(m_multiPane.GetPane(newTab.activePaneIndex).GetHwnd());
+
+        FileListView* activeView = m_multiPane.GetActivePane();
+        std::wstring path = activeView ? activeView->GetCurrentPath() : m_tabBar.GetTabPath(idx);
+
         m_breadcrumb.SetPath(path);
         m_filterBar.SetText(activeView ? activeView->GetFilterQuery() : L"");
         if (m_treeVisible && Config::Get().autoExpandTree) {
@@ -624,9 +737,23 @@ void MainWindow::CreateControls() {
         UpdateNavButtons();
         AddToHistory(path);
         UpdateWindowTitle(path);
+        LayoutAll();
+        if (m_previewVisible && activeView) {
+            auto sel = activeView->GetSelectedPaths();
+            if (!sel.empty()) {
+                m_preview.SetFile(sel[0]);
+            } else {
+                m_preview.Clear();
+            }
+        }
     };
 
-    m_tabBar.onTabClosed = [this](int) {
+    m_tabBar.onTabClosed = [this](int idx) {
+        if (m_currentTabIndex == idx) {
+            m_currentTabIndex = -1;
+        } else if (m_currentTabIndex > idx) {
+            m_currentTabIndex--;
+        }
         int act = m_tabBar.GetActiveIndex();
         if (act >= 0) {
             UpdateWindowTitle(m_tabBar.GetTabPath(act));
@@ -647,8 +774,10 @@ void MainWindow::CreateControls() {
     m_breadcrumb.onPathNavigated = [this](const std::wstring& path) {
         ActionTrigger trigger = GetCurrentTrigger();
         WindowAction act = Config::Get().actionAddress.ResolveAction(trigger);
-        if (act == WindowAction::NewTab || act == WindowAction::BgTab) {
+        if (act == WindowAction::NewTab) {
             m_tabBar.AddTab(path, true);
+        } else if (act == WindowAction::BgTab) {
+            m_tabBar.AddTab(path, false);
         } else if (act == WindowAction::OtherPane && m_multiPane.GetPaneCount() > 1) {
             int otherIdx = (m_multiPane.GetActiveIndex() + 1) % m_multiPane.GetPaneCount();
             m_multiPane.GetPane(otherIdx).NavigateTo(path);
@@ -728,10 +857,10 @@ void MainWindow::CreateControls() {
         case GestureAction::NextTab: m_tabBar.NextTab(); break;
         case GestureAction::PrevTab: m_tabBar.PrevTab(); break;
         case GestureAction::CloseOtherTabs: OnCommand(ID_FILE_CLOSE_OTHER_TABS); break;
-        case GestureAction::LayoutSingle: m_multiPane.SetLayout(PaneLayout::Single); break;
-        case GestureAction::Layout2H:     m_multiPane.SetLayout(PaneLayout::DualHorizontal); break;
-        case GestureAction::Layout2V:     m_multiPane.SetLayout(PaneLayout::DualVertical); break;
-        case GestureAction::Layout4Grid:  m_multiPane.SetLayout(PaneLayout::Quad); break;
+        case GestureAction::LayoutSingle: SetLayout(PaneLayout::Single); break;
+        case GestureAction::Layout2H:     SetLayout(PaneLayout::DualHorizontal); break;
+        case GestureAction::Layout2V:     SetLayout(PaneLayout::DualVertical); break;
+        case GestureAction::Layout4Grid:  SetLayout(PaneLayout::Quad); break;
         case GestureAction::CopyPath:     if (activeView) ShellUtils::CopyToClipboard(activeView->GetCurrentPath()); break;
         case GestureAction::Delete:       OnCommand(ID_EDIT_DELETE); break;
         case GestureAction::Rename:       OnCommand(ID_EDIT_RENAME); break;
@@ -739,17 +868,39 @@ void MainWindow::CreateControls() {
         case GestureAction::ToggleHidden: OnCommand(ID_VIEW_SHOW_HIDDEN); break;
         case GestureAction::OpenSettings: OnCommand(ID_TOOLS_SETTINGS); break;
         case GestureAction::InvertSelection: OnCommand(ID_EDIT_INVERT_SELECTION); break;
-        default: break;
+        default: {
+            int intAct = static_cast<int>(act);
+            if (intAct >= ID_SCRIPT_COMMAND_START && intAct <= ID_SCRIPT_COMMAND_END) {
+                OnCommand((UINT)intAct);
+            }
+            break;
+        }
         }
     };
 
-    m_multiPane.onCustomCommand = [this](int cmd, const std::wstring& path) {
+    auto handleCustomCommand = [this](int cmd, const std::wstring& path) {
         if (cmd == CMD_NEOMDIE_OPEN_NEW_TAB) {
             m_tabBar.AddTab(path, true);
+        } else if (cmd == CMD_NEOMDIE_OPEN_BG_TAB) {
+            m_tabBar.AddTab(path, false);
         } else if (cmd == CMD_NEOMDIE_OPEN_SPLIT) {
-            m_multiPane.SetLayout(PaneLayout::DualVertical);
-            m_multiPane.GetPane(1).NavigateTo(path);
-            m_multiPane.SetActivePane(1);
+            int count = m_multiPane.GetPaneCount();
+            if (count == 1) {
+                m_multiPane.SetLayout(PaneLayout::DualVertical);
+                m_multiPane.GetPane(1).NavigateTo(path);
+                m_multiPane.SetActivePane(1);
+            } else if (count == 2) {
+                m_multiPane.SetLayout(PaneLayout::ThreeLeft);
+                m_multiPane.GetPane(2).NavigateTo(path);
+                m_multiPane.SetActivePane(2);
+            } else if (count == 3) {
+                m_multiPane.SetLayout(PaneLayout::Quad);
+                m_multiPane.GetPane(3).NavigateTo(path);
+                m_multiPane.SetActivePane(3);
+            } else {
+                auto* active = m_multiPane.GetActivePane();
+                if (active) active->NavigateTo(path);
+            }
         } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
             m_linksBar.AddLink(L"", path);
         } else if (cmd == CMD_NEOMDIE_SETTINGS) {
@@ -757,75 +908,8 @@ void MainWindow::CreateControls() {
         }
     };
 
-    m_tree.onCustomCommand = [this](int cmd, const std::wstring& path) {
-        if (cmd == CMD_NEOMDIE_OPEN_NEW_TAB) {
-            m_tabBar.AddTab(path, true);
-        } else if (cmd == CMD_NEOMDIE_OPEN_SPLIT) {
-            m_multiPane.SetLayout(PaneLayout::DualVertical);
-            m_multiPane.GetPane(1).NavigateTo(path);
-            m_multiPane.SetActivePane(1);
-        } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
-            m_linksBar.AddLink(L"", path);
-        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
-            OnCommand(ID_TOOLS_SETTINGS);
-        }
-    };
-
-    m_tree.onCustomCommand = [this](int cmd, const std::wstring& path) {
-        if (cmd == CMD_NEOMDIE_OPEN_NEW_TAB) {
-            m_tabBar.AddTab(path, true);
-        } else if (cmd == CMD_NEOMDIE_OPEN_SPLIT) {
-            m_multiPane.SetLayout(PaneLayout::DualVertical);
-            m_multiPane.GetPane(1).NavigateTo(path);
-            m_multiPane.SetActivePane(1);
-        } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
-            m_linksBar.AddLink(L"", path);
-        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
-            OnCommand(ID_TOOLS_SETTINGS);
-        }
-    };
-
-    m_tree.onCustomCommand = [this](int cmd, const std::wstring& path) {
-        if (cmd == CMD_NEOMDIE_OPEN_NEW_TAB) {
-            m_tabBar.AddTab(path, true);
-        } else if (cmd == CMD_NEOMDIE_OPEN_SPLIT) {
-            m_multiPane.SetLayout(PaneLayout::DualVertical);
-            m_multiPane.GetPane(1).NavigateTo(path);
-            m_multiPane.SetActivePane(1);
-        } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
-            m_linksBar.AddLink(L"", path);
-        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
-            OnCommand(ID_TOOLS_SETTINGS);
-        }
-    };
-
-    m_tree.onCustomCommand = [this](int cmd, const std::wstring& path) {
-        if (cmd == CMD_NEOMDIE_OPEN_NEW_TAB) {
-            m_tabBar.AddTab(path, true);
-        } else if (cmd == CMD_NEOMDIE_OPEN_SPLIT) {
-            m_multiPane.SetLayout(PaneLayout::DualVertical);
-            m_multiPane.GetPane(1).NavigateTo(path);
-            m_multiPane.SetActivePane(1);
-        } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
-            m_linksBar.AddLink(L"", path);
-        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
-            OnCommand(ID_TOOLS_SETTINGS);
-        }
-    };
-
-    m_tree.onCustomCommand = [this](int cmd, const std::wstring& path) {
-        if (cmd == CMD_NEOMDIE_OPEN_NEW_TAB) {
-            m_tabBar.AddTab(path, true);
-        } else if (cmd == CMD_NEOMDIE_OPEN_SPLIT) {
-            m_multiPane.SetLayout(PaneLayout::DualVertical);
-            m_multiPane.GetPane(1).NavigateTo(path);
-            m_multiPane.SetActivePane(1);
-        } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
-            m_linksBar.AddLink(L"", path);
-        } else if (cmd == CMD_NEOMDIE_SETTINGS) {
-            OnCommand(ID_TOOLS_SETTINGS);
-        }
-    };
+    m_multiPane.onCustomCommand = handleCustomCommand;
+    m_tree.onCustomCommand = handleCustomCommand;
 
     auto setupViewCallbacks = [this](FileListView& view, int paneIdx) {
         view.onPathChanged = [this, paneIdx](const std::wstring& p) {
@@ -935,7 +1019,6 @@ void MainWindow::LayoutAll() {
     ShowWindow(m_hwndBtnForward, swStd);
     ShowWindow(m_hwndBtnUp, swStd);
     ShowWindow(m_hwndBtnRefresh, swStd);
-    ShowWindow(m_hwndBtnNewTab, swStd);
     ShowWindow(m_hwndBtnTree, swStd);
 
     if (cfg.showToolbarStandard && showTB) {
@@ -946,8 +1029,6 @@ void MainWindow::LayoutAll() {
         MoveWindow(m_hwndBtnUp, curX, barY, btnW, btnH, TRUE);
         curX += btnW + spacing;
         MoveWindow(m_hwndBtnRefresh, curX, barY, btnW, btnH, TRUE);
-        curX += btnW + spacing;
-        MoveWindow(m_hwndBtnNewTab, curX, barY, btnW, btnH, TRUE);
         curX += btnW + spacing * 2;
 
         MoveWindow(m_hwndBtnTree, curX, barY, btnW, btnH, TRUE);
@@ -1040,6 +1121,31 @@ void MainWindow::LayoutAll() {
     }
 
     // 3. Center Content Area (Directory Tree + Split Container + Preview Pane)
+    LayoutCenterArea();
+
+    // 4. Status Bar
+    if (m_hwndStatusBar) {
+        SendMessageW(m_hwndStatusBar, WM_SIZE, 0, 0);
+    }
+
+    RECT rcToolbar = { 0, tabH, totalW, tabH + toolbarH };
+    InvalidateRect(m_hwnd, &rcToolbar, TRUE);
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void MainWindow::LayoutCenterArea() {
+    RECT rcClient;
+    GetClientRect(m_hwnd, &rcClient);
+    int totalW = rcClient.right - rcClient.left;
+    int totalH = rcClient.bottom - rcClient.top;
+
+    Config& cfg = Config::Get();
+    int tabH = Theme::Get().Scale(36, m_hwnd);
+    bool showTB = cfg.showToolbarStandard || cfg.showToolbarAddress || cfg.showToolbarSearch;
+    int toolbarH = showTB ? Theme::Get().Scale(38, m_hwnd) : 0;
+    int linksH = (m_linksVisible && cfg.showToolbarLinks) ? Theme::Get().Scale(28, m_hwnd) : 0;
+    int statusH = (m_hwndStatusBar && cfg.showStatusBar) ? Theme::Get().Scale(24, m_hwnd) : 0;
+
     int contentY = tabH + toolbarH + linksH;
     int contentH = totalH - contentY - statusH;
     int splitBarW = Theme::Get().Scale(5, m_hwnd);
@@ -1048,21 +1154,23 @@ void MainWindow::LayoutAll() {
     int mainWidth = totalW;
 
     if (m_treeVisible) {
-        if (m_treeWidth < Theme::Get().Scale(120, m_hwnd)) {
-            m_treeWidth = Theme::Get().Scale(120, m_hwnd);
+        int minTreeW = Theme::Get().Scale(180, m_hwnd);
+        if (m_treeWidth < minTreeW) {
+            m_treeWidth = minTreeW;
         }
-        if (m_treeWidth > totalW / 2) {
-            m_treeWidth = totalW / 2;
+        int effectiveTreeW = m_treeWidth;
+        if (totalW > Theme::Get().Scale(400, m_hwnd) && effectiveTreeW > totalW / 2) {
+            effectiveTreeW = totalW / 2;
         }
 
-        m_tree.UpdateLayout(0, contentY, m_treeWidth, contentH);
+        m_tree.UpdateLayout(0, contentY, effectiveTreeW, contentH);
 
-        m_rcTreeSplitter.left = m_treeWidth;
+        m_rcTreeSplitter.left = effectiveTreeW;
         m_rcTreeSplitter.top = contentY;
-        m_rcTreeSplitter.right = m_treeWidth + splitBarW;
+        m_rcTreeSplitter.right = effectiveTreeW + splitBarW;
         m_rcTreeSplitter.bottom = contentY + contentH;
 
-        mainStartX = m_treeWidth + splitBarW;
+        mainStartX = effectiveTreeW + splitBarW;
         mainWidth = totalW - mainStartX;
     }
 
@@ -1085,22 +1193,22 @@ void MainWindow::LayoutAll() {
         m_multiPane.UpdateLayout(mainStartX, contentY, listW, contentH);
         m_multiPane.LayoutChildren();
 
+        RECT rcOldSplitter = m_rcPreviewSplitter;
         m_rcPreviewSplitter.left = mainStartX + listW;
         m_rcPreviewSplitter.top = contentY;
         m_rcPreviewSplitter.right = mainStartX + listW + splitBarW;
         m_rcPreviewSplitter.bottom = contentY + contentH;
 
         m_preview.UpdateLayout(mainStartX + listW + splitBarW, contentY, m_previewWidth, contentH);
-    }
 
-    // 4. Status Bar
-    if (m_hwndStatusBar) {
-        SendMessageW(m_hwndStatusBar, WM_SIZE, 0, 0);
+        // Smooth splitter redraw without ghosting
+        RECT rcUnion;
+        UnionRect(&rcUnion, &rcOldSplitter, &m_rcPreviewSplitter);
+        rcUnion.left -= 2;
+        rcUnion.right += 2;
+        InvalidateRect(m_hwnd, &rcUnion, TRUE);
+        UpdateWindow(m_hwnd);
     }
-
-    RECT rcToolbar = { 0, tabH, totalW, tabH + toolbarH };
-    InvalidateRect(m_hwnd, &rcToolbar, TRUE);
-    InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
 void MainWindow::UpdateStatus(int itemCount, uint64_t totalSize) {
@@ -1148,6 +1256,10 @@ void MainWindow::SetLayout(PaneLayout layout) {
     Config::Get().Save();
     BuildMenu();
     LayoutAll();
+    if (m_hwndBtnSplit) {
+        InvalidateRect(m_hwndBtnSplit, nullptr, TRUE);
+        UpdateWindow(m_hwndBtnSplit);
+    }
 }
 
 void MainWindow::ShowLayoutMenu(POINT ptScreen) {
@@ -1181,13 +1293,21 @@ void MainWindow::ShowLayoutMenu(POINT ptScreen) {
 
 void MainWindow::ToggleTree() {
     m_treeVisible = !m_treeVisible;
+    Config::Get().showTree = m_treeVisible;
+    Config::Get().Save();
     ShowWindow(m_tree.GetHwnd(), m_treeVisible ? SW_SHOW : SW_HIDE);
     BuildMenu();
     LayoutAll();
+    if (m_hwndBtnTree) {
+        InvalidateRect(m_hwndBtnTree, nullptr, TRUE);
+        UpdateWindow(m_hwndBtnTree);
+    }
 }
 
 void MainWindow::ToggleLinksBar() {
     m_linksVisible = !m_linksVisible;
+    Config::Get().showToolbarLinks = m_linksVisible;
+    Config::Get().Save();
     ShowWindow(m_linksBar.GetHwnd(), m_linksVisible ? SW_SHOW : SW_HIDE);
     BuildMenu();
     LayoutAll();
@@ -1243,11 +1363,21 @@ void MainWindow::ShowToolbarContextMenu(POINT ptScreen) {
 
 void MainWindow::TogglePreview() {
     m_previewVisible = !m_previewVisible;
-    BuildMenu();
-    LayoutAll();
-    UpdateWindow(m_hwnd); // Instant visual update of toolbar preview icon to gray!
+    Config::Get().previewEnabled = m_previewVisible;
+    WritePrivateProfileStringW(L"General", L"PreviewEnabled", m_previewVisible ? L"1" : L"0", Config::Get().GetIniPath().c_str());
+
+    HMENU hMenu = GetMenu(m_hwnd);
+    if (hMenu) {
+        CheckMenuItem(hMenu, ID_VIEW_PREVIEW_TOGGLE, MF_BYCOMMAND | (m_previewVisible ? MF_CHECKED : MF_UNCHECKED));
+    }
+
+    if (m_hwndBtnPreview) {
+        InvalidateRect(m_hwndBtnPreview, nullptr, TRUE);
+        UpdateWindow(m_hwndBtnPreview);
+    }
 
     if (m_previewVisible) {
+        LayoutCenterArea();
         ShowWindow(m_preview.GetHwnd(), SW_SHOW);
         FileListView* activeView = m_multiPane.GetActivePane();
         if (activeView) {
@@ -1258,6 +1388,7 @@ void MainWindow::TogglePreview() {
         }
     } else {
         ShowWindow(m_preview.GetHwnd(), SW_HIDE);
+        LayoutCenterArea();
         m_preview.Clear();
     }
 }
@@ -1281,13 +1412,19 @@ void MainWindow::OnCommand(UINT cmdId) {
         break;
     case IDC_BTN_REFRESH:
     case ID_VIEW_REFRESH: {
+        HCURSOR hOldCur = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
         std::wstring curFilter = m_filterBar.GetText();
-        if (curFilter.empty() && !activeView->GetFilterQuery().empty()) {
-            activeView->SetFilter(L"", false, false);
-        } else {
-            activeView->Refresh();
+        for (int i = 0; i < m_multiPane.GetPaneCount(); ++i) {
+            FileListView& pane = m_multiPane.GetPane(i);
+            if (curFilter.empty() && !pane.GetFilterQuery().empty()) {
+                pane.SetFilter(L"", false, false);
+            } else if (!curFilter.empty() && m_filterBar.IsSearchSubfolders()) {
+                pane.SetFilter(curFilter, true, false);
+            }
+            pane.Refresh();
         }
         m_tree.Refresh();
+        SetCursor(hOldCur);
         break;
     }
     case IDC_BTN_NEWTAB:
@@ -1338,7 +1475,6 @@ void MainWindow::OnCommand(UINT cmdId) {
     case IDC_BTN_PREVIEW:
     case ID_VIEW_PREVIEW_TOGGLE:
         TogglePreview();
-        BuildMenu();
         break;
 
     case ID_LANG_ZH:
@@ -1529,12 +1665,8 @@ void MainWindow::OnCommand(UINT cmdId) {
         break;
     case ID_TOOLS_GESTURES:
         SettingsDialog::Show(m_hwnd, [this]() {
-            RebuildAccelerators();
-    if (ShellUtils::IsExplorerReplaced()) {
-        RegisterHotKey(m_hwnd, 9001, MOD_WIN, 'E');
-    }
-            UpdateLanguageUI();
-        });
+            OnSettingsApplied();
+        }, 8);
         break;
     case ID_TOOLS_ALLOW_DUP_TABS:
         Config::Get().allowDuplicateTabs = !Config::Get().allowDuplicateTabs;
@@ -1575,8 +1707,11 @@ void MainWindow::OnCommand(UINT cmdId) {
         while (PathFileExistsW(newDir.c_str())) {
             newDir = activeView->GetCurrentPath() + L"\\" + I18n::Get().T(StringId::NewFolder) + L" (" + std::to_wstring(idx++) + L")";
         }
-        CreateDirectoryW(newDir.c_str(), nullptr);
-        activeView->Refresh();
+        if (CreateDirectoryW(newDir.c_str(), nullptr)) {
+            activeView->Refresh();
+            activeView->SelectItemByPath(newDir);
+            activeView->StartRename();
+        }
         break;
     }
     case ID_FILE_NEW_MD: {
@@ -1593,8 +1728,10 @@ void MainWindow::OnCommand(UINT cmdId) {
             DWORD written = 0;
             WriteFile(hF, initContent, (DWORD)strlen(initContent), &written, nullptr);
             CloseHandle(hF);
+            activeView->Refresh();
+            activeView->SelectItemByPath(newFile);
+            activeView->StartRename();
         }
-        activeView->Refresh();
         break;
     }
     case ID_SCROLL_TOP:
@@ -1616,8 +1753,12 @@ void MainWindow::OnCommand(UINT cmdId) {
             newFile = activeView->GetCurrentPath() + L"\\New (" + std::to_wstring(idx++) + L").txt";
         }
         HANDLE hF = CreateFileW(newFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (hF != INVALID_HANDLE_VALUE) CloseHandle(hF);
-        activeView->Refresh();
+        if (hF != INVALID_HANDLE_VALUE) {
+            CloseHandle(hF);
+            activeView->Refresh();
+            activeView->SelectItemByPath(newFile);
+            activeView->StartRename();
+        }
         break;
     }
     case ID_FILE_PROPERTIES: {
@@ -1829,51 +1970,35 @@ void MainWindow::OnCommand(UINT cmdId) {
     case ID_TOOLS_SCRIPT_CONSOLE:
         ScriptEngine::Get().ShowConsole();
         break;
+    case ID_TOOLS_RESTORE_EXPLORER: {
+        ShellUtils::SetExplorerReplaced(false);
+        bool isZh = I18n::Get().IsChinese();
+        MessageBoxW(m_hwnd,
+            isZh ? L"已成功恢复系统默认资源管理器关联。\nWindows 将恢复使用原生资源管理器打开文件夹。"
+                 : L"Windows Explorer default associations restored successfully.",
+            isZh ? L"恢复默认关联" : L"Restore Explorer Defaults",
+            MB_OK | MB_ICONINFORMATION);
+        break;
+    }
     case ID_TOOLS_SETTINGS:
         SettingsDialog::Show(m_hwnd, [this]() {
-            Config& cfg = Config::Get();
-            if (cfg.themeMode == 0) {
-                Theme::Get().SetDarkMode(false);
-            } else if (cfg.themeMode == 1) {
-                Theme::Get().SetDarkMode(true);
-            } else {
-                Theme::Get().Initialize();
-            }
-            Theme::Get().ApplyToWindow(m_hwnd);
-
-            m_treeVisible = cfg.showTree;
-            ShowWindow(m_tree.GetHwnd(), m_treeVisible ? SW_SHOW : SW_HIDE);
-
-            for (int i = 0; i < 4; ++i) {
-                m_multiPane.GetPane(i).SetCalcFolderSize(cfg.calcFolderSize);
-            }
-
-            RebuildAccelerators();
-    if (ShellUtils::IsExplorerReplaced()) {
-        RegisterHotKey(m_hwnd, 9001, MOD_WIN, 'E');
-    }
-            UpdateLanguageUI();
+            OnSettingsApplied();
         });
         break;
 
     case ID_TOOLS_SHORTCUTS_SETTINGS:
     case ID_HELP_SHORTCUTS:
         SettingsDialog::Show(m_hwnd, [this]() {
-            UpdateLanguageUI();
+            OnSettingsApplied();
         }, 7);
         break;
     case ID_HELP_GESTURES:
         SettingsDialog::Show(m_hwnd, [this]() {
-            UpdateLanguageUI();
+            OnSettingsApplied();
         }, 8);
         break;
     case ID_HELP_CHECK_UPDATES: {
-        bool isZh = I18n::Get().IsChinese();
-        MessageBoxW(m_hwnd,
-            isZh ? L"当前已是最新版本 NeoMDIE v2.1.0\n\n已集成 MDIE 原版核心体验、现代化 Win32 / Shell COM 引擎、Tab 颜色标记与多栏分屏设计。"
-                 : L"You are using the latest version of NeoMDIE v2.1.0\n\nAll features and modern shell extensions are up to date.",
-            isZh ? L"检查更新" : L"Check for Updates",
-            MB_OK | MB_ICONINFORMATION);
+        ShellUtils::CheckForUpdates(m_hwnd);
         break;
     }
     case ID_HELP_GITHUB:
@@ -1988,7 +2113,6 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
     case IDC_BTN_FORWARD: glyph[0] = 0xE72A; break; // Forward
     case IDC_BTN_UP:      glyph[0] = 0xE74A; break; // Up
     case IDC_BTN_REFRESH: glyph[0] = 0xE72C; break; // Refresh
-    case IDC_BTN_NEWTAB:  glyph[0] = 0xE710; break; // Add (+)
     case IDC_BTN_TREE:    glyph[0] = 0xE8A9; break; // Navigation / Tree
     case IDC_BTN_SPLIT:   glyph[0] = 0xE784; break; // Split View
     case IDC_BTN_PREVIEW: glyph[0] = 0xE8FF; break; // Preview Pane
@@ -2005,7 +2129,7 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, iconColor);
 
-    int iconPixelHeight = (btnId == IDC_BTN_NEWTAB) ? 14 : 15;
+    int iconPixelHeight = 15;
     HFONT hIconFont = Theme::Get().GetIconFont(iconPixelHeight, m_hwnd);
     HGDIOBJ oldFont = SelectObject(hdc, hIconFont);
 
@@ -2016,6 +2140,48 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
 }
 LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_COPYDATA: {
+        PCOPYDATASTRUCT pcds = (PCOPYDATASTRUCT)lParam;
+        if (pcds && pcds->lpData && pcds->cbData > 0) {
+            std::wstring path((const wchar_t*)pcds->lpData);
+            while (!path.empty() && (path.back() == L'"' || path.back() == L' ')) path.pop_back();
+            while (!path.empty() && path.front() == L'"') path.erase(path.begin());
+            if (path.length() == 2 && path[1] == L':') path += L"\\";
+            if (PathFileExistsW(path.c_str()) || path == L"此电脑" || path == L"This PC") {
+                m_tabBar.AddTab(path, true);
+                FileListView* activePane = m_multiPane.GetActivePane();
+                if (activePane) {
+                    activePane->NavigateTo(path, true);
+                }
+            }
+            if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
+            SetForegroundWindow(hwnd);
+            return TRUE;
+        }
+        return FALSE;
+    }
+    case WM_NCPAINT:
+    case WM_NCACTIVATE: {
+        LRESULT res = DefWindowProcW(hwnd, msg, wParam, lParam);
+        if (Theme::Get().IsDarkMode()) {
+            MENUBARINFO mbi = { sizeof(mbi) };
+            if (GetMenuBarInfo(hwnd, OBJID_MENU, 0, &mbi)) {
+                RECT rcWindow;
+                GetWindowRect(hwnd, &rcWindow);
+                RECT rcBar = mbi.rcBar;
+                OffsetRect(&rcBar, -rcWindow.left, -rcWindow.top);
+                HDC hdc = GetWindowDC(hwnd);
+                if (hdc) {
+                    RECT rcLine = { 0, rcBar.bottom - 1, rcWindow.right - rcWindow.left, rcBar.bottom + 2 };
+                    FillRect(hdc, &rcLine, Theme::Get().BrushBackground());
+                    ReleaseDC(hwnd, hdc);
+                }
+            }
+        }
+        return res;
+    }
     case 0x0091: { // WM_UAHDRAWMENU (Dark mode menu bar background)
         if (Theme::Get().IsDarkMode()) {
             struct UAHMENU { HMENU hmenu; HDC hdc; DWORD dwFlags; };
@@ -2154,15 +2320,26 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_MOUSEMOVE: {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         if (m_resizingTree && (wParam & MK_LBUTTON)) {
-            m_treeWidth = pt.x;
-            LayoutAll();
+            int minTreeW = Theme::Get().Scale(180, hwnd);
+            int newW = (pt.x < minTreeW) ? minTreeW : pt.x;
+            if (newW != m_treeWidth) {
+                m_treeWidth = newW;
+                LayoutCenterArea();
+            }
             return 0;
         }
         if (m_resizingPreview && (wParam & MK_LBUTTON)) {
             RECT rc;
             GetClientRect(hwnd, &rc);
-            m_previewWidth = rc.right - pt.x;
-            LayoutAll();
+            int minListW = (m_multiPane.GetPaneCount() > 1) ? Theme::Get().Scale(350, hwnd) : Theme::Get().Scale(250, hwnd);
+            int newW = rc.right - pt.x;
+            int maxPreviewW = (rc.right - rc.left) - minListW - Theme::Get().Scale(20, hwnd);
+            if (newW > maxPreviewW) newW = maxPreviewW;
+            if (newW < Theme::Get().Scale(120, hwnd)) newW = Theme::Get().Scale(120, hwnd);
+            if (newW != m_previewWidth) {
+                m_previewWidth = newW;
+                LayoutCenterArea();
+            }
             return 0;
         }
         if (m_resizingFilterBar && (wParam & MK_LBUTTON)) {
@@ -2203,6 +2380,8 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         if (m_resizingPreview) {
             m_resizingPreview = false;
             ReleaseCapture();
+            Config::Get().previewWidth = m_previewWidth;
+            Config::Get().Save();
             return 0;
         }
         if (m_resizingFilterBar) {
@@ -2218,18 +2397,47 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         LayoutAll();
         return 0;
 
-    case WM_SYSCOMMAND:
-        if ((wParam & 0xFFF0) == SC_MINIMIZE && Config::Get().minimizeToTray) {
+    case WM_SYSCOMMAND: {
+        UINT cmd = (wParam & 0xFFF0);
+        if (cmd == SC_MINIMIZE && Config::Get().minimizeToTray) {
+            m_wasMaximizedBeforeTray = (IsZoomed(hwnd) != FALSE);
             AddTrayIcon();
             ShowWindow(hwnd, SW_HIDE);
             return 0;
         }
+        if (cmd == SC_RESTORE && IsZoomed(hwnd)) {
+            WINDOWPLACEMENT wp = { sizeof(wp) };
+            if (GetWindowPlacement(hwnd, &wp)) {
+                HMONITOR hMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO mi = { sizeof(mi) };
+                if (GetMonitorInfoW(hMon, &mi)) {
+                    int monW = mi.rcWork.right - mi.rcWork.left;
+                    int monH = mi.rcWork.bottom - mi.rcWork.top;
+                    int normW = wp.rcNormalPosition.right - wp.rcNormalPosition.left;
+                    int normH = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top;
+                    if (normW >= monW || normH >= monH || normW <= 100 || normH <= 100) {
+                        int targetW = (monW * 4) / 5;
+                        int targetH = (monH * 4) / 5;
+                        wp.rcNormalPosition.left = mi.rcWork.left + (monW - targetW) / 2;
+                        wp.rcNormalPosition.top = mi.rcWork.top + (monH - targetH) / 2;
+                        wp.rcNormalPosition.right = wp.rcNormalPosition.left + targetW;
+                        wp.rcNormalPosition.bottom = wp.rcNormalPosition.top + targetH;
+                        SetWindowPlacement(hwnd, &wp);
+                    }
+                }
+            }
+        }
         break;
+    }
 
     case WM_TRAY_NOTIFY: {
         UINT uMsg = LOWORD(lParam);
         if (uMsg == WM_LBUTTONUP || uMsg == WM_LBUTTONDBLCLK) {
-            ShowWindow(hwnd, SW_RESTORE);
+            if (m_wasMaximizedBeforeTray) {
+                ShowWindow(hwnd, SW_MAXIMIZE);
+            } else {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
             SetForegroundWindow(hwnd);
             RemoveTrayIcon();
         } else if (uMsg == WM_RBUTTONUP) {
@@ -2244,7 +2452,11 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
             DestroyMenu(hMenu);
             if (cmd == 5001) {
-                ShowWindow(hwnd, SW_RESTORE);
+                if (m_wasMaximizedBeforeTray) {
+                    ShowWindow(hwnd, SW_MAXIMIZE);
+                } else {
+                    ShowWindow(hwnd, SW_RESTORE);
+                }
                 SetForegroundWindow(hwnd);
                 RemoveTrayIcon();
             } else if (cmd == 5002) {
@@ -2319,19 +2531,22 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
     case WM_CLOSE: {
         if (Config::Get().closeToTray) {
+            m_wasMaximizedBeforeTray = (IsZoomed(hwnd) != FALSE);
             AddTrayIcon();
             ShowWindow(hwnd, SW_HIDE);
             return 0;
         }
+        ShowWindow(hwnd, SW_HIDE);
         RemoveTrayIcon();
         Config& cfg = Config::Get();
-        RECT rc;
-        GetWindowRect(hwnd, &rc);
-        cfg.window.x = rc.left;
-        cfg.window.y = rc.top;
-        cfg.window.width = rc.right - rc.left;
-        cfg.window.height = rc.bottom - rc.top;
-        cfg.window.maximized = (IsZoomed(hwnd) != FALSE);
+        WINDOWPLACEMENT wp = { sizeof(wp) };
+        if (GetWindowPlacement(hwnd, &wp)) {
+            cfg.window.x = wp.rcNormalPosition.left;
+            cfg.window.y = wp.rcNormalPosition.top;
+            cfg.window.width = wp.rcNormalPosition.right - wp.rcNormalPosition.left;
+            cfg.window.height = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top;
+            cfg.window.maximized = (wp.showCmd == SW_SHOWMAXIMIZED);
+        }
 
         cfg.showTree = m_treeVisible;
         cfg.treeWidth = m_treeWidth;
@@ -2460,6 +2675,13 @@ void MainWindow::RebuildAccelerators() {
         if (name == L"显示/隐藏侧边栏目录树" || name == L"Toggle Tree Sidebar") return ID_VIEW_TREE_TOGGLE;
         if (name == L"显示/隐藏快速预览窗格" || name == L"Toggle Preview Pane") return ID_VIEW_PREVIEW_TOGGLE;
         if (name == L"打开命令行 CMD" || name == L"Open Command Prompt CMD") return ID_TOOLS_OPEN_CMD;
+        for (const auto& s : ScriptEngine::Get().GetScripts()) {
+            std::wstring sZh = L"【脚本】" + s.name;
+            std::wstring sEn = L"[Script] " + s.name;
+            if (name == sZh || name == sEn || name == s.name) {
+                return s.commandId;
+            }
+        }
         return 0;
     };
 
@@ -2476,6 +2698,56 @@ void MainWindow::RebuildAccelerators() {
             acc.cmd = (WORD)cmd;
             accels.push_back(acc);
         }
+    }
+
+    auto hasCommand = [&](UINT cmd) {
+        for (const auto& a : accels) {
+            if (a.cmd == (WORD)cmd) return true;
+        }
+        return false;
+    };
+
+    // Register default script hotkeys from script metadata if not overridden
+    for (const auto& s : ScriptEngine::Get().GetScripts()) {
+        if (!s.hotkey.empty() && !hasCommand(s.commandId)) {
+            std::wstring hk = s.hotkey;
+            bool ctrl = false, shift = false, alt = false;
+            size_t plusPos;
+            while ((plusPos = hk.find(L"+")) != std::wstring::npos) {
+                std::wstring mod = hk.substr(0, plusPos);
+                while (!mod.empty() && mod.front() == L' ') mod.erase(mod.begin());
+                while (!mod.empty() && mod.back() == L' ') mod.pop_back();
+                if (_wcsicmp(mod.c_str(), L"Ctrl") == 0) ctrl = true;
+                else if (_wcsicmp(mod.c_str(), L"Shift") == 0) shift = true;
+                else if (_wcsicmp(mod.c_str(), L"Alt") == 0) alt = true;
+                hk = hk.substr(plusPos + 1);
+            }
+            while (!hk.empty() && hk.front() == L' ') hk.erase(hk.begin());
+            while (!hk.empty() && hk.back() == L' ') hk.pop_back();
+
+            WORD vk = mapKey(hk);
+            if (vk != 0) {
+                ACCEL acc = { 0 };
+                acc.fVirt = FVIRTKEY;
+                if (ctrl) acc.fVirt |= FCONTROL;
+                if (shift) acc.fVirt |= FSHIFT;
+                if (alt) acc.fVirt |= FALT;
+                acc.key = vk;
+                acc.cmd = (WORD)s.commandId;
+                accels.push_back(acc);
+            }
+        }
+    }
+
+    // Guarantee critical default hotkeys (F5, F11, Alt+Enter) are always registered
+    if (!hasCommand(ID_VIEW_REFRESH)) {
+        accels.push_back({ FVIRTKEY, (WORD)VK_F5, (WORD)ID_VIEW_REFRESH });
+    }
+    if (!hasCommand(ID_WINDOW_MAXIMIZE)) {
+        accels.push_back({ FVIRTKEY, (WORD)VK_F11, (WORD)ID_WINDOW_MAXIMIZE });
+    }
+    if (!hasCommand(ID_FILE_PROPERTIES)) {
+        accels.push_back({ FVIRTKEY | FALT, (WORD)VK_RETURN, (WORD)ID_FILE_PROPERTIES });
     }
 
     if (!accels.empty()) {

@@ -3,6 +3,7 @@
 #include "..\core\I18n.h"
 #include "..\core\GestureEngine.h"
 #include "..\core\ShellUtils.h"
+#include "..\core\ScriptEngine.h"
 #include "Theme.h"
 #include <commctrl.h>
 #include <windowsx.h>
@@ -194,10 +195,10 @@ static const GestPatternDef s_allPatterns[] = {
     { "UR", L"↗ (上右)", L"↗ (Up-Right)" },
     { "DL", L"↙ (下左)", L"↙ (Down-Left)" },
     { "DR", L"↘ (下右)", L"↘ (Down-Right)" },
-    { "LU", L"左上", L"Left-Up" },
-    { "LD", L"左下", L"Left-Down" },
-    { "RU", L"右上", L"Right-Up" },
-    { "RD", L"右下", L"Right-Down" },
+    { "LU", L"←↑ (左上)", L"←↑ (Left-Up)" },
+    { "LD", L"←↓ (左下)", L"←↓ (Left-Down)" },
+    { "RU", L"→↑ (右上)", L"→↑ (Right-Up)" },
+    { "RD", L"→↓ (右下)", L"→↓ (Right-Down)" },
     { "LDR", L"←↓→ (左下右)", L"←↓→ (Left-Down-Right)" },
     { "RDL", L"→↓← (右下左)", L"→↓← (Right-Down-Left)" },
     { "LUR", L"←↑→ (左上右)", L"←↑→ (Left-Up-Right)" },
@@ -261,7 +262,8 @@ static void PopulateGestureList(HWND hList) {
         lvi.pszText = (LPWSTR)pattern.c_str();
         ListView_InsertItem(hList, &lvi);
 
-        std::wstring actName = !s_tempGestures[i].name.empty() ? s_tempGestures[i].name : GestureEngine::GetActionName((GestureAction)s_tempGestures[i].action);
+        std::wstring actName = (!s_tempGestures[i].name.empty() && s_tempGestures[i].name.length() > 1)
+            ? s_tempGestures[i].name : GestureEngine::GetActionName((GestureAction)s_tempGestures[i].action);
         ListView_SetItemText(hList, (int)i, 1, (LPWSTR)actName.c_str());
         ListView_SetItemText(hList, (int)i, 2, (LPWSTR)(zh ? L"全局 / 列表" : L"Global / List"));
     }
@@ -310,7 +312,14 @@ static void ResetDefaultShortcuts() {
 
 static void InitDefaultShortcuts() {
     const auto& saved = Config::Get().shortcuts;
-    if (!saved.empty()) {
+    bool hasValid = false;
+    for (const auto& item : saved) {
+        if (item.name.length() > 1) {
+            hasValid = true;
+            break;
+        }
+    }
+    if (hasValid) {
         s_tempShortcuts.clear();
         for (const auto& item : saved) {
             ShortcutItem sc;
@@ -324,6 +333,40 @@ static void InitDefaultShortcuts() {
         }
     } else {
         ResetDefaultShortcuts();
+    }
+
+    for (const auto& s : ScriptEngine::Get().GetScripts()) {
+        if (!s.hotkey.empty()) {
+            std::wstring sZh = L"【脚本】" + s.name;
+            std::wstring sEn = L"[Script] " + s.name;
+            bool exists = false;
+            for (const auto& sc : s_tempShortcuts) {
+                if (sc.name == sZh || sc.name == sEn || sc.name == s.name) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                ShortcutItem item;
+                item.name = I18n::Get().IsChinese() ? sZh : sEn;
+                std::wstring hk = s.hotkey;
+                size_t plusPos;
+                while ((plusPos = hk.find(L"+")) != std::wstring::npos) {
+                    std::wstring mod = hk.substr(0, plusPos);
+                    while (!mod.empty() && mod.front() == L' ') mod.erase(mod.begin());
+                    while (!mod.empty() && mod.back() == L' ') mod.pop_back();
+                    if (_wcsicmp(mod.c_str(), L"Ctrl") == 0) item.ctrl = true;
+                    else if (_wcsicmp(mod.c_str(), L"Shift") == 0) item.shift = true;
+                    else if (_wcsicmp(mod.c_str(), L"Alt") == 0) item.alt = true;
+                    hk = hk.substr(plusPos + 1);
+                }
+                while (!hk.empty() && hk.front() == L' ') hk.erase(hk.begin());
+                while (!hk.empty() && hk.back() == L' ') hk.pop_back();
+                item.key = hk;
+                item.keyText = FormatShortcutKey(item);
+                s_tempShortcuts.push_back(item);
+            }
+        }
     }
 }
 
@@ -402,6 +445,139 @@ void SettingsDialog::SwitchTab(HWND hwnd, int tabIndex) {
     }
   }
   InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+static LRESULT CALLBACK SettingsComboSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    if (Theme::Get().IsDarkMode()) {
+        if (msg == WM_ERASEBKGND) return 1;
+        if (msg == WM_PAINT) {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+
+            HDC memDC = CreateCompatibleDC(hdc);
+            HBITMAP memBM = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+            HGDIOBJ oldBM = SelectObject(memDC, memBM);
+
+            FillRect(memDC, &rc, Theme::Get().BrushSurface());
+
+            HPEN hPen = CreatePen(PS_SOLID, 1, Theme::Get().ClrBorder());
+            HGDIOBJ oldPen = SelectObject(memDC, hPen);
+            SelectObject(memDC, GetStockObject(NULL_BRUSH));
+            RoundRect(memDC, rc.left, rc.top, rc.right, rc.bottom, 4, 4);
+            SelectObject(memDC, oldPen);
+            DeleteObject(hPen);
+
+            int btnW = Theme::Get().Scale(24, hwnd);
+            RECT rcArrow = { rc.right - btnW, rc.top, rc.right, rc.bottom };
+            SetBkMode(memDC, TRANSPARENT);
+            SetTextColor(memDC, Theme::Get().ClrTextSecondary());
+            HFONT hIconFont = Theme::Get().GetIconFont(Theme::Get().Scale(10, hwnd), hwnd);
+            HGDIOBJ oldIconFont = SelectObject(memDC, hIconFont);
+            wchar_t arrowGlyph[2] = { 0xE70D, 0 };
+            DrawTextW(memDC, arrowGlyph, 1, &rcArrow, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(memDC, oldIconFont);
+            DeleteObject(hIconFont);
+
+            int curSel = (int)SendMessageW(hwnd, CB_GETCURSEL, 0, 0);
+            if (curSel != CB_ERR) {
+                int len = (int)SendMessageW(hwnd, CB_GETLBTEXTLEN, curSel, 0);
+                if (len > 0) {
+                    std::wstring text(len + 1, L'\0');
+                    SendMessageW(hwnd, CB_GETLBTEXT, curSel, (LPARAM)text.data());
+                    text.resize(len);
+
+                    RECT rcText = rc;
+                    rcText.left += Theme::Get().Scale(8, hwnd);
+                    rcText.right -= btnW;
+                    SetTextColor(memDC, Theme::Get().ClrTextPrimary());
+                    HFONT hFont = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+                    if (!hFont) hFont = Theme::Get().GetUIFont(hwnd);
+                    HGDIOBJ oldFont = SelectObject(memDC, hFont);
+                    DrawTextW(memDC, text.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                    SelectObject(memDC, oldFont);
+                }
+            }
+
+            BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
+            SelectObject(memDC, oldBM);
+            DeleteObject(memBM);
+            DeleteDC(memDC);
+
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+    }
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
+static LRESULT CALLBACK SettingsHeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    if (Theme::Get().IsDarkMode()) {
+        if (msg == WM_ERASEBKGND) return 1;
+        if (msg == WM_PAINT) {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rcClient;
+            GetClientRect(hwnd, &rcClient);
+
+            HDC memDC = CreateCompatibleDC(hdc);
+            HBITMAP memBM = CreateCompatibleBitmap(hdc, rcClient.right, rcClient.bottom);
+            HGDIOBJ oldBM = SelectObject(memDC, memBM);
+
+            FillRect(memDC, &rcClient, Theme::Get().BrushSurface());
+
+            HFONT hFont = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+            if (!hFont) hFont = Theme::Get().GetUIFont(hwnd);
+            HGDIOBJ oldFont = SelectObject(memDC, hFont);
+            SetBkMode(memDC, TRANSPARENT);
+            SetTextColor(memDC, Theme::Get().ClrTextPrimary());
+
+            HPEN hPenBorder = CreatePen(PS_SOLID, 1, Theme::Get().ClrBorder());
+            HGDIOBJ oldPen = SelectObject(memDC, hPenBorder);
+
+            int count = Header_GetItemCount(hwnd);
+            for (int i = 0; i < count; ++i) {
+                RECT rcItem;
+                if (!Header_GetItemRect(hwnd, i, &rcItem)) continue;
+
+                // Column divider
+                MoveToEx(memDC, rcItem.right - 1, rcItem.top + 3, nullptr);
+                LineTo(memDC, rcItem.right - 1, rcItem.bottom - 3);
+
+                wchar_t text[256] = { 0 };
+                HDITEMW hdi = { sizeof(hdi) };
+                hdi.mask = HDI_TEXT | HDI_FORMAT;
+                hdi.pszText = text;
+                hdi.cchTextMax = 256;
+                if (Header_GetItem(hwnd, i, &hdi)) {
+                    RECT rcText = rcItem;
+                    rcText.left += Theme::Get().Scale(6, hwnd);
+                    rcText.right -= Theme::Get().Scale(6, hwnd);
+
+                    UINT format = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_LEFT;
+                    DrawTextW(memDC, text, -1, &rcText, format);
+                }
+            }
+
+            // Bottom border
+            MoveToEx(memDC, 0, rcClient.bottom - 1, nullptr);
+            LineTo(memDC, rcClient.right, rcClient.bottom - 1);
+
+            SelectObject(memDC, oldPen);
+            DeleteObject(hPenBorder);
+            SelectObject(memDC, oldFont);
+
+            BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, memDC, 0, 0, SRCCOPY);
+            SelectObject(memDC, oldBM);
+            DeleteObject(memBM);
+            DeleteDC(memDC);
+
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+    }
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
 void SettingsDialog::CreateControls(HWND hwnd) {
@@ -483,8 +659,18 @@ void SettingsDialog::CreateControls(HWND hwnd) {
         x, y, Theme::Get().Scale(w, hwnd), Theme::Get().Scale(240, hwnd),
         hwnd, (HMENU)(INT_PTR)id, hInst, nullptr);
     SendMessageW(hCmb, WM_SETFONT, (WPARAM)hFont, TRUE);
-    SetWindowTheme(hCmb, isDark ? L"DarkMode_CFD" : L"Explorer", nullptr);
-    Theme::Get().ApplyToWindow(hCmb);
+    if (isDark) {
+      Theme::Get().ApplyToWindow(hCmb);
+      SetWindowTheme(hCmb, L"CFD", nullptr);
+      SetWindowSubclass(hCmb, SettingsComboSubclassProc, 1, 0);
+      COMBOBOXINFO cbi = { sizeof(cbi) };
+      if (GetComboBoxInfo(hCmb, &cbi) && cbi.hwndList) {
+        Theme::Get().ApplyToWindow(cbi.hwndList);
+        SetWindowTheme(cbi.hwndList, L"DarkMode_Explorer", nullptr);
+      }
+    } else {
+      SetWindowTheme(hCmb, L"Explorer", nullptr);
+    }
     return addCtrl(page, hCmb);
   };
 
@@ -688,10 +874,6 @@ void SettingsDialog::CreateControls(HWND hwnd) {
                             y4, 342, cfg.calcFolderSize);
   y4 += lineH + spacing;
 
-  s_hChkZebraStriping = createChk(5, zh ? L"启用隔行变色 (偶数行稍深底色区分)" : L"Enable zebra striping (alternate row colors)",
-                                  y4, 343, cfg.zebraStriping);
-  y4 += lineH + spacing;
-
   s_hChkGridLines = createChk(5, zh ? L"显示行间网格线" : L"Show grid lines between rows",
                               y4, 344, cfg.showGridLines);
 
@@ -730,9 +912,17 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   ListView_SetBkColor(s_hShortcutList, bgListClr);
   ListView_SetTextBkColor(s_hShortcutList, bgListClr);
   ListView_SetTextColor(s_hShortcutList, textListClr);
-  SetWindowTheme(s_hShortcutList, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
+  if (isDark) {
+    Theme::Get().ApplyToWindow(s_hShortcutList);
+    SetWindowTheme(s_hShortcutList, L"DarkMode_Explorer", nullptr);
+  } else {
+    SetWindowTheme(s_hShortcutList, L"Explorer", nullptr);
+  }
   HWND hScHdr = ListView_GetHeader(s_hShortcutList);
-  if (hScHdr) SetWindowTheme(hScHdr, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
+  if (hScHdr) {
+      SetWindowTheme(hScHdr, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
+      SetWindowSubclass(hScHdr, SettingsHeaderSubclassProc, 1, 0);
+  }
 
   LVCOLUMNW lvcSc = { 0 };
   lvcSc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
@@ -755,6 +945,10 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   for (size_t a = 0; a < sizeof(s_allActions)/sizeof(s_allActions[0]); ++a) {
       SendMessageW(s_hScActionCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? s_allActions[a].nameZh : s_allActions[a].nameEn));
   }
+  for (const auto& s : ScriptEngine::Get().GetScripts()) {
+      std::wstring sName = (zh ? L"【脚本】" : L"[Script] ") + s.name;
+      SendMessageW(s_hScActionCombo, CB_ADDSTRING, 0, (LPARAM)sName.c_str());
+  }
   SendMessageW(s_hScActionCombo, CB_SETCURSEL, 0, 0);
 
   editY += Theme::Get().Scale(32, hwnd);
@@ -770,6 +964,7 @@ void SettingsDialog::CreateControls(HWND hwnd) {
                               chkX, editY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(65, hwnd), lineH, hwnd, (HMENU)367, hInst, nullptr);
   SendMessageW(s_hScShift, WM_SETFONT, (WPARAM)hFont, TRUE);
   SetWindowTheme(s_hScShift, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+  Theme::Get().ApplyToWindow(s_hScShift);
   addCtrl(7, s_hScShift);
 
   chkX += Theme::Get().Scale(70, hwnd);
@@ -777,6 +972,7 @@ void SettingsDialog::CreateControls(HWND hwnd) {
                              chkX, editY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(60, hwnd), lineH, hwnd, (HMENU)368, hInst, nullptr);
   SendMessageW(s_hScCtrl, WM_SETFONT, (WPARAM)hFont, TRUE);
   SetWindowTheme(s_hScCtrl, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+  Theme::Get().ApplyToWindow(s_hScCtrl);
   addCtrl(7, s_hScCtrl);
 
   chkX += Theme::Get().Scale(65, hwnd);
@@ -784,6 +980,7 @@ void SettingsDialog::CreateControls(HWND hwnd) {
                             chkX, editY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(55, hwnd), lineH, hwnd, (HMENU)369, hInst, nullptr);
   SendMessageW(s_hScAlt, WM_SETFONT, (WPARAM)hFont, TRUE);
   SetWindowTheme(s_hScAlt, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+  Theme::Get().ApplyToWindow(s_hScAlt);
   addCtrl(7, s_hScAlt);
 
   // Buttons Row
@@ -792,25 +989,25 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   int btnH = Theme::Get().Scale(28, hwnd);
   int btnX = marginX;
 
-  s_hBtnScAdd = CreateWindowExW(0, L"BUTTON", zh ? L"增加(&A)" : L"Add(&A)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+  s_hBtnScAdd = CreateWindowExW(0, L"BUTTON", zh ? L"增加(&A)" : L"Add(&A)", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                                btnX, editY, btnW, btnH, hwnd, (HMENU)356, hInst, nullptr);
   SendMessageW(s_hBtnScAdd, WM_SETFONT, (WPARAM)hFont, TRUE);
   addCtrl(7, s_hBtnScAdd);
 
   btnX += btnW + Theme::Get().Scale(8, hwnd);
-  s_hBtnScMod = CreateWindowExW(0, L"BUTTON", zh ? L"修改(&M)" : L"Modify(&M)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+  s_hBtnScMod = CreateWindowExW(0, L"BUTTON", zh ? L"修改(&M)" : L"Modify(&M)", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                                btnX, editY, btnW, btnH, hwnd, (HMENU)357, hInst, nullptr);
   SendMessageW(s_hBtnScMod, WM_SETFONT, (WPARAM)hFont, TRUE);
   addCtrl(7, s_hBtnScMod);
 
   btnX += btnW + Theme::Get().Scale(8, hwnd);
-  s_hBtnScDel = CreateWindowExW(0, L"BUTTON", zh ? L"删除(&D)" : L"Delete(&D)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+  s_hBtnScDel = CreateWindowExW(0, L"BUTTON", zh ? L"删除(&D)" : L"Delete(&D)", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                                btnX, editY, btnW, btnH, hwnd, (HMENU)358, hInst, nullptr);
   SendMessageW(s_hBtnScDel, WM_SETFONT, (WPARAM)hFont, TRUE);
   addCtrl(7, s_hBtnScDel);
 
   btnX += btnW + Theme::Get().Scale(8, hwnd);
-  s_hBtnScReset = CreateWindowExW(0, L"BUTTON", zh ? L"恢复默认(&R)" : L"Reset(&R)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+  s_hBtnScReset = CreateWindowExW(0, L"BUTTON", zh ? L"恢复默认(&R)" : L"Reset(&R)", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                                  btnX, editY, btnW + Theme::Get().Scale(16, hwnd), btnH, hwnd, (HMENU)359, hInst, nullptr);
   SendMessageW(s_hBtnScReset, WM_SETFONT, (WPARAM)hFont, TRUE);
   addCtrl(7, s_hBtnScReset);
@@ -824,6 +1021,26 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   y6 += lineH + spacing;
 
   s_tempGestures = cfg.gestures;
+  bool gestCorrupted = false;
+  for (const auto& g : s_tempGestures) {
+      if (g.name.length() <= 1) { gestCorrupted = true; break; }
+  }
+  if (s_tempGestures.empty() || gestCorrupted) {
+      s_tempGestures = {
+          { "L", (int)GestureAction::NavBack, zh ? L"后退" : L"Back" },
+          { "R", (int)GestureAction::NavForward, zh ? L"前进" : L"Forward" },
+          { "U", (int)GestureAction::NavUp, zh ? L"向上一级" : L"Up to Parent" },
+          { "D", (int)GestureAction::Refresh, zh ? L"刷新" : L"Refresh" },
+          { "UD", (int)GestureAction::NewTab, zh ? L"新建标签页" : L"New Tab" },
+          { "DR", (int)GestureAction::CloseTab, zh ? L"关闭当前标签页" : L"Close Current Tab" },
+          { "UL", (int)GestureAction::ToggleTree, zh ? L"显示/隐藏侧边栏目录树" : L"Toggle Tree Sidebar" },
+          { "UR", (int)GestureAction::TogglePreview, zh ? L"显示/隐藏快速预览窗格" : L"Toggle Preview Pane" },
+          { "RU", (int)GestureAction::ScrollTop, zh ? L"滚动到列表顶部" : L"Scroll to Top" },
+          { "RD", (int)GestureAction::ScrollBottom, zh ? L"滚动到列表底部" : L"Scroll to Bottom" },
+          { "LU", (int)GestureAction::PageUp, zh ? L"向上翻页" : L"Page Up" },
+          { "LD", (int)GestureAction::PageDown, zh ? L"向下翻页" : L"Page Down" }
+      };
+  }
   int gestListH = Theme::Get().Scale(210, hwnd);
   s_hGestureList = CreateWindowExW(
       WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
@@ -837,9 +1054,17 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   ListView_SetBkColor(s_hGestureList, bgListClr);
   ListView_SetTextBkColor(s_hGestureList, bgListClr);
   ListView_SetTextColor(s_hGestureList, textListClr);
-  SetWindowTheme(s_hGestureList, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
+  if (isDark) {
+    Theme::Get().ApplyToWindow(s_hGestureList);
+    SetWindowTheme(s_hGestureList, L"DarkMode_Explorer", nullptr);
+  } else {
+    SetWindowTheme(s_hGestureList, L"Explorer", nullptr);
+  }
   HWND hGestHdr = ListView_GetHeader(s_hGestureList);
-  if (hGestHdr) SetWindowTheme(hGestHdr, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
+  if (hGestHdr) {
+      SetWindowTheme(hGestHdr, isDark ? L"DarkMode_ItemsView" : L"Explorer", nullptr);
+      SetWindowSubclass(hGestHdr, SettingsHeaderSubclassProc, 1, 0);
+  }
 
   LVCOLUMNW lvcG = { 0 };
   lvcG.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
@@ -871,7 +1096,13 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   createLabel(8, zh ? L"执行功能:" : L"Action:", marginX + Theme::Get().Scale(245, hwnd), gEditY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(70, hwnd), lineH);
   s_hGestActionCombo = createCombo(8, marginX + Theme::Get().Scale(320, hwnd), gEditY, 378, 180);
   for (size_t a = 0; a < sizeof(s_allActions)/sizeof(s_allActions[0]); ++a) {
-      SendMessageW(s_hGestActionCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? s_allActions[a].nameZh : s_allActions[a].nameEn));
+      int idx = (int)SendMessageW(s_hGestActionCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? s_allActions[a].nameZh : s_allActions[a].nameEn));
+      SendMessageW(s_hGestActionCombo, CB_SETITEMDATA, idx, (LPARAM)s_allActions[a].id);
+  }
+  for (const auto& s : ScriptEngine::Get().GetScripts()) {
+      std::wstring sName = (zh ? L"【脚本】" : L"[Script] ") + s.name;
+      int idx = (int)SendMessageW(s_hGestActionCombo, CB_ADDSTRING, 0, (LPARAM)sName.c_str());
+      SendMessageW(s_hGestActionCombo, CB_SETITEMDATA, idx, (LPARAM)s.commandId);
   }
   SendMessageW(s_hGestActionCombo, CB_SETCURSEL, 0, 0);
 
@@ -887,25 +1118,25 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   int gBtnX = marginX + Theme::Get().Scale(245, hwnd);
   int gBtnW = Theme::Get().Scale(65, hwnd);
 
-  s_hBtnGestAdd = CreateWindowExW(0, L"BUTTON", zh ? L"增加(&A)" : L"Add(&A)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+  s_hBtnGestAdd = CreateWindowExW(0, L"BUTTON", zh ? L"增加(&A)" : L"Add(&A)", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                                  gBtnX, gEditY, gBtnW, btnH, hwnd, (HMENU)363, hInst, nullptr);
   SendMessageW(s_hBtnGestAdd, WM_SETFONT, (WPARAM)hFont, TRUE);
   addCtrl(8, s_hBtnGestAdd);
 
   gBtnX += gBtnW + Theme::Get().Scale(6, hwnd);
-  s_hBtnGestMod = CreateWindowExW(0, L"BUTTON", zh ? L"修改(&M)" : L"Modify(&M)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+  s_hBtnGestMod = CreateWindowExW(0, L"BUTTON", zh ? L"修改(&M)" : L"Modify(&M)", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                                  gBtnX, gEditY, gBtnW, btnH, hwnd, (HMENU)364, hInst, nullptr);
   SendMessageW(s_hBtnGestMod, WM_SETFONT, (WPARAM)hFont, TRUE);
   addCtrl(8, s_hBtnGestMod);
 
   gBtnX += gBtnW + Theme::Get().Scale(6, hwnd);
-  s_hBtnGestDel = CreateWindowExW(0, L"BUTTON", zh ? L"删除(&D)" : L"Delete(&D)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+  s_hBtnGestDel = CreateWindowExW(0, L"BUTTON", zh ? L"删除(&D)" : L"Delete(&D)", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                                  gBtnX, gEditY, gBtnW, btnH, hwnd, (HMENU)365, hInst, nullptr);
   SendMessageW(s_hBtnGestDel, WM_SETFONT, (WPARAM)hFont, TRUE);
   addCtrl(8, s_hBtnGestDel);
 
   gBtnX += gBtnW + Theme::Get().Scale(6, hwnd);
-  s_hBtnGestReset = CreateWindowExW(0, L"BUTTON", zh ? L"恢复默认(&R)" : L"Reset(&R)", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+  s_hBtnGestReset = CreateWindowExW(0, L"BUTTON", zh ? L"恢复默认(&R)" : L"Reset(&R)", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
                                    gBtnX, gEditY, gBtnW + Theme::Get().Scale(24, hwnd), btnH, hwnd, (HMENU)366, hInst, nullptr);
   SendMessageW(s_hBtnGestReset, WM_SETFONT, (WPARAM)hFont, TRUE);
   addCtrl(8, s_hBtnGestReset);
@@ -1013,7 +1244,6 @@ void SettingsDialog::SaveSettings(HWND hwnd) {
   cfg.viewMode = (int)SendMessageW(s_hViewModeCombo, CB_GETCURSEL, 0, 0);
   cfg.showHidden = (SendMessageW(s_hChkHidden, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.calcFolderSize = (SendMessageW(s_hChkCalcSize, BM_GETCHECK, 0, 0) == BST_CHECKED);
-  cfg.zebraStriping = (SendMessageW(s_hChkZebraStriping, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.showGridLines = (SendMessageW(s_hChkGridLines, BM_GETCHECK, 0, 0) == BST_CHECKED);
 
   // Page 6: Search & Filter
@@ -1073,7 +1303,7 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                           : (isDown ? Theme::Get().BrushSelected() : CreateSolidBrush(RGB(240, 242, 245)));
       FillRect(pdis->hDC, &pdis->rcItem, hBg);
 
-      HPEN hPen = isDark ? Theme::Get().PenBorder() : CreatePen(PS_SOLID, 1, RGB(180, 185, 195));
+      HPEN hPen = CreatePen(PS_SOLID, 1, isDark ? Theme::Get().ClrBorder() : RGB(180, 185, 195));
       HGDIOBJ oldPen = SelectObject(pdis->hDC, hPen);
       SelectObject(pdis->hDC, GetStockObject(NULL_BRUSH));
       RoundRect(pdis->hDC, pdis->rcItem.left, pdis->rcItem.top, pdis->rcItem.right, pdis->rcItem.bottom, 4, 4);
@@ -1128,12 +1358,26 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
   case WM_CTLCOLORSTATIC:
   case WM_CTLCOLORBTN: {
     HDC hdc = (HDC)wParam;
+    HWND hCtrl = (HWND)lParam;
+    wchar_t clsName[32] = { 0 };
+    GetClassNameW(hCtrl, clsName, 32);
+    if (_wcsicmp(clsName, L"COMBOBOX") == 0) {
+      SetTextColor(hdc, Theme::Get().ClrTextPrimary());
+      SetBkColor(hdc, Theme::Get().ClrSurface());
+      return (INT_PTR)Theme::Get().BrushSurface();
+    }
     SetTextColor(hdc, Theme::Get().ClrTextPrimary());
     SetBkColor(hdc, Theme::Get().ClrBackground());
     return (INT_PTR)Theme::Get().BrushBackground();
   }
   case WM_CTLCOLOREDIT:
   case WM_CTLCOLORLISTBOX: {
+    HDC hdc = (HDC)wParam;
+    SetTextColor(hdc, Theme::Get().ClrTextPrimary());
+    SetBkColor(hdc, Theme::Get().ClrSurface());
+    return (INT_PTR)Theme::Get().BrushSurface();
+  }
+  case WM_CTLCOLORSCROLLBAR: {
     HDC hdc = (HDC)wParam;
     SetTextColor(hdc, Theme::Get().ClrTextPrimary());
     SetBkColor(hdc, Theme::Get().ClrSurface());
@@ -1168,9 +1412,12 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
       NMLISTVIEW* pnmv = (NMLISTVIEW*)lParam;
       if ((pnmv->uNewState & LVIS_SELECTED) && pnmv->iItem >= 0 && pnmv->iItem < (int)s_tempShortcuts.size()) {
           const auto& sc = s_tempShortcuts[pnmv->iItem];
-          // Find action index in combo
-          for (size_t a = 0; a < sizeof(s_allActions)/sizeof(s_allActions[0]); ++a) {
-              if (sc.name == (I18n::Get().IsChinese() ? s_allActions[a].nameZh : s_allActions[a].nameEn)) {
+          // Find action index in combo by matching text
+          int aCount = (int)SendMessageW(s_hScActionCombo, CB_GETCOUNT, 0, 0);
+          for (int a = 0; a < aCount; ++a) {
+              wchar_t buf[256] = { 0 };
+              SendMessageW(s_hScActionCombo, CB_GETLBTEXT, a, (LPARAM)buf);
+              if (sc.name == buf) {
                   SendMessageW(s_hScActionCombo, CB_SETCURSEL, (WPARAM)a, 0);
                   break;
               }
@@ -1197,8 +1444,10 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                   break;
               }
           }
-          for (size_t a = 0; a < sizeof(s_allActions)/sizeof(s_allActions[0]); ++a) {
-              if (g.action == s_allActions[a].id) {
+          int aCount = (int)SendMessageW(s_hGestActionCombo, CB_GETCOUNT, 0, 0);
+          for (int a = 0; a < aCount; ++a) {
+              int actId = (int)SendMessageW(s_hGestActionCombo, CB_GETITEMDATA, a, 0);
+              if (g.action == actId) {
                   SendMessageW(s_hGestActionCombo, CB_SETCURSEL, (WPARAM)a, 0);
                   break;
               }
@@ -1230,10 +1479,13 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     if (id == 356) { // Add Shortcut
       int aIdx = (int)SendMessageW(s_hScActionCombo, CB_GETCURSEL, 0, 0);
       int kIdx = (int)SendMessageW(s_hScKeyCombo, CB_GETCURSEL, 0, 0);
-      if (aIdx >= 0 && aIdx < (int)(sizeof(s_allActions)/sizeof(s_allActions[0])) &&
+      int aCount = (int)SendMessageW(s_hScActionCombo, CB_GETCOUNT, 0, 0);
+      if (aIdx >= 0 && aIdx < aCount &&
           kIdx >= 0 && kIdx < (int)(sizeof(s_keyChoices)/sizeof(s_keyChoices[0]))) {
           ShortcutItem item;
-          item.name = I18n::Get().IsChinese() ? s_allActions[aIdx].nameZh : s_allActions[aIdx].nameEn;
+          wchar_t actBuf[256] = { 0 };
+          SendMessageW(s_hScActionCombo, CB_GETLBTEXT, aIdx, (LPARAM)actBuf);
+          item.name = actBuf;
           item.key = s_keyChoices[kIdx];
           item.shift = (SendMessageW(s_hScShift, BM_GETCHECK, 0, 0) == BST_CHECKED);
           item.ctrl = (SendMessageW(s_hScCtrl, BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -1248,10 +1500,13 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
       int sel = ListView_GetNextItem(s_hShortcutList, -1, LVNI_SELECTED);
       int aIdx = (int)SendMessageW(s_hScActionCombo, CB_GETCURSEL, 0, 0);
       int kIdx = (int)SendMessageW(s_hScKeyCombo, CB_GETCURSEL, 0, 0);
+      int aCount = (int)SendMessageW(s_hScActionCombo, CB_GETCOUNT, 0, 0);
       if (sel >= 0 && sel < (int)s_tempShortcuts.size() &&
-          aIdx >= 0 && aIdx < (int)(sizeof(s_allActions)/sizeof(s_allActions[0])) &&
+          aIdx >= 0 && aIdx < aCount &&
           kIdx >= 0 && kIdx < (int)(sizeof(s_keyChoices)/sizeof(s_keyChoices[0]))) {
-          s_tempShortcuts[sel].name = I18n::Get().IsChinese() ? s_allActions[aIdx].nameZh : s_allActions[aIdx].nameEn;
+          wchar_t actBuf[256] = { 0 };
+          SendMessageW(s_hScActionCombo, CB_GETLBTEXT, aIdx, (LPARAM)actBuf);
+          s_tempShortcuts[sel].name = actBuf;
           s_tempShortcuts[sel].key = s_keyChoices[kIdx];
           s_tempShortcuts[sel].shift = (SendMessageW(s_hScShift, BM_GETCHECK, 0, 0) == BST_CHECKED);
           s_tempShortcuts[sel].ctrl = (SendMessageW(s_hScCtrl, BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -1278,12 +1533,15 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     if (id == 363) { // Add gesture
       int pIdx = (int)SendMessageW(s_hGestPatternCombo, CB_GETCURSEL, 0, 0);
       int aIdx = (int)SendMessageW(s_hGestActionCombo, CB_GETCURSEL, 0, 0);
+      int aCount = (int)SendMessageW(s_hGestActionCombo, CB_GETCOUNT, 0, 0);
       if (pIdx >= 0 && pIdx < (int)(sizeof(s_allPatterns)/sizeof(s_allPatterns[0])) &&
-          aIdx >= 0 && aIdx < (int)(sizeof(s_allActions)/sizeof(s_allActions[0]))) {
+          aIdx >= 0 && aIdx < aCount) {
           GestureEntry ge;
           ge.code = s_allPatterns[pIdx].code;
-          ge.action = s_allActions[aIdx].id;
-          ge.name = I18n::Get().IsChinese() ? s_allActions[aIdx].nameZh : s_allActions[aIdx].nameEn;
+          ge.action = (int)SendMessageW(s_hGestActionCombo, CB_GETITEMDATA, aIdx, 0);
+          wchar_t actBuf[256] = { 0 };
+          SendMessageW(s_hGestActionCombo, CB_GETLBTEXT, aIdx, (LPARAM)actBuf);
+          ge.name = actBuf;
           s_tempGestures.push_back(ge);
           PopulateGestureList(s_hGestureList);
           ListView_SetItemState(s_hGestureList, (int)s_tempGestures.size() - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
@@ -1293,12 +1551,15 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
       int sel = ListView_GetNextItem(s_hGestureList, -1, LVNI_SELECTED);
       int pIdx = (int)SendMessageW(s_hGestPatternCombo, CB_GETCURSEL, 0, 0);
       int aIdx = (int)SendMessageW(s_hGestActionCombo, CB_GETCURSEL, 0, 0);
+      int aCount = (int)SendMessageW(s_hGestActionCombo, CB_GETCOUNT, 0, 0);
       if (sel >= 0 && sel < (int)s_tempGestures.size() &&
           pIdx >= 0 && pIdx < (int)(sizeof(s_allPatterns)/sizeof(s_allPatterns[0])) &&
-          aIdx >= 0 && aIdx < (int)(sizeof(s_allActions)/sizeof(s_allActions[0]))) {
+          aIdx >= 0 && aIdx < aCount) {
           s_tempGestures[sel].code = s_allPatterns[pIdx].code;
-          s_tempGestures[sel].action = s_allActions[aIdx].id;
-          s_tempGestures[sel].name = I18n::Get().IsChinese() ? s_allActions[aIdx].nameZh : s_allActions[aIdx].nameEn;
+          s_tempGestures[sel].action = (int)SendMessageW(s_hGestActionCombo, CB_GETITEMDATA, aIdx, 0);
+          wchar_t actBuf[256] = { 0 };
+          SendMessageW(s_hGestActionCombo, CB_GETLBTEXT, aIdx, (LPARAM)actBuf);
+          s_tempGestures[sel].name = actBuf;
           PopulateGestureList(s_hGestureList);
           ListView_SetItemState(s_hGestureList, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
       }
@@ -1319,7 +1580,11 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
           { "UD", (int)GestureAction::NewTab, L"新建标签页" },
           { "DR", (int)GestureAction::CloseTab, L"关闭当前标签页" },
           { "UL", (int)GestureAction::ToggleTree, L"显示/隐藏侧边栏目录树" },
-          { "UR", (int)GestureAction::TogglePreview, L"显示/隐藏快速预览窗格" }
+          { "UR", (int)GestureAction::TogglePreview, L"显示/隐藏快速预览窗格" },
+          { "RU", (int)GestureAction::ScrollTop, L"滚动到列表顶部" },
+          { "RD", (int)GestureAction::ScrollBottom, L"滚动到列表底部" },
+          { "LU", (int)GestureAction::PageUp, L"向上翻页" },
+          { "LD", (int)GestureAction::PageDown, L"向下翻页" }
       };
       PopulateGestureList(s_hGestureList);
       return 0;

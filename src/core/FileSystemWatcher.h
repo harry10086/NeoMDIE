@@ -10,11 +10,8 @@ public:
     void Stop();
 
 private:
-    void WatchThreadFunc();
+    static void WatchWorker(std::wstring currentDir, HWND notifyWnd, UINT notifyMsg, HANDLE hStopEvent);
 
-    std::wstring m_currentDir;
-    HWND m_notifyWnd = nullptr;
-    UINT m_notifyMsg = 0;
     std::atomic<bool> m_running = false;
     std::thread m_thread;
     HANDLE m_hStopEvent = nullptr;

@@ -13,7 +13,7 @@ public:
     MainWindow();
     ~MainWindow();
 
-    HWND Create(HINSTANCE hInstance, int nCmdShow);
+    HWND Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& initialPath = L"");
     HWND GetHwnd() const { return m_hwnd; }
     HACCEL GetAcceleratorTable() const { return m_hAccel; }
     void RebuildAccelerators();
@@ -38,7 +38,9 @@ private:
     void AddToHistory(const std::wstring& path);
     void DrawToolbarButton(DRAWITEMSTRUCT* pdis);
     void UpdateWindowTitle(const std::wstring& path);
+    void LayoutCenterArea();
     void ApplyTheme();
+    void OnSettingsApplied();
     void AddTrayIcon();
     void RemoveTrayIcon();
     bool m_hasTrayIcon = false;
@@ -53,13 +55,13 @@ private:
     HWND m_hwndBtnForward = nullptr;
     HWND m_hwndBtnUp = nullptr;
     HWND m_hwndBtnRefresh = nullptr;
-    HWND m_hwndBtnNewTab = nullptr;
     HWND m_hwndBtnTree = nullptr;
     HWND m_hwndBtnSplit = nullptr;
     HWND m_hwndBtnPreview = nullptr;
     HWND m_hwndTooltip = nullptr;
 
     TabBar m_tabBar;
+    int m_currentTabIndex = -1;
     BreadcrumbBar m_breadcrumb;
     FilterBar m_filterBar;
     LinksBar m_linksBar;

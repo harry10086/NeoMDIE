@@ -141,7 +141,7 @@ const wchar_t* I18n::T(StringId id) const {
     case StringId::MenuTools:          return zh ? L"工具(&T)" : L"Tools(&T)";
     case StringId::MenuTerminal:       return zh ? L"在此处打开 Windows Terminal(&W)\tCtrl+`" : L"Open Windows Terminal Here(&W)\tCtrl+`";
     case StringId::MenuPowerShell:     return zh ? L"在此处打开 PowerShell(&P)" : L"Open PowerShell Here(&P)";
-    case StringId::MenuCmd:            return zh ? L"在此处打开命令提示符(&C)" : L"Open Command Prompt Here(&C)";
+    case StringId::MenuCmd:            return zh ? L"打开命令CMD(&C)" : L"Open CMD(&C)";
     case StringId::MenuVSCode:         return zh ? L"在此处用 VS Code 打开(&V)" : L"Open in VS Code Here(&V)";
     case StringId::MenuReloadScripts:  return zh ? L"重新载入扩展脚本(&R)\tCtrl+Shift+R" : L"Reload Extension Scripts(&R)\tCtrl+Shift+R";
     case StringId::MenuScriptConsole:  return zh ? L"扩展脚本控制台(&O)\tF12" : L"Script Console(&O)\tF12";

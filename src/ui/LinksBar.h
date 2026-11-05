@@ -26,6 +26,7 @@ public:
 
     std::function<void(const std::wstring& path)> onNavigate;
     std::function<void(const std::wstring& path)> onOpenNewTab;
+    std::function<void(const std::wstring& path)> onOpenBgTab;
     std::function<void(const std::wstring& path)> onOpenSplit;
 
 private:

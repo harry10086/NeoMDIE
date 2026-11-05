@@ -22,21 +22,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     Config& cfg = Config::Get();
     cfg.Load();
 
-    // 4. Single Instance Check & IPC
+    // Parse command line folder argument early
+    std::wstring folderArg;
+    int nArgs = 0;
+    LPWSTR* szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
+    if (szArglist && nArgs > 1) {
+        folderArg = szArglist[1];
+        LocalFree(szArglist);
+    }
+    while (!folderArg.empty() && (folderArg.back() == L'"' || folderArg.back() == L' ')) folderArg.pop_back();
+    while (!folderArg.empty() && folderArg.front() == L'"') folderArg.erase(folderArg.begin());
+    if (folderArg.length() == 2 && folderArg[1] == L':') folderArg += L"\\";
+
+    // 4. Single Instance / Explorer Replace Check & IPC
     HANDLE hMutex = nullptr;
-    if (cfg.singleInstance) {
+    if (cfg.singleInstance || ShellUtils::IsExplorerReplaced()) {
         hMutex = CreateMutexW(nullptr, FALSE, L"Local\\NeoMDIE_SingleInstance_Mutex");
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
             HWND hExisting = FindWindowW(L"NeoMDIE_MainWindow", nullptr);
             if (hExisting) {
-                // Parse command line folder argument
-                std::wstring folderArg;
-                int nArgs = 0;
-                LPWSTR* szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
-                if (szArglist && nArgs > 1) {
-                    folderArg = szArglist[1];
-                    LocalFree(szArglist);
-                }
                 if (!folderArg.empty()) {
                     COPYDATASTRUCT cds;
                     cds.dwData = 1;
@@ -62,11 +66,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
     // 6. Initialize Theme and Shell
     Theme::Get().Initialize();
+    if (cfg.themeMode == 0) {
+        Theme::Get().SetDarkMode(false);
+    } else if (cfg.themeMode == 1) {
+        Theme::Get().SetDarkMode(true);
+    }
     ShellUtils::Initialize();
 
     // 7. Create Main Window
     MainWindow mainWin;
-    HWND hwnd = mainWin.Create(hInstance, nCmdShow);
+    HWND hwnd = mainWin.Create(hInstance, nCmdShow, folderArg);
     if (!hwnd) {
         if (hMutex) CloseHandle(hMutex);
         OleUninitialize();

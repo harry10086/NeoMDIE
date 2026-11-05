@@ -1,9 +1,13 @@
 // ==NeoScript==
 // @name         复制选中文件名
-// @description  将所有选中的文件名提取并复制到剪贴板
+// @description  将所有选中的文件或文件夹名称提取并复制到系统剪贴板
 // @hotkey       Ctrl+Shift+C
 // @toolbar      true
 // ==/NeoScript==
+
+/**
+ * NeoMDIE 扩展脚本: 复制选中文件名
+ */
 
 var shell = new ActiveXObject("WScript.Shell");
 var fso = new ActiveXObject("Scripting.FileSystemObject");
@@ -11,22 +15,69 @@ var fso = new ActiveXObject("Scripting.FileSystemObject");
 var activePath = shell.Environment("PROCESS")("NEOMDIE_ACTIVE_PATH");
 var selectedFiles = shell.Environment("PROCESS")("NEOMDIE_SELECTED_FILES");
 
-WScript.Echo("当前路径: " + activePath);
-
+if (!activePath) {
+    activePath = shell.ExpandEnvironmentStrings("%NEOMDIE_ACTIVE_PATH%");
+    if (activePath === "%NEOMDIE_ACTIVE_PATH%") activePath = "";
+}
 if (!selectedFiles) {
-    WScript.Echo("未选择任何文件。");
+    selectedFiles = shell.ExpandEnvironmentStrings("%NEOMDIE_SELECTED_FILES%");
+    if (selectedFiles === "%NEOMDIE_SELECTED_FILES%") selectedFiles = "";
+}
+
+if (!selectedFiles || selectedFiles.length === 0) {
+    WScript.Echo("【提示】未选择任何文件。\r\n\r\n请在当前文件列表中选中一个或多个文件/文件夹后再运行此脚本。");
 } else {
     var files = selectedFiles.split("|");
-    WScript.Echo("选中了 " + files.length + " 个文件:");
-    var output = "";
+    var names = [];
     for (var i = 0; i < files.length; i++) {
-        var name = fso.GetFileName(files[i]);
-        WScript.Echo(" - " + name);
-        output += name + "\r\n";
+        var f = files[i];
+        if (f && f.length > 0) {
+            var name = fso.GetFileName(f);
+            if (!name) {
+                var clean = f.replace(/[\\/]+$/, "");
+                var lastSlash = clean.lastIndexOf("\\");
+                if (lastSlash === -1) lastSlash = clean.lastIndexOf("/");
+                name = (lastSlash !== -1) ? clean.substring(lastSlash + 1) : clean;
+            }
+            if (name) {
+                names.push(name);
+            }
+        }
     }
 
-    // 复制到剪贴板
-    var clipCmd = "powershell.exe -command \"Set-Clipboard -Value @'\n" + output.replace(/'/g, "''") + "'@\"";
-    shell.Run(clipCmd, 0, true);
-    WScript.Echo("已成功复制到剪贴板！");
+    if (names.length === 0) {
+        WScript.Echo("【提示】未能检测到选中的有效文件名。");
+    } else {
+        var output = names.join("\r\n");
+
+        var copied = false;
+        // 方法 1: 使用 Windows 原生 clip.exe (极速，无窗口弹出)
+        try {
+            var exec = shell.Exec("%windir%\\system32\\clip.exe");
+            exec.StdIn.Write(output);
+            exec.StdIn.Close();
+            while (exec.Status === 0) {
+                WScript.Sleep(20);
+            }
+            copied = true;
+        } catch (e1) {
+            copied = false;
+        }
+
+        // 方法 2: 备用方案，通过 PowerShell Set-Clipboard
+        if (!copied) {
+            try {
+                var tempFile = fso.GetSpecialFolder(2) + "\\neomdie_clip_" + new Date().getTime() + ".txt";
+                var ts = fso.CreateTextFile(tempFile, true, true); // Unicode UTF-16
+                ts.Write(output);
+                ts.Close();
+                var cmd = 'powershell.exe -NoProfile -STA -Command "Set-Clipboard -Value (Get-Content -LiteralPath \'' + tempFile + '\' -Raw -Encoding Unicode); Remove-Item -LiteralPath \'' + tempFile + '\' -Force"';
+                shell.Run(cmd, 0, true);
+                copied = true;
+            } catch (e2) {}
+        }
+
+        var preview = names.length > 6 ? (names.slice(0, 6).join("\r\n") + "\r\n... (共 " + names.length + " 项)") : output;
+        WScript.Echo("【复制成功】已将 " + names.length + " 个文件名复制到系统剪贴板！\r\n\r\n预览内容:\r\n" + preview);
+    }
 }

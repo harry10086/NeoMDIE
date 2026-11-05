@@ -23,7 +23,7 @@ public:
 
   FileListView *GetActivePane();
   int GetActiveIndex() const { return m_activePane; }
-  void SetActivePane(int index);
+  void SetActivePane(int index, bool force = false);
 
   FileListView &GetPane(int index) { return m_panes[std::clamp(index, 0, 3)]; }
   int GetPaneCount() const;

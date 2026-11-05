@@ -8,13 +8,26 @@ echo ===================================================
 if not exist "bin" mkdir bin
 if not exist "bin\scripts" mkdir bin\scripts
 copy /y scripts\*.js bin\scripts\ >nul 2>&1
+copy /y scripts\*.ps1 bin\scripts\ >nul 2>&1
 if exist "bin\NeoMDIE.exe" (
     del /f /q "bin\NeoMDIE.exe.old" >nul 2>&1
     move /y "bin\NeoMDIE.exe" "bin\NeoMDIE.exe.old" >nul 2>&1
 )
 
-call "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-if errorlevel 1 (
+where cl.exe >nul 2>&1
+if %errorlevel% neq 0 (
+    if exist "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" (
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+    ) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
+        call "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+    ) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat" (
+        call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat"
+    ) else if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" (
+        call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+    )
+)
+where cl.exe >nul 2>&1
+if %errorlevel% neq 0 (
     echo [ERROR] Failed to initialize Visual Studio build environment!
     exit /b 1
 )

@@ -257,7 +257,8 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 WindowAction act = Config::Get().actionLinks.ResolveAction(trigger);
                 if (act == WindowAction::CurrentPane && onNavigate) onNavigate(m_links[i].path);
                 else if (act == WindowAction::OtherPane && onOpenSplit) onOpenSplit(m_links[i].path);
-                else if ((act == WindowAction::NewTab || act == WindowAction::BgTab) && onOpenNewTab) onOpenNewTab(m_links[i].path);
+                else if (act == WindowAction::NewTab && onOpenNewTab) onOpenNewTab(m_links[i].path);
+                else if (act == WindowAction::BgTab && onOpenBgTab) onOpenBgTab(m_links[i].path);
                 else if (act == WindowAction::Explorer) ShellExecuteW(nullptr, L"explore", m_links[i].path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                 return 0;
             }
@@ -275,7 +276,8 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 WindowAction act = Config::Get().actionLinks.ResolveAction(trigger);
                 if (act == WindowAction::CurrentPane && onNavigate) onNavigate(m_links[i].path);
                 else if (act == WindowAction::OtherPane && onOpenSplit) onOpenSplit(m_links[i].path);
-                else if ((act == WindowAction::NewTab || act == WindowAction::BgTab) && onOpenNewTab) onOpenNewTab(m_links[i].path);
+                else if (act == WindowAction::NewTab && onOpenNewTab) onOpenNewTab(m_links[i].path);
+                else if (act == WindowAction::BgTab && onOpenBgTab) onOpenBgTab(m_links[i].path);
                 else if (act == WindowAction::Explorer) ShellExecuteW(nullptr, L"explore", m_links[i].path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
                 return 0;
             }
@@ -303,6 +305,7 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (hitIndex >= 0) {
             AppendMenuW(hMenu, MF_STRING, 1, isZh ? L"打开(&O)" : L"Open(&O)");
             AppendMenuW(hMenu, MF_STRING, 2, isZh ? L"在新标签页中打开(&T)" : L"Open in New Tab(&T)");
+            AppendMenuW(hMenu, MF_STRING, 7, isZh ? L"在后台新标签页中打开(&B)" : L"Open in Background Tab(&B)");
             AppendMenuW(hMenu, MF_STRING, 3, isZh ? L"在新栏中打开(&S)" : L"Open in New Pane(&S)");
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(hMenu, MF_STRING, 4, isZh ? L"复制路径(&C)" : L"Copy Path(&C)");
@@ -321,6 +324,7 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             switch (cmd) {
             case 1: if (onNavigate) onNavigate(m_links[hitIndex].path); break;
             case 2: if (onOpenNewTab) onOpenNewTab(m_links[hitIndex].path); break;
+            case 7: if (onOpenBgTab) onOpenBgTab(m_links[hitIndex].path); break;
             case 3: if (onOpenSplit) onOpenSplit(m_links[hitIndex].path); break;
             case 4: ShellUtils::CopyToClipboard(m_links[hitIndex].path); break;
             case 5: RemoveLink(hitIndex); break;

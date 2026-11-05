@@ -45,11 +45,11 @@ void PreviewPane::Clear() {
 
 void PreviewPane::UpdateLayout(int x, int y, int width, int height) {
     if (m_hwnd) {
-        MoveWindow(m_hwnd, x, y, width, height, TRUE);
+        SetWindowPos(m_hwnd, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         int headerH = Theme::Get().Scale(26, m_hwnd);
         RECT rc = { 0, headerH, width, height };
         m_host.Resize(rc);
-        InvalidateRect(m_hwnd, nullptr, TRUE);
+        InvalidateRect(m_hwnd, nullptr, FALSE);
     }
 }
 
@@ -64,7 +64,7 @@ LRESULT PreviewPane::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     switch (msg) {
     case WM_PAINT: {
         PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
+        HDC hdcScreen = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
         int w = rc.right - rc.left;
@@ -73,6 +73,10 @@ LRESULT PreviewPane::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             EndPaint(hwnd, &ps);
             return 0;
         }
+
+        HDC hdc = CreateCompatibleDC(hdcScreen);
+        HBITMAP hBmp = CreateCompatibleBitmap(hdcScreen, w, h);
+        HGDIOBJ oldBmp = SelectObject(hdc, hBmp);
 
         int headerH = Theme::Get().Scale(26, hwnd);
         int btnW = Theme::Get().Scale(26, hwnd);
@@ -119,15 +123,27 @@ LRESULT PreviewPane::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         SelectObject(hdc, oldFont);
 
         // 2. Content background
-        RECT rcContent = { 0, headerH, rc.right, rc.bottom };
-        FillRect(hdc, &rcContent, Theme::Get().BrushBackground());
+        if (!m_host.HasActiveHandler()) {
+            RECT rcContent = { 0, headerH, rc.right, rc.bottom };
+            FillRect(hdc, &rcContent, Theme::Get().BrushBackground());
 
-        // Left separator line
-        RECT rcBorder = { 0, 0, 1, rc.bottom };
-        FillRect(hdc, &rcBorder, Theme::Get().BrushBorder());
+            // Left separator line
+            RECT rcBorder = { 0, 0, 1, rc.bottom };
+            FillRect(hdc, &rcBorder, Theme::Get().BrushBorder());
 
-        // Draw fallback content if no active preview handler
-        m_host.DrawFallback(hdc, rcContent);
+            // Draw fallback content if no active preview handler
+            m_host.DrawFallback(hdc, rcContent);
+        } else {
+            // Left separator line
+            RECT rcBorder = { 0, 0, 1, rc.bottom };
+            FillRect(hdc, &rcBorder, Theme::Get().BrushBorder());
+        }
+
+        BitBlt(hdcScreen, 0, 0, w, h, hdc, 0, 0, SRCCOPY);
+
+        SelectObject(hdc, oldBmp);
+        DeleteObject(hBmp);
+        DeleteDC(hdc);
 
         EndPaint(hwnd, &ps);
         return 0;

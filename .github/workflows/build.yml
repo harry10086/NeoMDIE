@@ -1,0 +1,87 @@
+name: Build and Release NeoMDIE
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build NeoMDIE x64 Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Compile NeoMDIE
+        shell: cmd
+        run: |
+          build.bat release
+
+      - name: Prepare Release Package
+        shell: powershell
+        run: |
+          $ver = if ($env:GITHUB_REF -like "refs/tags/*") { $env:GITHUB_REF -replace "refs/tags/", "" } else { "v1.0.0" }
+          $pkgName = "NeoMDIE-$ver-windows-x64"
+          $pkgDir = "release_pkg\$pkgName"
+          New-Item -ItemType Directory -Force -Path $pkgDir
+          
+          # Copy binary and essential files
+          Copy-Item -Path "bin\NeoMDIE.exe" -Destination $pkgDir\
+          if (Test-Path "scripts") {
+              Copy-Item -Path "scripts" -Destination $pkgDir\scripts -Recurse
+          }
+          if (Test-Path "bin\scripts") {
+              New-Item -ItemType Directory -Force -Path $pkgDir\scripts
+              Copy-Item -Path "bin\scripts\*" -Destination $pkgDir\scripts\ -Recurse -Force
+          }
+          if (Test-Path "README.md") {
+              Copy-Item -Path "README.md" -Destination $pkgDir\
+          }
+          if (Test-Path "LICENSE") {
+              Copy-Item -Path "LICENSE" -Destination $pkgDir\
+          }
+
+          Compress-Archive -Path "$pkgDir\*" -DestinationPath "release_pkg\$pkgName.zip" -Force
+          Get-FileHash -Algorithm SHA256 "release_pkg\$pkgName.zip" | Out-File "release_pkg\$pkgName.zip.sha256"
+          echo "PACKAGE_PATH=release_pkg\$pkgName.zip" >> $env:GITHUB_ENV
+          echo "PACKAGE_SHA=release_pkg\$pkgName.zip.sha256" >> $env:GITHUB_ENV
+          echo "RELEASE_TAG=$ver" >> $env:GITHUB_ENV
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeoMDIE-Windows-x64
+          path: |
+            bin/NeoMDIE.exe
+            release_pkg/*.zip
+            release_pkg/*.sha256
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.PACKAGE_PATH }}
+            ${{ env.PACKAGE_SHA }}
+            bin/NeoMDIE.exe
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: NeoMDIE ${{ env.RELEASE_TAG }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true

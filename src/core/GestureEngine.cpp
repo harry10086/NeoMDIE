@@ -1,6 +1,8 @@
 #include "GestureEngine.h"
 #include "I18n.h"
 #include "Config.h"
+#include "ScriptEngine.h"
+#include "..\resource.h"
 #include "..\ui\Theme.h"
 
 static const wchar_t* GESTURE_HUD_CLASS = L"NeoMDIE_GestureHUD";
@@ -180,44 +182,53 @@ void GestureEngine::ProcessMovement(int x, int y) {
 
 std::wstring GestureEngine::GetActionName(GestureAction action) {
     bool zh = I18n::Get().IsChinese();
+    int intAct = static_cast<int>(action);
+    if (intAct >= ID_SCRIPT_COMMAND_START && intAct <= ID_SCRIPT_COMMAND_END) {
+        for (const auto& s : ScriptEngine::Get().GetScripts()) {
+            if (s.commandId == (UINT)intAct) {
+                return (zh ? L"【脚本】" : L"[Script] ") + s.name;
+            }
+        }
+        return zh ? L"【扩展脚本】" : L"[Script]";
+    }
     switch (action) {
-    case GestureAction::NavBack:      return zh ? L"后退" : L"Back";
-    case GestureAction::NavForward:   return zh ? L"前进" : L"Forward";
-    case GestureAction::NavUp:        return zh ? L"向上一级" : L"Up";
-    case GestureAction::CloseTab:     return zh ? L"关闭标签页" : L"Close Tab";
-    case GestureAction::NewTab:       return zh ? L"新建标签页" : L"New Tab";
-    case GestureAction::Refresh:      return zh ? L"刷新" : L"Refresh";
-    case GestureAction::DuplicateTab: return zh ? L"复制标签页" : L"Duplicate Tab";
-    case GestureAction::ToggleTree:   return zh ? L"切换目录树" : L"Toggle Tree";
-    case GestureAction::TogglePreview:return zh ? L"切换预览窗格" : L"Toggle Preview";
-    case GestureAction::OpenTerminal: return zh ? L"打开终端" : L"Open Terminal";
-    case GestureAction::MaximizePane: return zh ? L"最大化/还原当前栏" : L"Maximize/Restore Pane";
-    case GestureAction::ClosePane:    return zh ? L"关闭当前栏" : L"Close Pane";
-    case GestureAction::ScrollTop:    return zh ? L"滚动到列表首端" : L"Scroll to Top";
-    case GestureAction::ScrollBottom: return zh ? L"滚动到列表末端" : L"Scroll to Bottom";
-    case GestureAction::PageUp:       return zh ? L"向上翻页" : L"Page Up";
-    case GestureAction::PageDown:     return zh ? L"向下翻页" : L"Page Down";
-    case GestureAction::NewFolder:    return zh ? L"新建文件夹" : L"New Folder";
-    case GestureAction::Copy:         return zh ? L"复制选中项" : L"Copy";
-    case GestureAction::Cut:          return zh ? L"剪切选中项" : L"Cut";
-    case GestureAction::Paste:        return zh ? L"粘贴剪贴板" : L"Paste";
-    case GestureAction::SelectAll:    return zh ? L"全部选择" : L"Select All";
-    case GestureAction::Properties:   return zh ? L"查看属性" : L"Properties";
-    case GestureAction::LockTab:      return zh ? L"锁定/解锁当前标签" : L"Lock/Unlock Tab";
-    case GestureAction::ReopenClosedTab: return zh ? L"恢复关闭的标签" : L"Reopen Closed Tab";
-    case GestureAction::NextTab:      return zh ? L"切换到下一个标签" : L"Next Tab";
-    case GestureAction::PrevTab:      return zh ? L"切换到上一个标签" : L"Previous Tab";
-    case GestureAction::CloseOtherTabs: return zh ? L"关闭其他标签页" : L"Close Other Tabs";
-    case GestureAction::LayoutSingle: return zh ? L"单栏模式" : L"Single Pane";
-    case GestureAction::Layout2H:     return zh ? L"左右双栏" : L"Dual Pane Horizontal";
-    case GestureAction::Layout2V:     return zh ? L"上下双栏" : L"Dual Pane Vertical";
-    case GestureAction::Layout4Grid:  return zh ? L"四分栏模式" : L"4 Panes Grid";
-    case GestureAction::CopyPath:     return zh ? L"复制当前路径" : L"Copy Path";
-    case GestureAction::Delete:       return zh ? L"删除选中项" : L"Delete";
-    case GestureAction::Rename:       return zh ? L"重命名" : L"Rename";
-    case GestureAction::NewMD:        return zh ? L"新建Markdown文档" : L"New Markdown Document";
-    case GestureAction::ToggleHidden: return zh ? L"显示/隐藏隐藏文件" : L"Toggle Hidden Files";
-    case GestureAction::OpenSettings: return zh ? L"打开选项设置" : L"Options & Settings";
+    case GestureAction::NavBack:         return zh ? L"后退" : L"Back";
+    case GestureAction::NavForward:      return zh ? L"前进" : L"Forward";
+    case GestureAction::NavUp:           return zh ? L"向上一级" : L"Up to Parent";
+    case GestureAction::CloseTab:        return zh ? L"关闭当前标签页" : L"Close Current Tab";
+    case GestureAction::NewTab:          return zh ? L"新建标签页" : L"New Tab";
+    case GestureAction::Refresh:         return zh ? L"刷新" : L"Refresh";
+    case GestureAction::DuplicateTab:    return zh ? L"复制当前标签页" : L"Duplicate Current Tab";
+    case GestureAction::ToggleTree:      return zh ? L"显示/隐藏侧边栏目录树" : L"Toggle Tree Sidebar";
+    case GestureAction::TogglePreview:   return zh ? L"显示/隐藏快速预览窗格" : L"Toggle Preview Pane";
+    case GestureAction::OpenTerminal:    return zh ? L"打开命令行 CMD" : L"Open Command Prompt CMD";
+    case GestureAction::MaximizePane:    return zh ? L"最大化/还原当前栏" : L"Maximize/Restore Pane";
+    case GestureAction::ClosePane:       return zh ? L"关闭当前栏" : L"Close Pane";
+    case GestureAction::ScrollTop:       return zh ? L"滚动到列表顶部" : L"Scroll to Top";
+    case GestureAction::ScrollBottom:    return zh ? L"滚动到列表底部" : L"Scroll to Bottom";
+    case GestureAction::PageUp:          return zh ? L"向上翻页" : L"Page Up";
+    case GestureAction::PageDown:        return zh ? L"向下翻页" : L"Page Down";
+    case GestureAction::NewFolder:       return zh ? L"新建文件夹" : L"New Folder";
+    case GestureAction::Copy:            return zh ? L"复制选中项" : L"Copy";
+    case GestureAction::Cut:             return zh ? L"剪切选中项" : L"Cut";
+    case GestureAction::Paste:           return zh ? L"粘贴" : L"Paste";
+    case GestureAction::SelectAll:       return zh ? L"全选" : L"Select All";
+    case GestureAction::Properties:      return zh ? L"属性" : L"Properties";
+    case GestureAction::LockTab:         return zh ? L"锁定/解锁当前标签页" : L"Pin/Unpin Tab";
+    case GestureAction::ReopenClosedTab: return zh ? L"恢复最近关闭的标签页" : L"Reopen Closed Tab";
+    case GestureAction::NextTab:         return zh ? L"切换到下一个标签页" : L"Next Tab";
+    case GestureAction::PrevTab:         return zh ? L"切换到上一个标签页" : L"Previous Tab";
+    case GestureAction::CloseOtherTabs:  return zh ? L"关闭其他标签页" : L"Close Other Tabs";
+    case GestureAction::LayoutSingle:    return zh ? L"单栏模式" : L"Single Pane";
+    case GestureAction::Layout2H:        return zh ? L"左右双栏" : L"Dual Pane Horizontal";
+    case GestureAction::Layout2V:        return zh ? L"上下双栏" : L"Dual Pane Vertical";
+    case GestureAction::Layout4Grid:     return zh ? L"四分栏模式" : L"4 Panes Grid";
+    case GestureAction::CopyPath:        return zh ? L"复制当前路径" : L"Copy Path";
+    case GestureAction::Delete:          return zh ? L"删除选中项" : L"Delete";
+    case GestureAction::Rename:          return zh ? L"重命名" : L"Rename";
+    case GestureAction::NewMD:           return zh ? L"新建Markdown文档" : L"New Markdown Document";
+    case GestureAction::ToggleHidden:    return zh ? L"显示/隐藏隐藏文件" : L"Toggle Hidden Files";
+    case GestureAction::OpenSettings:    return zh ? L"选项与设置" : L"Options & Settings";
     case GestureAction::InvertSelection: return zh ? L"反向选择" : L"Invert Selection";
     default: return zh ? L"无动作" : L"None";
     }
@@ -226,10 +237,10 @@ std::wstring GestureEngine::GetActionName(GestureAction action) {
 std::wstring GestureEngine::CodeToArrowString(const std::string& code) {
     std::wstring s;
     for (char c : code) {
-        if (c == 'L') s += L"←";
-        else if (c == 'R') s += L"→";
-        else if (c == 'U') s += L"↑";
-        else if (c == 'D') s += L"↓";
+        if (c == 'L') s += (wchar_t)0x2190;      // ←
+        else if (c == 'R') s += (wchar_t)0x2192; // →
+        else if (c == 'U') s += (wchar_t)0x2191; // ↑
+        else if (c == 'D') s += (wchar_t)0x2193; // ↓
     }
     return s;
 }

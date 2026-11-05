@@ -10,6 +10,7 @@ enum NeoMDIECommand {
     CMD_NEOMDIE_CMD          = 0x7106,
     CMD_NEOMDIE_ADD_LINKS    = 0x7107,
     CMD_NEOMDIE_SETTINGS     = 0x7108,
+    CMD_NEOMDIE_OPEN_BG_TAB  = 0x7109,
 
     // Background view modes
     CMD_BG_VIEW_DETAILS      = 0x7110,
@@ -36,12 +37,46 @@ enum NeoMDIECommand {
     CMD_BG_PROPERTIES        = 0x7134,
     CMD_BG_NEW_FOLDER        = 0x7135,
     CMD_BG_NEW_FILE          = 0x7136,
-    CMD_BG_NEW_MD            = 0x7137
+    CMD_BG_NEW_MD            = 0x7137,
+    CMD_BG_NEW_CSV           = 0x7138,
+    CMD_BG_NEW_RTF           = 0x7139,
+    CMD_BG_NEW_SHORTCUT      = 0x713A,
+
+    // Dynamic ShellNew commands
+    CMD_BG_NEW_DYNAMIC_BASE  = 0x7200,
+    CMD_BG_NEW_DYNAMIC_MAX   = 0x72FF
+};
+
+enum class ShellNewAction {
+    NullFile,
+    FileName,
+    Data,
+    Command
+};
+
+struct ShellNewItem {
+    std::wstring ext;
+    std::wstring menuText;
+    std::wstring defaultName;
+    ShellNewAction action = ShellNewAction::NullFile;
+    std::wstring templatePath;
+    std::vector<BYTE> data;
+    std::wstring command;
+    HBITMAP hBitmap = nullptr;
 };
 
 namespace ShellUtils {
     void Initialize();
     HIMAGELIST GetSystemImageList(bool large);
+
+    // ShellNew template management
+    const std::vector<ShellNewItem>& GetShellNewItems();
+    void ReloadShellNewItems();
+    bool CreateShellNewFile(const ShellNewItem& item, const std::wstring& targetDir, std::wstring& outCreatedPath);
+    HBITMAP GetShellNewFolderBitmap();
+    HBITMAP GetShellNewShortcutBitmap();
+    HBITMAP GetShellNewMdBitmap();
+    HBITMAP GetShellNewTextBitmap();
 
     int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder);
     std::wstring GetItemTypeName(const std::wstring& path, DWORD attr);
@@ -72,6 +107,10 @@ namespace ShellUtils {
     std::wstring GetParentPath(const std::wstring& path);
     std::wstring GetDisplayName(const std::wstring& path);
     bool CreateShortcut(const std::wstring& shortcutPath, const std::wstring& targetPath, const std::wstring& args = L"", const std::wstring& desc = L"");
+
+    // Drag & Drop
+    IDataObject* CreateFileDataObject(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths);
+    HRESULT DoFileDragDrop(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths, bool isRightClick, DWORD* pdwEffectOut);
 
     // Replace Windows Explorer
     bool IsExplorerReplaced();

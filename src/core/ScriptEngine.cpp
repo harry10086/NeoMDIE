@@ -33,31 +33,71 @@ void ScriptEngine::ParseScriptHeader(const std::wstring& filePath, ScriptInfo& i
     HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
     if (hFile == INVALID_HANDLE_VALUE) return;
 
-    char buffer[4096] = { 0 };
+    BYTE buffer[8192] = { 0 };
     DWORD bytesRead = 0;
-    ReadFile(hFile, buffer, sizeof(buffer) - 1, &bytesRead, nullptr);
+    ReadFile(hFile, buffer, sizeof(buffer) - 2, &bytesRead, nullptr);
     CloseHandle(hFile);
 
     if (bytesRead == 0) return;
-    std::string content(buffer, bytesRead);
-    std::istringstream stream(content);
-    std::string line;
 
+    std::wstring wContent;
+    if (bytesRead >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF) {
+        int len = MultiByteToWideChar(CP_UTF8, 0, (char*)(buffer + 3), bytesRead - 3, nullptr, 0);
+        if (len > 0) {
+            wContent.resize(len);
+            MultiByteToWideChar(CP_UTF8, 0, (char*)(buffer + 3), bytesRead - 3, &wContent[0], len);
+        }
+    } else if (bytesRead >= 2 && buffer[0] == 0xFF && buffer[1] == 0xFE) {
+        wContent.assign((wchar_t*)(buffer + 2), (bytesRead - 2) / sizeof(wchar_t));
+    } else {
+        wContent = Util::DecodeOutput(std::string((char*)buffer, bytesRead));
+    }
+
+    if (wContent.empty()) return;
+
+    auto cleanStr = [](const std::wstring& in) -> std::wstring {
+        std::wstring s = in;
+        while (!s.empty() && (s.back() == L'\r' || s.back() == L'\n' || s.back() == L' ' || s.back() == L'\t')) {
+            s.pop_back();
+        }
+        size_t start = 0;
+        while (start < s.length() && (s[start] == L' ' || s[start] == L'\t' || s[start] == L'\r' || s[start] == L'\n')) {
+            start++;
+        }
+        s = s.substr(start);
+
+        // Unescape \uXXXX if present
+        std::wstring unescaped;
+        for (size_t i = 0; i < s.length(); i++) {
+            if (s[i] == L'\\' && i + 5 < s.length() && (s[i + 1] == L'u' || s[i + 1] == L'U')) {
+                wchar_t hex[5] = { s[i + 2], s[i + 3], s[i + 4], s[i + 5], 0 };
+                wchar_t* endPtr = nullptr;
+                long val = wcstol(hex, &endPtr, 16);
+                if (endPtr == hex + 4 && val > 0) {
+                    unescaped += (wchar_t)val;
+                    i += 5;
+                    continue;
+                }
+            }
+            unescaped += s[i];
+        }
+        return unescaped;
+    };
+
+    std::wistringstream stream(wContent);
+    std::wstring line;
     while (std::getline(stream, line)) {
-        if (line.find("// ==/NeoScript==") != std::string::npos) break;
-        if (line.find("// @name") != std::string::npos) {
-            size_t pos = line.find("@name") + 5;
-            while (pos < line.length() && (line[pos] == ' ' || line[pos] == '\t')) pos++;
-            info.name = Util::Utf8ToWide(line.substr(pos));
-        } else if (line.find("// @description") != std::string::npos) {
-            size_t pos = line.find("@description") + 12;
-            while (pos < line.length() && (line[pos] == ' ' || line[pos] == '\t')) pos++;
-            info.description = Util::Utf8ToWide(line.substr(pos));
-        } else if (line.find("// @hotkey") != std::string::npos) {
-            size_t pos = line.find("@hotkey") + 7;
-            while (pos < line.length() && (line[pos] == ' ' || line[pos] == '\t')) pos++;
-            info.hotkey = Util::Utf8ToWide(line.substr(pos));
-        } else if (line.find("// @toolbar") != std::string::npos) {
+        if (line.find(L"// ==/NeoScript==") != std::wstring::npos) break;
+        if (line.find(L"// @name") != std::wstring::npos) {
+            size_t pos = line.find(L"@name") + 5;
+            info.name = cleanStr(line.substr(pos));
+        } else if (line.find(L"// @description") != std::wstring::npos) {
+            size_t pos = line.find(L"@description") + 12;
+            info.description = cleanStr(line.substr(pos));
+        } else if (line.find(L"// @hotkey") != std::wstring::npos) {
+            size_t pos = line.find(L"@hotkey") + 7;
+            info.hotkey = cleanStr(line.substr(pos));
+        } else if (line.find(L"// @toolbar") != std::wstring::npos) {
             info.showInToolbar = true;
         }
     }
@@ -159,15 +199,25 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
         WaitForSingleObject(pi.hProcess, 5000);
         CloseHandle(pi.hProcess);
 
-        std::wstring wOutput = Util::Utf8ToWide(output);
+        std::wstring wOutput = Util::DecodeOutput(output);
+
+        while (!wOutput.empty() && (wOutput.back() == L'\r' || wOutput.back() == L'\n' || wOutput.back() == L' ' || wOutput.back() == L'\t')) {
+            wOutput.pop_back();
+        }
+        while (!wOutput.empty() && (wOutput.front() == L'\r' || wOutput.front() == L'\n' || wOutput.front() == L' ' || wOutput.front() == L'\t')) {
+            wOutput.erase(wOutput.begin());
+        }
+
         if (!wOutput.empty()) {
             Log(wOutput);
+            bool isErr = (wOutput.find(L"错误") != std::wstring::npos ||
+                          wOutput.find(L"Error") != std::wstring::npos ||
+                          wOutput.find(L"error") != std::wstring::npos ||
+                          wOutput.find(L"Exception") != std::wstring::npos);
             MessageBoxW(m_hwndMain, wOutput.c_str(), isZh ? L"NeoMDIE 脚本执行结果" : L"Script Execution Result",
-                        MB_OK | (output.find("错误") != std::string::npos ? MB_ICONWARNING : MB_ICONINFORMATION));
+                        MB_OK | (isErr ? MB_ICONWARNING : MB_ICONINFORMATION));
         } else {
             Log(L"脚本执行完毕。");
-            MessageBoxW(m_hwndMain, isZh ? L"脚本执行完毕。" : L"Script execution finished.",
-                        isZh ? L"脚本提示" : L"Script Notice", MB_OK | MB_ICONINFORMATION);
         }
     } else {
         DWORD err = GetLastError();

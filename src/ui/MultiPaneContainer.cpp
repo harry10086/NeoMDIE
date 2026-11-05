@@ -1,6 +1,7 @@
 #include "MultiPaneContainer.h"
-#include "Theme.h"
 #include "..\core\I18n.h"
+#include "Theme.h"
+
 
 static const wchar_t *MULTIPANE_CLASS = L"NeoMDIE_MultiPaneContainer";
 static const wchar_t *PANEHEADER_CLASS = L"NeoMDIE_PaneHeader";
@@ -42,8 +43,8 @@ HWND MultiPaneContainer::Create(HWND hwndParent, int id) {
     // 1. Create Header
     m_hHeaders[i] = CreateWindowExW(
         0, PANEHEADER_CLASS, L"",
-        WS_CHILD | (i == 0 ? WS_VISIBLE : 0) | WS_CLIPSIBLINGS,
-        0, 0, 100, 26, m_hwnd, (HMENU)(INT_PTR)(2001 + i), hInst, this);
+        WS_CHILD | (i == 0 ? WS_VISIBLE : 0) | WS_CLIPSIBLINGS, 0, 0, 100, 26,
+        m_hwnd, (HMENU)(INT_PTR)(2001 + i), hInst, this);
     SetWindowLongPtrW(m_hHeaders[i], GWLP_USERDATA, (LONG_PTR)this);
 
     // 2. Create ListView
@@ -60,7 +61,8 @@ HWND MultiPaneContainer::Create(HWND hwndParent, int id) {
       }
     };
 
-    m_panes[i].onGestureAction = [this](GestureAction act) {
+    m_panes[i].onGestureAction = [this, i](GestureAction act) {
+      SetActivePane(i);
       if (onGestureAction) {
         onGestureAction(act);
       }
@@ -99,10 +101,11 @@ FileListView *MultiPaneContainer::GetActivePane() {
   return &m_panes[m_activePane];
 }
 
-void MultiPaneContainer::SetActivePane(int index) {
+void MultiPaneContainer::SetActivePane(int index, bool force) {
   int maxPanes = GetPaneCount();
   index = std::clamp(index, 0, maxPanes - 1);
-  if (m_activePane != index) {
+  // Always apply active index to ensure full visual and focus sync
+  if (force || m_activePane != index) {
     m_activePane = index;
     for (int i = 0; i < 4; ++i) {
       if (m_hHeaders[i]) {
@@ -144,7 +147,8 @@ void MultiPaneContainer::ClosePane(int index) {
       m_panes[i].NavigateTo(m_panes[i + 1].GetCurrentPath());
     }
     SetLayout(PaneLayout::DualVertical);
-  } else if (m_layout == PaneLayout::DualVertical || m_layout == PaneLayout::DualHorizontal) {
+  } else if (m_layout == PaneLayout::DualVertical ||
+             m_layout == PaneLayout::DualHorizontal) {
     // 2 -> 1
     if (index == 0) {
       m_panes[0].NavigateTo(m_panes[1].GetCurrentPath());
@@ -225,7 +229,8 @@ void MultiPaneContainer::SetLayout(PaneLayout layout) {
 }
 
 void MultiPaneContainer::ApplyTheme() {
-  if (m_hwnd) Theme::Get().ApplyToWindow(m_hwnd);
+  if (m_hwnd)
+    Theme::Get().ApplyToWindow(m_hwnd);
   for (int i = 0; i < 4; ++i) {
     m_panes[i].ApplyTheme();
     if (m_hHeaders[i]) {
@@ -270,14 +275,17 @@ void MultiPaneContainer::LayoutChildren() {
 
   auto positionPane = [&](int idx, int x, int y, int w, int h) {
     if (idx >= 0 && idx < 4) {
+      ShowWindow(m_panes[idx].GetHwnd(), SW_SHOW);
       if (count > 1 && m_hHeaders[idx]) {
         ShowWindow(m_hHeaders[idx], SW_SHOW);
-        SetWindowPos(m_hHeaders[idx], HWND_TOP, x, y, w, headerH, SWP_SHOWWINDOW | SWP_NOCOPYBITS);
+        SetWindowPos(m_hHeaders[idx], HWND_TOP, x, y, w, headerH,
+                     SWP_SHOWWINDOW | SWP_NOCOPYBITS);
         InvalidateRect(m_hHeaders[idx], nullptr, TRUE);
       } else if (m_hHeaders[idx]) {
         ShowWindow(m_hHeaders[idx], SW_HIDE);
       }
       m_panes[idx].UpdateLayout(x, y + headerH, w, h - headerH);
+      InvalidateRect(m_panes[idx].GetHwnd(), nullptr, TRUE);
     }
   };
 
@@ -285,38 +293,56 @@ void MultiPaneContainer::LayoutChildren() {
     for (int i = 0; i < 4; ++i) {
       if (i == m_maximizedPane) {
         ShowWindow(m_panes[i].GetHwnd(), SW_SHOW);
-        if (m_hHeaders[i]) ShowWindow(m_hHeaders[i], SW_SHOW);
-        positionPane(i, borderPad, borderPad, totalW - borderPad * 2, totalH - borderPad * 2);
+        if (m_hHeaders[i])
+          ShowWindow(m_hHeaders[i], SW_SHOW);
+        positionPane(i, borderPad, borderPad, totalW - borderPad * 2,
+                     totalH - borderPad * 2);
       } else {
         ShowWindow(m_panes[i].GetHwnd(), SW_HIDE);
-        if (m_hHeaders[i]) ShowWindow(m_hHeaders[i], SW_HIDE);
+        if (m_hHeaders[i])
+          ShowWindow(m_hHeaders[i], SW_HIDE);
       }
     }
     return;
   }
 
+  // Ensure inactive panes past count are hidden
+  for (int i = count; i < 4; ++i) {
+    ShowWindow(m_panes[i].GetHwnd(), SW_HIDE);
+    if (m_hHeaders[i])
+      ShowWindow(m_hHeaders[i], SW_HIDE);
+  }
+
   switch (m_layout) {
   case PaneLayout::Single:
-    positionPane(0, borderPad, borderPad, totalW - borderPad * 2, totalH - borderPad * 2);
+    positionPane(0, borderPad, borderPad, totalW - borderPad * 2,
+                 totalH - borderPad * 2);
     break;
 
   case PaneLayout::DualVertical: {
     int minW = Theme::Get().Scale(90, m_hwnd);
     int w1 = (totalW * m_splitH) / 100 - splitW / 2;
-    if (w1 < minW) w1 = minW;
-    if (totalW - w1 - splitW < minW) w1 = totalW - minW - splitW;
+    if (w1 < minW)
+      w1 = minW;
+    if (totalW - w1 - splitW < minW)
+      w1 = totalW - minW - splitW;
     int w2 = totalW - w1 - splitW;
-    if (w2 < 0) w2 = 0;
-    positionPane(0, borderPad, borderPad, w1 - borderPad * 2, totalH - borderPad * 2);
-    positionPane(1, w1 + splitW + borderPad, borderPad, w2 - borderPad * 2, totalH - borderPad * 2);
+    if (w2 < 0)
+      w2 = 0;
+    positionPane(0, borderPad, borderPad, w1 - borderPad * 2,
+                 totalH - borderPad * 2);
+    positionPane(1, w1 + splitW + borderPad, borderPad, w2 - borderPad * 2,
+                 totalH - borderPad * 2);
     break;
   }
 
   case PaneLayout::DualHorizontal: {
     int h1 = (totalH * m_splitV) / 100 - splitW / 2;
     int h2 = totalH - h1 - splitW;
-    positionPane(0, borderPad, borderPad, totalW - borderPad * 2, h1 - borderPad * 2);
-    positionPane(1, borderPad, h1 + splitW + borderPad, totalW - borderPad * 2, h2 - borderPad * 2);
+    positionPane(0, borderPad, borderPad, totalW - borderPad * 2,
+                 h1 - borderPad * 2);
+    positionPane(1, borderPad, h1 + splitW + borderPad, totalW - borderPad * 2,
+                 h2 - borderPad * 2);
     break;
   }
 
@@ -326,10 +352,14 @@ void MultiPaneContainer::LayoutChildren() {
     int h1 = (totalH * m_splitV) / 100 - splitW / 2;
     int h2 = totalH - h1 - splitW;
 
-    positionPane(0, borderPad, borderPad, w1 - borderPad * 2, h1 - borderPad * 2);
-    positionPane(1, w1 + splitW + borderPad, borderPad, w2 - borderPad * 2, h1 - borderPad * 2);
-    positionPane(2, borderPad, h1 + splitW + borderPad, w1 - borderPad * 2, h2 - borderPad * 2);
-    positionPane(3, w1 + splitW + borderPad, h1 + splitW + borderPad, w2 - borderPad * 2, h2 - borderPad * 2);
+    positionPane(0, borderPad, borderPad, w1 - borderPad * 2,
+                 h1 - borderPad * 2);
+    positionPane(1, w1 + splitW + borderPad, borderPad, w2 - borderPad * 2,
+                 h1 - borderPad * 2);
+    positionPane(2, borderPad, h1 + splitW + borderPad, w1 - borderPad * 2,
+                 h2 - borderPad * 2);
+    positionPane(3, w1 + splitW + borderPad, h1 + splitW + borderPad,
+                 w2 - borderPad * 2, h2 - borderPad * 2);
     break;
   }
 
@@ -339,9 +369,12 @@ void MultiPaneContainer::LayoutChildren() {
     int h1 = (totalH * m_splitV) / 100 - splitW / 2;
     int h2 = totalH - h1 - splitW;
 
-    positionPane(0, borderPad, borderPad, w1 - borderPad * 2, totalH - borderPad * 2);
-    positionPane(1, w1 + splitW + borderPad, borderPad, w2 - borderPad * 2, h1 - borderPad * 2);
-    positionPane(2, w1 + splitW + borderPad, h1 + splitW + borderPad, w2 - borderPad * 2, h2 - borderPad * 2);
+    positionPane(0, borderPad, borderPad, w1 - borderPad * 2,
+                 totalH - borderPad * 2);
+    positionPane(1, w1 + splitW + borderPad, borderPad, w2 - borderPad * 2,
+                 h1 - borderPad * 2);
+    positionPane(2, w1 + splitW + borderPad, h1 + splitW + borderPad,
+                 w2 - borderPad * 2, h2 - borderPad * 2);
     break;
   }
   }
@@ -350,7 +383,9 @@ void MultiPaneContainer::LayoutChildren() {
 static int s_headerHoverPane = -1;
 static int s_headerHoverBtn = 0; // 0: none, 1: min, 2: max, 3: close
 
-LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, int paneIdx) {
+LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg,
+                                                WPARAM wParam, LPARAM lParam,
+                                                int paneIdx) {
   switch (msg) {
   case WM_SIZE:
   case WM_WINDOWPOSCHANGED:
@@ -378,7 +413,8 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg, WPARAM wPar
     bool isActive = (paneIdx == m_activePane);
 
     // Header Background
-    HBRUSH hbrBg = isActive ? CreateSolidBrush(Theme::Get().ClrAccent()) : Theme::Get().BrushSurface();
+    HBRUSH hbrBg = isActive ? CreateSolidBrush(Theme::Get().ClrAccent())
+                            : Theme::Get().BrushSurface();
     FillRect(hdc, &rc, hbrBg);
     if (isActive) {
       DeleteObject(hbrBg);
@@ -392,24 +428,21 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg, WPARAM wPar
     SelectObject(hdc, oldPen);
 
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, isActive ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary());
+    SetTextColor(hdc,
+                 isActive ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary());
     HFONT hFont = Theme::Get().GetUIFont(hwnd);
     HGDIOBJ oldFont = SelectObject(hdc, hFont);
 
     int btnW = Theme::Get().Scale(24, hwnd);
-    RECT rcClose = { rc.right - btnW, 0, rc.right, rc.bottom - 1 };
-    RECT rcMax = { rc.right - btnW * 2, 0, rc.right - btnW, rc.bottom - 1 };
-    RECT rcMin = { rc.right - btnW * 3, 0, rc.right - btnW * 2, rc.bottom - 1 };
+    RECT rcClose = {rc.right - btnW, 0, rc.right, rc.bottom - 1};
+    RECT rcMax = {rc.right - btnW * 2, 0, rc.right - btnW, rc.bottom - 1};
 
     // Button hover effects
     if (s_headerHoverPane == paneIdx) {
       if (s_headerHoverBtn == 1) {
         HBRUSH hbrHov = Theme::Get().BrushHover();
-        FillRect(hdc, &rcMin, hbrHov);
-      } else if (s_headerHoverBtn == 2) {
-        HBRUSH hbrHov = Theme::Get().BrushHover();
         FillRect(hdc, &rcMax, hbrHov);
-      } else if (s_headerHoverBtn == 3) {
+      } else if (s_headerHoverBtn == 2) {
         HBRUSH hbrCloseHov = CreateSolidBrush(RGB(232, 17, 35));
         FillRect(hdc, &rcClose, hbrCloseHov);
         DeleteObject(hbrCloseHov);
@@ -418,35 +451,38 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg, WPARAM wPar
 
     // Path & Folder Icon
     std::wstring path = m_panes[paneIdx].GetCurrentPath();
-    if (path.empty()) path = L"This PC";
+    if (path.empty())
+      path = L"This PC";
     std::wstring titleText = L" [ " + path + L" ]";
 
-    RECT rcText = { rc.left + Theme::Get().Scale(6, hwnd), 0, rc.right - btnW * 3 - Theme::Get().Scale(4, hwnd), rc.bottom - 1 };
-    DrawTextW(hdc, titleText.c_str(), -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT rcText = {rc.left + Theme::Get().Scale(6, hwnd), 0,
+                   rc.right - btnW * 2 - Theme::Get().Scale(4, hwnd),
+                   rc.bottom - 1};
+    DrawTextW(hdc, titleText.c_str(), -1, &rcText,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-    // 3 standard header buttons: Minimize, Maximize/Restore, Close
-    COLORREF btnClr = isActive ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary();
+    // Header buttons: Maximize/Restore, Close
+    COLORREF btnClr =
+        isActive ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary();
     HFONT hIconFont = Theme::Get().GetIconFont(11, hwnd);
     HGDIOBJ oldIconFont = SelectObject(hdc, hIconFont);
 
-    // Minimize
-    SetTextColor(hdc, btnClr);
-    wchar_t minGlyph[2] = { 0xE921, 0 };
-    DrawTextW(hdc, minGlyph, 1, &rcMin, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
     // Maximize / Restore
-    wchar_t maxGlyph[2] = { (m_maximizedPane == paneIdx) ? (wchar_t)0xE923 : (wchar_t)0xE922, 0 };
+    SetTextColor(hdc, btnClr);
+    wchar_t maxGlyph[2] = {
+        (m_maximizedPane == paneIdx) ? (wchar_t)0xE923 : (wchar_t)0xE922, 0};
     DrawTextW(hdc, maxGlyph, 1, &rcMax, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     // Close
     if (GetPaneCount() > 1) {
-      if (s_headerHoverPane == paneIdx && s_headerHoverBtn == 3) {
+      if (s_headerHoverPane == paneIdx && s_headerHoverBtn == 2) {
         SetTextColor(hdc, RGB(255, 255, 255));
       } else {
         SetTextColor(hdc, btnClr);
       }
-      wchar_t closeGlyph[2] = { 0xE8BB, 0 };
-      DrawTextW(hdc, closeGlyph, 1, &rcClose, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+      wchar_t closeGlyph[2] = {0xE8BB, 0};
+      DrawTextW(hdc, closeGlyph, 1, &rcClose,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
     SelectObject(hdc, oldIconFont);
@@ -471,16 +507,14 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg, WPARAM wPar
     int btnW = Theme::Get().Scale(24, hwnd);
     int newHover = 0;
     if (x >= rc.right - btnW && x <= rc.right) {
-      newHover = 3;
+      newHover = 2; // Close
     } else if (x >= rc.right - btnW * 2 && x < rc.right - btnW) {
-      newHover = 2;
-    } else if (x >= rc.right - btnW * 3 && x < rc.right - btnW * 2) {
-      newHover = 1;
+      newHover = 1; // Maximize / Restore
     }
     if (s_headerHoverPane != paneIdx || s_headerHoverBtn != newHover) {
       s_headerHoverPane = paneIdx;
       s_headerHoverBtn = newHover;
-      TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+      TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
       TrackMouseEvent(&tme);
       InvalidateRect(hwnd, nullptr, FALSE);
     }
@@ -520,7 +554,8 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg, WPARAM wPar
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-LRESULT MultiPaneContainer::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+LRESULT MultiPaneContainer::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
+                                          LPARAM lParam) {
   RECT rc;
   GetClientRect(hwnd, &rc);
   int totalW = rc.right - rc.left;
@@ -542,24 +577,24 @@ LRESULT MultiPaneContainer::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LP
 
     if (m_layout == PaneLayout::DualVertical && totalW > 0) {
       int splitX = (totalW * m_splitH) / 100 - splitW / 2;
-      RECT rcSplit = { splitX, 0, splitX + splitW, totalH };
+      RECT rcSplit = {splitX, 0, splitX + splitW, totalH};
       FillRect(hdc, &rcSplit, hbrSplitter);
     } else if (m_layout == PaneLayout::DualHorizontal && totalH > 0) {
       int splitY = (totalH * m_splitV) / 100 - splitW / 2;
-      RECT rcSplit = { 0, splitY, totalW, splitY + splitW };
+      RECT rcSplit = {0, splitY, totalW, splitY + splitW};
       FillRect(hdc, &rcSplit, hbrSplitter);
     } else if (m_layout == PaneLayout::Quad && totalW > 0 && totalH > 0) {
       int splitX = (totalW * m_splitH) / 100 - splitW / 2;
       int splitY = (totalH * m_splitV) / 100 - splitW / 2;
-      RECT rcSplitV = { splitX, 0, splitX + splitW, totalH };
-      RECT rcSplitH = { 0, splitY, totalW, splitY + splitW };
+      RECT rcSplitV = {splitX, 0, splitX + splitW, totalH};
+      RECT rcSplitH = {0, splitY, totalW, splitY + splitW};
       FillRect(hdc, &rcSplitV, hbrSplitter);
       FillRect(hdc, &rcSplitH, hbrSplitter);
     } else if (m_layout == PaneLayout::ThreeLeft && totalW > 0 && totalH > 0) {
       int splitX = (totalW * m_splitH) / 100 - splitW / 2;
       int splitY = (totalH * m_splitV) / 100 - splitW / 2;
-      RECT rcSplitV = { splitX, 0, splitX + splitW, totalH };
-      RECT rcSplitH = { splitX + splitW, splitY, totalW, splitY + splitW };
+      RECT rcSplitV = {splitX, 0, splitX + splitW, totalH};
+      RECT rcSplitH = {splitX + splitW, splitY, totalW, splitY + splitW};
       FillRect(hdc, &rcSplitV, hbrSplitter);
       FillRect(hdc, &rcSplitH, hbrSplitter);
     }
@@ -606,7 +641,8 @@ LRESULT MultiPaneContainer::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LP
       if (pt.x >= splitX && pt.x <= splitX + splitW) {
         SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
         return TRUE;
-      } else if (pt.x > splitX + splitW && pt.y >= splitY && pt.y <= splitY + splitW) {
+      } else if (pt.x > splitX + splitW && pt.y >= splitY &&
+                 pt.y <= splitY + splitW) {
         SetCursor(LoadCursorW(nullptr, IDC_SIZENS));
         return TRUE;
       }
@@ -638,8 +674,10 @@ LRESULT MultiPaneContainer::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LP
       bool inX = (x >= splitX && x <= splitX + splitW);
       bool inY = (y >= splitY && y <= splitY + splitW);
       if (inX || inY) {
-        if (inX) m_draggingSplitH = true;
-        if (inY) m_draggingSplitV = true;
+        if (inX)
+          m_draggingSplitH = true;
+        if (inY)
+          m_draggingSplitV = true;
         SetCapture(hwnd);
         return 0;
       }
@@ -701,8 +739,11 @@ LRESULT MultiPaneContainer::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LP
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-LRESULT CALLBACK MultiPaneContainer::HeaderWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-  MultiPaneContainer *pThis = (MultiPaneContainer *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+LRESULT CALLBACK MultiPaneContainer::HeaderWndProc(HWND hwnd, UINT msg,
+                                                   WPARAM wParam,
+                                                   LPARAM lParam) {
+  MultiPaneContainer *pThis =
+      (MultiPaneContainer *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
   if (pThis) {
     int paneIdx = (int)(GetWindowLongPtrW(hwnd, GWLP_ID) - 2001);
     return pThis->HandleHeaderMessage(hwnd, msg, wParam, lParam, paneIdx);

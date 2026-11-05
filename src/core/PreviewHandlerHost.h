@@ -19,10 +19,15 @@ public:
 
 private:
     bool QueryPreviewHandlerClsid(const std::wstring& ext, CLSID& outClsid);
+    bool LoadImagePreview(const std::wstring& filePath);
 
     HWND m_hwndContainer = nullptr;
     IPreviewHandler* m_pPreviewHandler = nullptr;
     std::wstring m_currentFile;
     std::wstring m_fallbackText;
     HBITMAP m_hFallbackBitmap = nullptr;
+    int m_imgWidth = 0;
+    int m_imgHeight = 0;
+    std::wstring m_imgInfoText;
+    bool m_isPdf = false;
 };

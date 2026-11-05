@@ -98,6 +98,7 @@ public:
     void Save();
 
     std::wstring GetConfigFilePath() const { return m_iniPath; }
+    std::wstring GetIniPath() const { return m_iniPath; }
 
     WindowPlacementConfig window;
     int themeMode = -1; // -1: auto, 0: light, 1: dark

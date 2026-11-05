@@ -1,0 +1,22 @@
+Windows Registry Editor Version 5.00
+
+; NeoMDIE - 恢复系统默认资源管理器关联 (一键彻底清除所有劫持与残留)
+
+[-HKEY_CURRENT_USER\Software\Classes\Directory\shell\open_NeoMDIE]
+[-HKEY_CURRENT_USER\Software\Classes\Folder\shell\open_NeoMDIE]
+[-HKEY_CURRENT_USER\Software\Classes\Drive\shell\open_NeoMDIE]
+
+[-HKEY_CURRENT_USER\Software\Classes\Directory\shell\open]
+[-HKEY_CURRENT_USER\Software\Classes\Folder\shell\open]
+[-HKEY_CURRENT_USER\Software\Classes\Drive\shell\open]
+
+[HKEY_CURRENT_USER\Software\Classes\Directory\shell]
+@=-
+
+[-HKEY_CURRENT_USER\Software\Classes\Folder\shell]
+
+[HKEY_CURRENT_USER\Software\Classes\Drive\shell]
+@=-
+
+[-HKEY_CURRENT_USER\Software\Classes\CLSID\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}]
+

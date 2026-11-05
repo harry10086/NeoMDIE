@@ -28,5 +28,7 @@ private:
     LONG m_refCount = 1;
     HWND m_hwnd = nullptr;
     bool m_acceptable = false;
+    bool m_isRightDrag = false;
+    std::vector<std::wstring> m_cachedFiles;
     std::function<std::wstring(POINT ptScreen, bool& outIsSubFolder)> m_targetDirCallback;
 };

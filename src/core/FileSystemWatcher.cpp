@@ -1,14 +1,10 @@
 #include "FileSystemWatcher.h"
 
 FileSystemWatcher::FileSystemWatcher() {
-    m_hStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 }
 
 FileSystemWatcher::~FileSystemWatcher() {
     Stop();
-    if (m_hStopEvent) {
-        CloseHandle(m_hStopEvent);
-    }
 }
 
 void FileSystemWatcher::Watch(const std::wstring& directory, HWND notifyWnd, UINT notifyMsg) {
@@ -18,32 +14,35 @@ void FileSystemWatcher::Watch(const std::wstring& directory, HWND notifyWnd, UIN
         return;
     }
 
-    m_currentDir = directory;
-    m_notifyWnd = notifyWnd;
-    m_notifyMsg = notifyMsg;
     m_running = true;
-    ResetEvent(m_hStopEvent);
+    m_hStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    HANDLE hStop = m_hStopEvent;
 
-    m_thread = std::thread(&FileSystemWatcher::WatchThreadFunc, this);
+    m_thread = std::thread([directory, notifyWnd, notifyMsg, hStop]() {
+        WatchWorker(directory, notifyWnd, notifyMsg, hStop);
+    });
 }
 
 void FileSystemWatcher::Stop() {
     if (m_running) {
         m_running = false;
-        SetEvent(m_hStopEvent);
+        if (m_hStopEvent) {
+            SetEvent(m_hStopEvent);
+            m_hStopEvent = nullptr;
+        }
         if (m_thread.joinable()) {
-            m_thread.join();
+            m_thread.detach();
         }
     }
 }
 
-void FileSystemWatcher::WatchThreadFunc() {
-    HANDLE hDir = CreateFileW(m_currentDir.c_str(), FILE_LIST_DIRECTORY,
+void FileSystemWatcher::WatchWorker(std::wstring currentDir, HWND notifyWnd, UINT notifyMsg, HANDLE hStopEvent) {
+    HANDLE hDir = CreateFileW(currentDir.c_str(), FILE_LIST_DIRECTORY,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                               nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
 
     if (hDir == INVALID_HANDLE_VALUE) {
-        m_running = false;
+        if (hStopEvent) CloseHandle(hStopEvent);
         return;
     }
 
@@ -53,7 +52,7 @@ void FileSystemWatcher::WatchThreadFunc() {
     BYTE buffer[4096];
     DWORD bytesReturned = 0;
 
-    while (m_running) {
+    while (true) {
         ResetEvent(overlapped.hEvent);
         BOOL success = ReadDirectoryChangesW(
             hDir, buffer, sizeof(buffer), FALSE,
@@ -64,7 +63,7 @@ void FileSystemWatcher::WatchThreadFunc() {
 
         if (!success) break;
 
-        HANDLE handles[2] = { m_hStopEvent, overlapped.hEvent };
+        HANDLE handles[2] = { hStopEvent, overlapped.hEvent };
         DWORD waitResult = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
 
         if (waitResult == WAIT_OBJECT_0) {
@@ -73,14 +72,20 @@ void FileSystemWatcher::WatchThreadFunc() {
             break;
         } else if (waitResult == WAIT_OBJECT_0 + 1) {
             // Directory changed! Post message with debouncing
-            if (m_notifyWnd && IsWindow(m_notifyWnd)) {
-                PostMessageW(m_notifyWnd, m_notifyMsg, 0, 0);
+            if (notifyWnd && IsWindow(notifyWnd)) {
+                PostMessageW(notifyWnd, notifyMsg, 0, 0);
             }
-            // Sleep briefly to debounce rapid bursts of changes
-            Sleep(250);
+            // Wait briefly to debounce rapid bursts of changes, wake up immediately if stop event signaled
+            if (WaitForSingleObject(hStopEvent, 250) == WAIT_OBJECT_0) {
+                CancelIo(hDir);
+                break;
+            }
+        } else {
+            break;
         }
     }
 
     CloseHandle(overlapped.hEvent);
     CloseHandle(hDir);
+    if (hStopEvent) CloseHandle(hStopEvent);
 }

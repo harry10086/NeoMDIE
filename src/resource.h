@@ -134,6 +134,7 @@
 
 // Tools & Toolbar settings
 #define ID_TOOLS_SHORTCUTS_SETTINGS     40166
+#define ID_TOOLS_RESTORE_EXPLORER       40167
 #define ID_VIEW_TB_SWAP_ORDER           40167
 #define ID_VIEW_TB_RESET                40168
 #define ID_VIEW_DARK_MODE               40169

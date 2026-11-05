@@ -10,7 +10,7 @@ FolderSizeCalculator::~FolderSizeCalculator() {
     m_running = false;
     m_cv.notify_all();
     if (m_workerThread.joinable()) {
-        m_workerThread.join();
+        m_workerThread.detach();
     }
 }
 
@@ -43,7 +43,10 @@ uint64_t FolderSizeCalculator::CalculateRecursive(const std::wstring& path, std:
     std::vector<std::wstring> subdirs;
 
     do {
-        if (cancelToken || !m_running) break;
+        if (cancelToken || !m_running) {
+            FindClose(hFind);
+            return 0;
+        }
         if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
@@ -61,7 +64,10 @@ uint64_t FolderSizeCalculator::CalculateRecursive(const std::wstring& path, std:
     FindClose(hFind);
 
     for (const auto& sub : subdirs) {
-        if (cancelToken || !m_running) break;
+        if (cancelToken || !m_running) {
+            FindClose(hFind);
+            return 0;
+        }
         total += CalculateRecursive(sub, cancelToken);
     }
 
