@@ -34,34 +34,46 @@ jobs:
           build.bat release
 
       - name: Prepare Release Package
+        id: pkg
         shell: powershell
         run: |
-          $ver = if ($env:GITHUB_REF -like "refs/tags/*") { $env:GITHUB_REF -replace "refs/tags/", "" } else { "v1.0.0" }
+          $ver = if ($env:GITHUB_REF -like "refs/tags/*") {
+              $env:GITHUB_REF -replace "refs/tags/", ""
+          } else {
+              "v1.0.0"
+          }
           $pkgName = "NeoMDIE-$ver-windows-x64"
           $pkgDir = "release_pkg\$pkgName"
-          New-Item -ItemType Directory -Force -Path $pkgDir
+          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
           
-          # Copy binary and essential files
-          Copy-Item -Path "bin\NeoMDIE.exe" -Destination $pkgDir\
+          # Copy executable and supporting files
+          Copy-Item -Path "bin\NeoMDIE.exe" -Destination "$pkgDir\"
           if (Test-Path "scripts") {
-              Copy-Item -Path "scripts" -Destination $pkgDir\scripts -Recurse
+              Copy-Item -Path "scripts" -Destination "$pkgDir\scripts" -Recurse
           }
           if (Test-Path "bin\scripts") {
-              New-Item -ItemType Directory -Force -Path $pkgDir\scripts
-              Copy-Item -Path "bin\scripts\*" -Destination $pkgDir\scripts\ -Recurse -Force
+              New-Item -ItemType Directory -Force -Path "$pkgDir\scripts" | Out-Null
+              Copy-Item -Path "bin\scripts\*" -Destination "$pkgDir\scripts\" -Recurse -Force
+          }
+          if (Test-Path "bin\restore_explorer.bat") {
+              Copy-Item -Path "bin\restore_explorer.bat" -Destination "$pkgDir\"
+          }
+          if (Test-Path "bin\restore_explorer.reg") {
+              Copy-Item -Path "bin\restore_explorer.reg" -Destination "$pkgDir\"
           }
           if (Test-Path "README.md") {
-              Copy-Item -Path "README.md" -Destination $pkgDir\
+              Copy-Item -Path "README.md" -Destination "$pkgDir\"
           }
           if (Test-Path "LICENSE") {
-              Copy-Item -Path "LICENSE" -Destination $pkgDir\
+              Copy-Item -Path "LICENSE" -Destination "$pkgDir\"
           }
 
           Compress-Archive -Path "$pkgDir\*" -DestinationPath "release_pkg\$pkgName.zip" -Force
-          Get-FileHash -Algorithm SHA256 "release_pkg\$pkgName.zip" | Out-File "release_pkg\$pkgName.zip.sha256"
-          echo "PACKAGE_PATH=release_pkg\$pkgName.zip" >> $env:GITHUB_ENV
-          echo "PACKAGE_SHA=release_pkg\$pkgName.zip.sha256" >> $env:GITHUB_ENV
-          echo "RELEASE_TAG=$ver" >> $env:GITHUB_ENV
+          Get-FileHash -Algorithm SHA256 "release_pkg\$pkgName.zip" | Out-File -FilePath "release_pkg\$pkgName.zip.sha256" -Encoding utf8
+
+          "package_path=release_pkg/$pkgName.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "package_sha=release_pkg/$pkgName.zip.sha256" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "release_tag=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -72,16 +84,16 @@ jobs:
             release_pkg/*.zip
             release_pkg/*.sha256
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Create or Update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.PACKAGE_PATH }}
-            ${{ env.PACKAGE_SHA }}
+            release_pkg/*.zip
+            release_pkg/*.sha256
             bin/NeoMDIE.exe
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: NeoMDIE ${{ env.RELEASE_TAG }}
+          tag_name: ${{ steps.pkg.outputs.release_tag }}
+          name: NeoMDIE ${{ steps.pkg.outputs.release_tag }}
           draft: false
           prerelease: false
           generate_release_notes: true
