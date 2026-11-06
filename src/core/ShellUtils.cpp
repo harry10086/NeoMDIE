@@ -1471,6 +1471,7 @@ public:
 
             pmedium->tymed = TYMED_HGLOBAL;
             pmedium->hGlobal = hGlobal;
+            pmedium->pUnkForRelease = nullptr;
             return S_OK;
         }
         return DV_E_FORMATETC;
@@ -1569,6 +1570,8 @@ IDataObject* CreateFileDataObject(HWND hwnd, const std::wstring& currentDir, con
 HRESULT DoFileDragDrop(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths, DWORD* pdwEffectOut) {
     if (paths.empty()) return E_INVALIDARG;
 
+    ReleaseCapture();
+
     IDataObject* pDataObj = CreateFileDataObject(hwnd, currentDir, paths);
     if (!pDataObj) return E_FAIL;
 
@@ -1578,6 +1581,7 @@ HRESULT DoFileDragDrop(HWND hwnd, const std::wstring& currentDir, const std::vec
     if (SUCCEEDED(CoCreateInstance(CLSID_DragDropHelper, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pdsh)))) {
         POINT pt;
         GetCursorPos(&pt);
+        ScreenToClient(hwnd, &pt);
         pdsh->InitializeFromWindow(hwnd, &pt, pDataObj);
         pdsh->Release();
     }

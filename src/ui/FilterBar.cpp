@@ -66,7 +66,9 @@ void FilterBar::Clear() {
 
 void FilterBar::SetText(const std::wstring& text) {
     if (m_hwndEdit) {
+        m_suppressNotify = true;
         SetWindowTextW(m_hwndEdit, text.c_str());
+        m_suppressNotify = false;
     }
 }
 
@@ -163,7 +165,7 @@ LRESULT CALLBACK FilterBar::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             pThis->ShowOptionsMenu();
             return 0;
         } else if (id == 101 && code == EN_CHANGE && pThis) {
-            if (pThis->onFilterChanged) {
+            if (!pThis->m_suppressNotify && pThis->onFilterChanged) {
                 pThis->onFilterChanged(pThis->GetText(), pThis->m_searchSubfolders, pThis->m_matchCase);
             }
             return 0;

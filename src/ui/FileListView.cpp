@@ -680,6 +680,10 @@ void FileListView::SetFilter(const std::wstring& query, bool subfolders, bool ma
         m_searchThread.detach();
     }
 
+    if (m_filterQuery == query && !subfolders) {
+        return;
+    }
+
     m_filterQuery = query;
     if (subfolders && !query.empty() && m_currentPath != L"This PC" && m_currentPath != L"此电脑") {
         m_searchCancelled = false;
@@ -689,7 +693,7 @@ void FileListView::SetFilter(const std::wstring& query, bool subfolders, bool ma
         InvalidateRect(m_hwnd, nullptr, TRUE);
         SearchRecursive(m_currentPath, query, matchCase);
     } else {
-        if (query.empty() || m_allItems.empty()) {
+        if (m_allItems.empty()) {
             Refresh();
         } else {
             ApplyFilter();
@@ -1344,25 +1348,53 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
     case WM_MOUSEACTIVATE:
         return MA_ACTIVATE;
 
+    case WM_SETFOCUS: {
+        int topIdx = ListView_GetTopIndex(hwnd);
+        LRESULT res = DefSubclassProc(hwnd, msg, wParam, lParam);
+        int newTopIdx = ListView_GetTopIndex(hwnd);
+        if (newTopIdx != topIdx && topIdx > 0) {
+            RECT rcItem = { 0 };
+            int itemH = 0;
+            if (ListView_GetItemRect(hwnd, 0, &rcItem, LVIR_BOUNDS)) {
+                itemH = rcItem.bottom - rcItem.top;
+            }
+            if (itemH <= 0) {
+                itemH = Theme::Get().Scale(22, hwnd);
+            }
+            int dy = (topIdx - newTopIdx) * itemH;
+            ListView_Scroll(hwnd, 0, dy);
+        }
+        return res;
+    }
+
     case WM_LBUTTONDOWN: {
+        int x = GET_X_LPARAM(lParam);
+        int y = GET_Y_LPARAM(lParam);
+
+        LVHITTESTINFO lvhti = { 0 };
+        lvhti.pt = { x, y };
+        int hit = ListView_HitTest(hwnd, &lvhti);
+
         bool wasFocused = (GetFocus() == hwnd);
         if (!wasFocused) {
-            SetFocus(hwnd);
-            int x = GET_X_LPARAM(lParam);
-            int y = GET_Y_LPARAM(lParam);
-
-            LVHITTESTINFO lvhti = { 0 };
-            lvhti.pt = { x, y };
-            int hit = ListView_HitTest(hwnd, &lvhti);
-
             bool ctrl = (GetKeyState(VK_CONTROL) < 0);
             bool shift = (GetKeyState(VK_SHIFT) < 0);
 
             if (hit >= 0) {
                 if (!ctrl && !shift) {
+                    int curFocus = ListView_GetNextItem(hwnd, -1, LVNI_FOCUSED);
+                    if (curFocus >= 0 && curFocus != hit) {
+                        ListView_SetItemState(hwnd, curFocus, 0, LVIS_FOCUSED);
+                    }
                     ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
                     ListView_SetItemState(hwnd, hit, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                    ListView_EnsureVisible(hwnd, hit, FALSE);
+                }
+            }
+
+            SetFocus(hwnd);
+
+            if (hit >= 0) {
+                if (!ctrl && !shift) {
                     if (pThis->onSelectionChanged && hit < (int)pThis->m_filteredIndices.size()) {
                         int idx = pThis->m_filteredIndices[hit];
                         pThis->onSelectionChanged(pThis->m_allItems[idx].fullPath);
@@ -1390,9 +1422,6 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         break;
     }
     case WM_RBUTTONDOWN: {
-        if (GetFocus() != hwnd) {
-            SetFocus(hwnd);
-        }
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
 
@@ -1403,11 +1432,19 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         if (hit >= 0) {
             UINT state = ListView_GetItemState(hwnd, hit, LVIS_SELECTED);
             if (!(state & LVIS_SELECTED)) {
+                int curFocus = ListView_GetNextItem(hwnd, -1, LVNI_FOCUSED);
+                if (curFocus >= 0 && curFocus != hit) {
+                    ListView_SetItemState(hwnd, curFocus, 0, LVIS_FOCUSED);
+                }
                 ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
                 ListView_SetItemState(hwnd, hit, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
             }
         } else {
             ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
+        }
+
+        if (GetFocus() != hwnd) {
+            SetFocus(hwnd);
         }
 
         pThis->m_gesture.OnRButtonDown(hwnd, x, y);
@@ -1862,6 +1899,8 @@ void FileListView::StartDragDrop(int itemIndex) {
     if (m_currentPath.empty() || m_currentPath == L"This PC" || m_currentPath == L"此电脑") {
         return;
     }
+
+    ReleaseCapture();
 
     if (itemIndex >= 0 && itemIndex < (int)m_filteredIndices.size()) {
         UINT state = ListView_GetItemState(m_hwnd, itemIndex, LVIS_SELECTED);
