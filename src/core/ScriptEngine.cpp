@@ -22,6 +22,38 @@ void ScriptEngine::Initialize(HWND hwndMain) {
     ReloadScripts();
 }
 
+static std::wstring ReadScriptFileToString(const std::wstring& filePath) {
+    HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return L"";
+
+    DWORD fileSize = GetFileSize(hFile, nullptr);
+    if (fileSize == 0 || fileSize == INVALID_FILE_SIZE) {
+        CloseHandle(hFile);
+        return L"";
+    }
+
+    std::vector<BYTE> buffer(fileSize + 2, 0);
+    DWORD bytesRead = 0;
+    ReadFile(hFile, buffer.data(), fileSize, &bytesRead, nullptr);
+    CloseHandle(hFile);
+
+    if (bytesRead == 0) return L"";
+
+    std::wstring wContent;
+    if (bytesRead >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF) {
+        int len = MultiByteToWideChar(CP_UTF8, 0, (char*)(buffer.data() + 3), bytesRead - 3, nullptr, 0);
+        if (len > 0) {
+            wContent.resize(len);
+            MultiByteToWideChar(CP_UTF8, 0, (char*)(buffer.data() + 3), bytesRead - 3, &wContent[0], len);
+        }
+    } else if (bytesRead >= 2 && buffer[0] == 0xFF && buffer[1] == 0xFE) {
+        wContent.assign((wchar_t*)(buffer.data() + 2), (bytesRead - 2) / sizeof(wchar_t));
+    } else {
+        wContent = Util::DecodeOutput(std::string((char*)buffer.data(), bytesRead));
+    }
+    return wContent;
+}
+
 void ScriptEngine::ParseScriptHeader(const std::wstring& filePath, ScriptInfo& info) {
     info.filePath = filePath;
     info.name = PathFindFileNameW(filePath.c_str());
@@ -30,29 +62,7 @@ void ScriptEngine::ParseScriptHeader(const std::wstring& filePath, ScriptInfo& i
     info.showInMenu = true;
     info.showInToolbar = false;
 
-    HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (hFile == INVALID_HANDLE_VALUE) return;
-
-    BYTE buffer[8192] = { 0 };
-    DWORD bytesRead = 0;
-    ReadFile(hFile, buffer, sizeof(buffer) - 2, &bytesRead, nullptr);
-    CloseHandle(hFile);
-
-    if (bytesRead == 0) return;
-
-    std::wstring wContent;
-    if (bytesRead >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF) {
-        int len = MultiByteToWideChar(CP_UTF8, 0, (char*)(buffer + 3), bytesRead - 3, nullptr, 0);
-        if (len > 0) {
-            wContent.resize(len);
-            MultiByteToWideChar(CP_UTF8, 0, (char*)(buffer + 3), bytesRead - 3, &wContent[0], len);
-        }
-    } else if (bytesRead >= 2 && buffer[0] == 0xFF && buffer[1] == 0xFE) {
-        wContent.assign((wchar_t*)(buffer + 2), (bytesRead - 2) / sizeof(wchar_t));
-    } else {
-        wContent = Util::DecodeOutput(std::string((char*)buffer, bytesRead));
-    }
-
+    std::wstring wContent = ReadScriptFileToString(filePath);
     if (wContent.empty()) return;
 
     auto cleanStr = [](const std::wstring& in) -> std::wstring {
@@ -166,7 +176,41 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
     }
     SetEnvironmentVariableW(L"NEOMDIE_SELECTED_FILES", filesJoined.c_str());
 
-    std::wstring cmd = L"cscript.exe //NoLogo \"" + filePath + L"\"";
+    std::wstring scriptToRun = filePath;
+    std::wstring tempScriptPath;
+
+    std::wstring scriptContent = ReadScriptFileToString(filePath);
+    bool hasNonAscii = false;
+    for (wchar_t ch : scriptContent) {
+        if (ch > 127) {
+            hasNonAscii = true;
+            break;
+        }
+    }
+
+    if (hasNonAscii) {
+        wchar_t tempDir[MAX_PATH];
+        if (GetTempPathW(MAX_PATH, tempDir)) {
+            wchar_t tempFile[MAX_PATH];
+            if (GetTempFileNameW(tempDir, L"neo", 0, tempFile)) {
+                DeleteFileW(tempFile);
+                tempScriptPath = std::wstring(tempFile) + L".js";
+
+                HANDLE hOut = CreateFileW(tempScriptPath.c_str(), GENERIC_WRITE, 0, nullptr,
+                                          CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (hOut != INVALID_HANDLE_VALUE) {
+                    BYTE bom[2] = { 0xFF, 0xFE };
+                    DWORD written = 0;
+                    WriteFile(hOut, bom, 2, &written, nullptr);
+                    WriteFile(hOut, scriptContent.data(), (DWORD)(scriptContent.size() * sizeof(wchar_t)), &written, nullptr);
+                    CloseHandle(hOut);
+                    scriptToRun = tempScriptPath;
+                }
+            }
+        }
+    }
+
+    std::wstring cmd = L"cscript.exe //NoLogo \"" + scriptToRun + L"\"";
 
     SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
     HANDLE hReadPipe, hWritePipe;
@@ -199,6 +243,10 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
         WaitForSingleObject(pi.hProcess, 5000);
         CloseHandle(pi.hProcess);
 
+        if (!tempScriptPath.empty()) {
+            DeleteFileW(tempScriptPath.c_str());
+        }
+
         std::wstring wOutput = Util::DecodeOutput(output);
 
         while (!wOutput.empty() && (wOutput.back() == L'\r' || wOutput.back() == L'\n' || wOutput.back() == L' ' || wOutput.back() == L'\t')) {
@@ -224,6 +272,10 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
         std::wstring errText = isZh ? (L"脚本启动失败，错误代码: " + std::to_wstring(err)) : (L"Failed to start script, error code: " + std::to_wstring(err));
         Log(errText);
         MessageBoxW(m_hwndMain, errText.c_str(), isZh ? L"脚本错误" : L"Script Error", MB_OK | MB_ICONERROR);
+
+        if (!tempScriptPath.empty()) {
+            DeleteFileW(tempScriptPath.c_str());
+        }
     }
 
     CloseHandle(hReadPipe);
