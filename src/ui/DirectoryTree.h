@@ -46,6 +46,6 @@ private:
     HTREEITEM m_hDropHighlight = nullptr;
 
     class DropTarget* m_pDropTarget = nullptr;
-    void StartDragDrop(HTREEITEM hItem, bool isRightClick);
+    void StartDragDrop(HTREEITEM hItem);
     std::vector<TreeNodeData*> m_nodeDataList;
 };

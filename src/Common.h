@@ -56,6 +56,13 @@ inline void SafeRelease(T*& p) {
     }
 }
 
+struct PaneViewState {
+    int topIndex = 0;
+    std::wstring topItemPath;
+    std::wstring focusedPath;
+    std::vector<std::wstring> selectedPaths;
+};
+
 namespace Util {
     inline std::wstring Utf8ToWide(const std::string& str) {
         if (str.empty()) return std::wstring();

@@ -46,7 +46,7 @@ const wchar_t* I18n::T(StringId id) const {
     case StringId::Music:              return zh ? L"音乐" : L"Music";
     case StringId::Videos:             return zh ? L"视频" : L"Videos";
     case StringId::NewFolder:          return zh ? L"新建文件夹" : L"New Folder";
-    case StringId::NewTextFile:        return zh ? L"新建文本文档.txt" : L"New Text Document.txt";
+    case StringId::NewTextFile:        return zh ? L"新建 TXT 文档.txt" : L"New TXT Document.txt";
     case StringId::Folder:             return zh ? L"文件夹" : L"Folder";
     case StringId::DriveLocal:         return zh ? L"本地磁盘" : L"Local Disk";
     case StringId::DriveRemovable:     return zh ? L"可移动磁盘" : L"Removable Disk";

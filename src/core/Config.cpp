@@ -92,26 +92,62 @@ void Config::Load() {
 
     // Tabs
     sessionTabs.clear();
+    sessionTabsInfo.clear();
     int tabCount = GetPrivateProfileIntW(secTabs, L"Count", 0, m_iniPath.c_str());
     activeTabIndex = GetPrivateProfileIntW(secTabs, L"Active", 0, m_iniPath.c_str());
 
     for (int i = 0; i < tabCount; ++i) {
-        wchar_t key[32];
-        StringCchPrintfW(key, 32, L"Tab%d", i);
+        wchar_t key[64];
+        StringCchPrintfW(key, 64, L"Tab%d", i);
         wchar_t val[MAX_PATH];
         GetPrivateProfileStringW(secTabs, key, L"", val, MAX_PATH, m_iniPath.c_str());
-        if (wcslen(val) > 0) {
-            sessionTabs.push_back(val);
+        if (wcslen(val) == 0) continue;
+
+        sessionTabs.push_back(val);
+
+        SessionTabInfo tabInfo;
+        tabInfo.path = val;
+
+        StringCchPrintfW(key, 64, L"Tab%d_Layout", i);
+        tabInfo.layout = GetPrivateProfileIntW(secTabs, key, 0, m_iniPath.c_str());
+
+        StringCchPrintfW(key, 64, L"Tab%d_ActivePane", i);
+        tabInfo.activePaneIndex = GetPrivateProfileIntW(secTabs, key, 0, m_iniPath.c_str());
+
+        StringCchPrintfW(key, 64, L"Tab%d_PaneCount", i);
+        int pCount = GetPrivateProfileIntW(secTabs, key, 0, m_iniPath.c_str());
+        if (pCount > 0) {
+            for (int p = 0; p < pCount; ++p) {
+                wchar_t pKey[64];
+                StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d", i, p);
+                wchar_t pVal[MAX_PATH];
+                GetPrivateProfileStringW(secTabs, pKey, L"", pVal, MAX_PATH, m_iniPath.c_str());
+                if (wcslen(pVal) > 0) {
+                    tabInfo.panePaths.push_back(pVal);
+                } else {
+                    tabInfo.panePaths.push_back(tabInfo.path);
+                }
+            }
         }
+        if (tabInfo.panePaths.empty()) {
+            tabInfo.panePaths.push_back(tabInfo.path);
+        }
+        sessionTabsInfo.push_back(tabInfo);
     }
 
     wchar_t userProfile[MAX_PATH] = { 0 };
     GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH);
 
     if (sessionTabs.empty() || (sessionTabs.size() == 1 && userProfile[0] && _wcsicmp(sessionTabs[0].c_str(), userProfile) == 0)) {
-        // Default to "This PC" / My Computer, matching standard Windows Explorer behavior
         sessionTabs.clear();
         sessionTabs.push_back(L"This PC");
+        sessionTabsInfo.clear();
+        SessionTabInfo defInfo;
+        defInfo.path = L"This PC";
+        defInfo.layout = 0;
+        defInfo.activePaneIndex = 0;
+        defInfo.panePaths = { L"This PC" };
+        sessionTabsInfo.push_back(defInfo);
     }
 
     // Gestures
@@ -289,12 +325,37 @@ void Config::Save() {
     saveAction(L"ActionAddress", actionAddress);
 
     // Tabs
-    writeInt(secTabs, L"Count", (int)sessionTabs.size());
+    WritePrivateProfileSectionW(secTabs, L"", m_iniPath.c_str());
+    int saveCount = !sessionTabsInfo.empty() ? (int)sessionTabsInfo.size() : (int)sessionTabs.size();
+    writeInt(secTabs, L"Count", saveCount);
     writeInt(secTabs, L"Active", activeTabIndex);
-    for (size_t i = 0; i < sessionTabs.size(); ++i) {
-        wchar_t key[32];
-        StringCchPrintfW(key, 32, L"Tab%d", (int)i);
-        WritePrivateProfileStringW(secTabs, key, sessionTabs[i].c_str(), m_iniPath.c_str());
+    if (!sessionTabsInfo.empty()) {
+        for (size_t i = 0; i < sessionTabsInfo.size(); ++i) {
+            wchar_t key[64];
+            StringCchPrintfW(key, 64, L"Tab%d", (int)i);
+            WritePrivateProfileStringW(secTabs, key, sessionTabsInfo[i].path.c_str(), m_iniPath.c_str());
+
+            StringCchPrintfW(key, 64, L"Tab%d_Layout", (int)i);
+            writeInt(secTabs, key, sessionTabsInfo[i].layout);
+
+            StringCchPrintfW(key, 64, L"Tab%d_ActivePane", (int)i);
+            writeInt(secTabs, key, sessionTabsInfo[i].activePaneIndex);
+
+            StringCchPrintfW(key, 64, L"Tab%d_PaneCount", (int)i);
+            writeInt(secTabs, key, (int)sessionTabsInfo[i].panePaths.size());
+
+            for (size_t p = 0; p < sessionTabsInfo[i].panePaths.size(); ++p) {
+                wchar_t pKey[64];
+                StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d", (int)i, (int)p);
+                WritePrivateProfileStringW(secTabs, pKey, sessionTabsInfo[i].panePaths[p].c_str(), m_iniPath.c_str());
+            }
+        }
+    } else {
+        for (size_t i = 0; i < sessionTabs.size(); ++i) {
+            wchar_t key[32];
+            StringCchPrintfW(key, 32, L"Tab%d", (int)i);
+            WritePrivateProfileStringW(secTabs, key, sessionTabs[i].c_str(), m_iniPath.c_str());
+        }
     }
 
     // Gestures

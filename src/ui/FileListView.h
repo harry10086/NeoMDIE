@@ -81,6 +81,9 @@ public:
   void InvertSelection();
   void ClearSelection();
   void SetSelectedPaths(const std::vector<std::wstring> &paths);
+  PaneViewState GetViewState() const;
+  void RestoreViewState(const PaneViewState &state);
+  void NotifyStatus();
 
   void ScrollToTop();
   void ScrollToBottom();
@@ -139,9 +142,7 @@ private:
 
   int m_dropHighlightItem = -1;
   DropTarget *m_pDropTarget = nullptr;
-  void StartDragDrop(int itemIndex, bool isRightClick);
-  POINT m_rBtnDownPoint = {0, 0};
-  bool m_rBtnDownOnItem = false;
+  void StartDragDrop(int itemIndex);
 
   FileSystemWatcher m_watcher;
   FolderSizeCalculator m_calcSize;

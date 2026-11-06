@@ -188,12 +188,17 @@ static void LoadShellNewItemsInternal() {
         }
     }
     if (!s_hbmShortcut) {
-        SHFILEINFOW sfi = { 0 };
-        SHGetFileInfoW(L"dummy.lnk", FILE_ATTRIBUTE_NORMAL, &sfi, sizeof(sfi),
-                       SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_SMALLICON);
-        if (sfi.hIcon) {
-            s_hbmShortcut = IconToBitmap(sfi.hIcon, iconSize);
-            DestroyIcon(sfi.hIcon);
+        HICON hIcon = nullptr;
+        // shell32.dll, 263 is the official standard New Shortcut document icon with arrow
+        if (ExtractIconExW(L"shell32.dll", 263, nullptr, &hIcon, 1) > 0 && hIcon) {
+            s_hbmShortcut = IconToBitmap(hIcon, iconSize);
+            DestroyIcon(hIcon);
+        } else {
+            SHSTOCKICONINFO sii = { sizeof(sii) };
+            if (SUCCEEDED(SHGetStockIconInfo(SIID_LINK, SHGSI_ICON | SHGSI_SMALLICON, &sii)) && sii.hIcon) {
+                s_hbmShortcut = IconToBitmap(sii.hIcon, iconSize);
+                DestroyIcon(sii.hIcon);
+            }
         }
     }
     if (!s_hbmMd) {
@@ -928,7 +933,7 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
 
         // NeoMDIE special item (Markdown) & Standard Text Document
         addMenuItem(CMD_BG_NEW_MD, isZh ? L"Markdown 文档(&M)" : L"Markdown Document(&M)", GetShellNewMdBitmap());
-        addMenuItem(CMD_BG_NEW_FILE, isZh ? L"文本文档(&T)" : L"Text Document(&T)", GetShellNewTextBitmap());
+        addMenuItem(CMD_BG_NEW_FILE, isZh ? L"TXT文档(&T)" : L"TXT Document(&T)", GetShellNewTextBitmap());
 
         // Full system ShellNew items from registry scan (Office docx/xlsx/pptx/pdf, SolidWorks, Zip, etc.)
         if (!shellNewItems.empty()) {
@@ -976,7 +981,9 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
             mii.cch = 256;
             if (GetMenuItemInfoW(hMenu, i, TRUE, &mii)) {
                 std::wstring s = itemText;
-                if (s.find(L"新建") != std::wstring::npos ||
+                if (s.find(L"授予访问权限") != std::wstring::npos ||
+                    s.find(L"Give access to") != std::wstring::npos ||
+                    s.find(L"新建") != std::wstring::npos ||
                     s.find(L"New Folder") != std::wstring::npos ||
                     s.find(L"New") != std::wstring::npos ||
                     s.find(L"查看") != std::wstring::npos ||
@@ -1003,6 +1010,33 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     // Append NeoMDIE specific commands
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_SETTINGS, isZh ? L"NeoMDIE设置(&S)..." : L"NeoMDIE Settings(&S)...");
+
+    // Cleanup any consecutive or leading/trailing separators
+    bool lastWasSep = true;
+    for (int i = 0; i < GetMenuItemCount(hMenu); ) {
+        MENUITEMINFOW mii = { sizeof(mii) };
+        mii.fMask = MIIM_FTYPE;
+        if (GetMenuItemInfoW(hMenu, i, TRUE, &mii)) {
+            bool isSep = (mii.fType & MFT_SEPARATOR) != 0;
+            if (isSep && lastWasSep) {
+                DeleteMenu(hMenu, i, MF_BYPOSITION);
+                continue;
+            }
+            lastWasSep = isSep;
+        }
+        i++;
+    }
+    int mCount = GetMenuItemCount(hMenu);
+    while (mCount > 0) {
+        MENUITEMINFOW mii = { sizeof(mii) };
+        mii.fMask = MIIM_FTYPE;
+        if (GetMenuItemInfoW(hMenu, mCount - 1, TRUE, &mii) && (mii.fType & MFT_SEPARATOR)) {
+            DeleteMenu(hMenu, mCount - 1, MF_BYPOSITION);
+            mCount--;
+        } else {
+            break;
+        }
+    }
 
     SetWindowSubclass(hwnd, ContextMenuSubclassProc, 9999, 0);
     SetCursor(LoadCursorW(nullptr, IDC_ARROW));
@@ -1143,7 +1177,7 @@ bool PasteFilesFromClipboard(HWND hwnd, const std::wstring& destDir) {
                     IFileOperation* pfo = nullptr;
                     HRESULT hr = CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pfo));
                     if (SUCCEEDED(hr) && pfo) {
-                        pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR);
+                        pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR | FOF_RENAMEONCOLLISION);
                         pfo->SetOwnerWindow(hwnd);
 
                         IShellItem* psiDest = nullptr;
@@ -1532,7 +1566,7 @@ IDataObject* CreateFileDataObject(HWND hwnd, const std::wstring& currentDir, con
     return pDataObj;
 }
 
-HRESULT DoFileDragDrop(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths, bool isRightClick, DWORD* pdwEffectOut) {
+HRESULT DoFileDragDrop(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths, DWORD* pdwEffectOut) {
     if (paths.empty()) return E_INVALIDARG;
 
     IDataObject* pDataObj = CreateFileDataObject(hwnd, currentDir, paths);
@@ -1811,7 +1845,7 @@ void CheckForUpdates(HWND hwndParent) {
         std::wstring wTagName = Util::Utf8ToWide(tagName);
         std::wstring wHtmlUrl = Util::Utf8ToWide(htmlUrl);
 
-        const std::wstring currentVer = L"v1.0.0";
+        const std::wstring currentVer = L"v1.0.1";
         if (!wTagName.empty() && wTagName != currentVer) {
             std::wstring msg = isZh
                 ? (L"发现 NeoMDIE 新版本: " + wTagName + L" (当前版本: " + currentVer + L")\n\n下载路径与发布页面:\n" + wHtmlUrl + L"\n\n是否立即前往 GitHub 下载更新？")

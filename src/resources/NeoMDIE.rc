@@ -124,8 +124,8 @@ END
 
 // Version Info
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,0,0,0
-PRODUCTVERSION  1,0,0,0
+FILEVERSION     1,0,1,0
+PRODUCTVERSION  1,0,1,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS__WINDOWS32
@@ -138,11 +138,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "NeoMDIE Open Source Project"
             VALUE "FileDescription",  "NeoMDIE - Modern Lightweight Tabbed File Manager"
-            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "FileVersion",      "1.0.1.0"
             VALUE "InternalName",     "NeoMDIE"
             VALUE "OriginalFilename", "NeoMDIE.exe"
             VALUE "ProductName",      "NeoMDIE"
-            VALUE "ProductVersion",   "1.0.0.0"
+            VALUE "ProductVersion",   "1.0.1.0"
         END
     END
     BLOCK "VarFileInfo"

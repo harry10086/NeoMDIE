@@ -113,7 +113,7 @@ HWND FileListView::Create(HWND hwndParent, int id) {
     m_pDropTarget->onFilesDropped = [this](const std::wstring& targetDir, const std::vector<std::wstring>& files, bool isMove) {
         IFileOperation* pfo = nullptr;
         if (SUCCEEDED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pfo)))) {
-            pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR);
+            pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR | FOF_RENAMEONCOLLISION);
             pfo->SetOwnerWindow(m_hwnd);
 
             IShellItem* psiDest = nullptr;
@@ -899,6 +899,112 @@ void FileListView::CopySelected(bool isCut) {
     }
 }
 
+PaneViewState FileListView::GetViewState() const {
+    PaneViewState state;
+    if (!m_hwnd) return state;
+
+    state.selectedPaths = GetSelectedPaths();
+
+    int focusedRow = ListView_GetNextItem(m_hwnd, -1, LVNI_FOCUSED);
+    if (focusedRow >= 0 && focusedRow < (int)m_filteredIndices.size()) {
+        int idx = m_filteredIndices[focusedRow];
+        if (idx >= 0 && idx < (int)m_allItems.size()) {
+            state.focusedPath = m_allItems[idx].fullPath;
+        }
+    }
+
+    state.topIndex = ListView_GetTopIndex(m_hwnd);
+    if (state.topIndex >= 0 && state.topIndex < (int)m_filteredIndices.size()) {
+        int idx = m_filteredIndices[state.topIndex];
+        if (idx >= 0 && idx < (int)m_allItems.size()) {
+            state.topItemPath = m_allItems[idx].fullPath;
+        }
+    }
+    return state;
+}
+
+void FileListView::RestoreViewState(const PaneViewState& state) {
+    if (!m_hwnd) return;
+
+    // 1. Clear previous selection & focus
+    ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+
+    // 2. Restore selected items
+    std::unordered_set<std::wstring> selSet;
+    for (const auto& p : state.selectedPaths) {
+        std::wstring lower = p;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
+        selSet.insert(lower);
+    }
+
+    int focusedRow = -1;
+    std::wstring lowerFocused = state.focusedPath;
+    std::transform(lowerFocused.begin(), lowerFocused.end(), lowerFocused.begin(), ::towlower);
+
+    int targetTopRow = -1;
+    std::wstring lowerTop = state.topItemPath;
+    std::transform(lowerTop.begin(), lowerTop.end(), lowerTop.begin(), ::towlower);
+
+    for (int row = 0; row < (int)m_filteredIndices.size(); ++row) {
+        int idx = m_filteredIndices[row];
+        if (idx >= 0 && idx < (int)m_allItems.size()) {
+            std::wstring lower = m_allItems[idx].fullPath;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
+
+            if (selSet.count(lower)) {
+                ListView_SetItemState(m_hwnd, row, LVIS_SELECTED, LVIS_SELECTED);
+            }
+            if (!lowerFocused.empty() && lower == lowerFocused) {
+                focusedRow = row;
+            }
+            if (!lowerTop.empty() && lower == lowerTop) {
+                targetTopRow = row;
+            }
+        }
+    }
+
+    // If focusedRow wasn't matched by path, but we have selected items, focus the first selected
+    if (focusedRow == -1 && !state.selectedPaths.empty()) {
+        focusedRow = ListView_GetNextItem(m_hwnd, -1, LVNI_SELECTED);
+    }
+    if (focusedRow >= 0 && focusedRow < (int)m_filteredIndices.size()) {
+        ListView_SetItemState(m_hwnd, focusedRow, LVIS_FOCUSED, LVIS_FOCUSED);
+    }
+
+    // 3. Restore scroll position / top visible item
+    if (targetTopRow == -1) {
+        targetTopRow = state.topIndex;
+    }
+    int totalCount = (int)m_filteredIndices.size();
+    if (totalCount > 0) {
+        targetTopRow = std::clamp(targetTopRow, 0, totalCount - 1);
+        if (targetTopRow > 0) {
+            ListView_EnsureVisible(m_hwnd, totalCount - 1, FALSE);
+            ListView_EnsureVisible(m_hwnd, targetTopRow, FALSE);
+        } else {
+            ListView_EnsureVisible(m_hwnd, 0, FALSE);
+        }
+    }
+
+    if (!m_filteredIndices.empty()) {
+        ListView_RedrawItems(m_hwnd, 0, (int)m_filteredIndices.size() - 1);
+    }
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+    UpdateWindow(m_hwnd);
+}
+
+void FileListView::NotifyStatus() {
+    if (onStatusUpdated) {
+        uint64_t totalSize = 0;
+        for (int idx : m_filteredIndices) {
+            if (idx >= 0 && idx < (int)m_allItems.size()) {
+                totalSize += m_allItems[idx].size;
+            }
+        }
+        onStatusUpdated((int)m_filteredIndices.size(), totalSize);
+    }
+}
+
 void FileListView::PasteToCurrent() {
     if (m_currentPath != L"此电脑" && m_currentPath != L"This PC") {
         if (ShellUtils::PasteFilesFromClipboard(m_hwnd, m_currentPath)) {
@@ -1080,8 +1186,15 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
         case CMD_BG_PASTE_SHORTCUT: PasteShortcut(); break;
         case CMD_BG_PROPERTIES: ShellUtils::ShowItemProperties(m_hwnd, targetPath); break;
         case CMD_BG_NEW_SHORTCUT: {
-            std::wstring args = L"appwiz.cpl,NewLinkHere \"" + m_currentPath + L"\"";
-            ShellExecuteW(nullptr, L"open", L"rundll32.exe", args.c_str(), m_currentPath.c_str(), SW_SHOWNORMAL);
+            if (m_currentPath.empty() || m_currentPath == L"This PC" || m_currentPath == L"此电脑") {
+                break;
+            }
+            std::wstring targetDir = m_currentPath;
+            while (targetDir.length() > 3 && (targetDir.back() == L'\\' || targetDir.back() == L'/')) {
+                targetDir.pop_back();
+            }
+            std::wstring args = L"appwiz.cpl,NewLinkHere " + targetDir;
+            ShellExecuteW(nullptr, L"open", L"rundll32.exe", args.c_str(), targetDir.c_str(), SW_SHOWNORMAL);
             break;
         }
         case CMD_BG_NEW_FOLDER: {
@@ -1099,11 +1212,11 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
         }
         case CMD_BG_NEW_FILE: {
             bool isZh = I18n::Get().IsChinese();
-            std::wstring baseName = isZh ? L"新建文本文档.txt" : L"New Text Document.txt";
+            std::wstring baseName = isZh ? L"新建 TXT 文档.txt" : L"New TXT Document.txt";
             std::wstring newFile = Util::CombinePath(m_currentPath, baseName);
             int idx = 2;
             while (PathFileExistsW(newFile.c_str())) {
-                newFile = Util::CombinePath(m_currentPath, (isZh ? L"新建文本文档 (" : L"New Text Document (") + std::to_wstring(idx++) + L").txt");
+                newFile = Util::CombinePath(m_currentPath, (isZh ? L"新建 TXT 文档 (" : L"New TXT Document (") + std::to_wstring(idx++) + L").txt");
             }
             HANDLE hF = CreateFileW(newFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hF != INVALID_HANDLE_VALUE) {
@@ -1297,26 +1410,12 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
             ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
         }
 
-        pThis->m_rBtnDownPoint = { x, y };
-        pThis->m_rBtnDownOnItem = (hit >= 0);
         pThis->m_gesture.OnRButtonDown(hwnd, x, y);
         return 0;
     }
     case WM_MOUSEMOVE: {
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
-
-        if ((wParam & MK_RBUTTON) && pThis->m_rBtnDownOnItem) {
-            int dx = abs(x - pThis->m_rBtnDownPoint.x);
-            int dy = abs(y - pThis->m_rBtnDownPoint.y);
-            if (dx > GetSystemMetrics(SM_CXDRAG) || dy > GetSystemMetrics(SM_CYDRAG)) {
-                pThis->m_rBtnDownOnItem = false;
-                pThis->m_gesture.Detach();
-                pThis->StartDragDrop(-1, true);
-                pThis->m_gesture.Attach(hwnd);
-                return 0;
-            }
-        }
 
         bool rDown = (wParam & MK_RBUTTON) != 0;
         if (pThis->m_gesture.OnMouseMove(hwnd, x, y, rDown)) {
@@ -1350,7 +1449,6 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         break;
     }
     case WM_RBUTTONUP: {
-        pThis->m_rBtnDownOnItem = false;
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
         GestureAction action = GestureAction::None;
@@ -1480,12 +1578,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
             switch (pnm->code) {
             case LVN_BEGINDRAG: {
                 NMLISTVIEW* pnmv = (NMLISTVIEW*)lParam;
-                pThis->StartDragDrop(pnmv->iItem, false);
-                return 0;
-            }
-            case LVN_BEGINRDRAG: {
-                NMLISTVIEW* pnmv = (NMLISTVIEW*)lParam;
-                pThis->StartDragDrop(pnmv->iItem, true);
+                pThis->StartDragDrop(pnmv->iItem);
                 return 0;
             }
             case LVN_GETDISPINFOW: {
@@ -1765,7 +1858,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
-void FileListView::StartDragDrop(int itemIndex, bool isRightClick) {
+void FileListView::StartDragDrop(int itemIndex) {
     if (m_currentPath.empty() || m_currentPath == L"This PC" || m_currentPath == L"此电脑") {
         return;
     }
@@ -1793,7 +1886,7 @@ void FileListView::StartDragDrop(int itemIndex, bool isRightClick) {
     if (validPaths.empty()) return;
 
     DWORD dwEffect = 0;
-    HRESULT hr = ShellUtils::DoFileDragDrop(m_hwnd, m_currentPath, validPaths, isRightClick, &dwEffect);
+    HRESULT hr = ShellUtils::DoFileDragDrop(m_hwnd, m_currentPath, validPaths, &dwEffect);
     if (SUCCEEDED(hr) && dwEffect == DROPEFFECT_MOVE) {
         Refresh();
         SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, m_currentPath.c_str(), nullptr);

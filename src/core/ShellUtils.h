@@ -110,7 +110,7 @@ namespace ShellUtils {
 
     // Drag & Drop
     IDataObject* CreateFileDataObject(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths);
-    HRESULT DoFileDragDrop(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths, bool isRightClick, DWORD* pdwEffectOut);
+    HRESULT DoFileDragDrop(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths, DWORD* pdwEffectOut);
 
     // Replace Windows Explorer
     bool IsExplorerReplaced();

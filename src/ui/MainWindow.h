@@ -62,6 +62,7 @@ private:
 
     TabBar m_tabBar;
     int m_currentTabIndex = -1;
+    bool m_isSwitchingTab = false;
     BreadcrumbBar m_breadcrumb;
     FilterBar m_filterBar;
     LinksBar m_linksBar;

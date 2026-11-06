@@ -100,9 +100,10 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
         RegisterHotKey(m_hwnd, 9001, MOD_WIN, 'E');
     }
 
-    // Pre-warm Windows Shell COM in background thread to eliminate cold start right-click lag
+    // Pre-warm Windows Shell COM & ShellNew registry scan in background thread to eliminate cold start right-click lag
     std::thread([]() {
         CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        ShellUtils::GetShellNewItems();
         IShellFolder* pDesktop = nullptr;
         if (SUCCEEDED(SHGetDesktopFolder(&pDesktop)) && pDesktop) {
             PIDLIST_ABSOLUTE pidl = nullptr;
@@ -149,32 +150,44 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
             activePane->NavigateTo(cmdPath, false);
         }
     } else {
-        if (cfg.restoreTabsOnStartup) {
+        if (cfg.restoreTabsOnStartup && !cfg.sessionTabsInfo.empty()) {
+            for (size_t i = 0; i < cfg.sessionTabsInfo.size(); ++i) {
+                const auto& info = cfg.sessionTabsInfo[i];
+                int tabIdx = m_tabBar.AddTab(info.path, false);
+                auto& item = m_tabBar.GetTabItemRef(tabIdx);
+                item.layout = info.layout;
+                item.activePaneIndex = info.activePaneIndex;
+                item.panePaths = info.panePaths;
+                if (item.panePaths.empty()) {
+                    item.panePaths.push_back(item.path.empty() ? L"This PC" : item.path);
+                }
+            }
+        } else if (cfg.restoreTabsOnStartup && !cfg.sessionTabs.empty()) {
             for (const auto& tabPath : cfg.sessionTabs) {
                 m_tabBar.AddTab(tabPath, false);
             }
         }
         if (m_tabBar.GetTabCount() == 0) {
             m_tabBar.AddTab(L"This PC", true);
+            if (cfg.paneLayout >= 0 && cfg.paneLayout <= 4) {
+                SetLayout((PaneLayout)cfg.paneLayout);
+            }
         } else {
             int act = std::clamp(cfg.activeTabIndex, 0, m_tabBar.GetTabCount() - 1);
-            m_tabBar.SetActiveTab(act);
+            m_currentTabIndex = -1;
+            m_tabBar.SetActiveTab(act, true);
         }
-        std::wstring activePath = m_tabBar.GetTabPath(m_tabBar.GetActiveIndex());
+        // Guarantee active pane is never left blank on startup
         FileListView* activePane = m_multiPane.GetActivePane();
-        if (activePane) {
+        if (activePane && activePane->GetCurrentPath().empty()) {
+            std::wstring activePath = m_tabBar.GetTabPath(m_tabBar.GetActiveIndex());
+            if (activePath.empty()) activePath = L"This PC";
             activePane->NavigateTo(activePath, false);
         }
     }
     m_currentTabIndex = m_tabBar.GetActiveIndex();
     std::wstring activePath = m_tabBar.GetTabPath(m_tabBar.GetActiveIndex());
     UpdateWindowTitle(activePath);
-
-    if (cfg.paneLayout >= 0 && cfg.paneLayout <= 4) {
-        m_multiPane.SetLayout((PaneLayout)cfg.paneLayout);
-    } else if (cfg.splitEnabled) {
-        m_multiPane.SetLayout(PaneLayout::DualVertical);
-    }
 
     if (cfg.window.maximized) {
         ShowWindow(m_hwnd, SW_MAXIMIZE);
@@ -314,7 +327,7 @@ void MainWindow::BuildMenu() {
 
     HMENU hNewSubmenu = CreatePopupMenu();
     AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FOLDER, isZh ? L"文件夹(&F)\tCtrl+Shift+N" : L"Folder(&F)\tCtrl+Shift+N");
-    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FILE, isZh ? L"文本文档(&T)" : L"Text Document(&T)");
+    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FILE, isZh ? L"TXT文档(&T)" : L"TXT Document(&T)");
     AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_MD, isZh ? L"Markdown 文档(&M)" : L"Markdown Document(&M)");
     AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hNewSubmenu, isZh ? L"新建(&W)" : L"New(&W)");
 
@@ -666,7 +679,7 @@ void MainWindow::CreateControls() {
         m_tabBar.AddTab(path, false);
     };
     m_linksBar.onOpenSplit = [this](const std::wstring& path) {
-        m_multiPane.SetLayout(PaneLayout::DualVertical);
+        SetLayout(PaneLayout::DualVertical);
         m_multiPane.GetPane(1).NavigateTo(path);
         m_multiPane.SetActivePane(1);
     };
@@ -678,6 +691,8 @@ void MainWindow::CreateControls() {
 
     // Wire up tab bar callbacks
     m_tabBar.onTabChanged = [this](int idx) {
+        if (idx < 0 || idx >= m_tabBar.GetTabCount()) return;
+
         if (m_currentTabIndex >= 0 && m_currentTabIndex < m_tabBar.GetTabCount() && m_currentTabIndex != idx) {
             auto& oldTab = m_tabBar.GetTabItemRef(m_currentTabIndex);
             oldTab.layout = (int)m_multiPane.GetLayout();
@@ -685,14 +700,18 @@ void MainWindow::CreateControls() {
             oldTab.panePaths.clear();
             oldTab.paneHistories.clear();
             oldTab.paneSelectedPaths.clear();
+            oldTab.paneViewStates.clear();
             int pCount = m_multiPane.GetPaneCount();
             for (int p = 0; p < pCount; ++p) {
-                oldTab.panePaths.push_back(m_multiPane.GetPane(p).GetCurrentPath());
+                std::wstring pPath = m_multiPane.GetPane(p).GetCurrentPath();
+                if (pPath.empty()) pPath = (p == 0 && !oldTab.path.empty()) ? oldTab.path : L"This PC";
+                oldTab.panePaths.push_back(pPath);
                 PaneHistory ph;
                 ph.history = m_multiPane.GetPane(p).GetHistory();
                 ph.historyIndex = m_multiPane.GetPane(p).GetHistoryIndex();
                 oldTab.paneHistories.push_back(ph);
                 oldTab.paneSelectedPaths.push_back(m_multiPane.GetPane(p).GetSelectedPaths());
+                oldTab.paneViewStates.push_back(m_multiPane.GetPane(p).GetViewState());
             }
             if (!oldTab.panePaths.empty()) {
                 int aIdx = std::clamp(oldTab.activePaneIndex, 0, (int)oldTab.panePaths.size() - 1);
@@ -702,45 +721,74 @@ void MainWindow::CreateControls() {
 
         m_currentTabIndex = idx;
 
-        const auto& newTab = m_tabBar.GetTabItem(idx);
-        m_multiPane.SetLayout((PaneLayout)newTab.layout);
-        if (newTab.panePaths.empty()) {
-            std::wstring fallback = newTab.path.empty() ? L"This PC" : newTab.path;
-            m_multiPane.GetPane(0).NavigateTo(fallback, false);
-            m_multiPane.GetPane(0).ClearHistory(fallback);
+        const auto& itemRef = m_tabBar.GetTabItem(idx);
+        int targetLayout = itemRef.layout;
+        int targetActivePane = itemRef.activePaneIndex;
+        std::vector<std::wstring> targetPanePaths = itemRef.panePaths;
+        std::vector<PaneHistory> targetHistories = itemRef.paneHistories;
+        std::vector<std::vector<std::wstring>> targetSelections = itemRef.paneSelectedPaths;
+        std::vector<PaneViewState> targetViewStates = itemRef.paneViewStates;
+        std::wstring fallbackPath = itemRef.path.empty() ? L"This PC" : itemRef.path;
+
+        m_isSwitchingTab = true;
+
+        m_multiPane.SetLayout((PaneLayout)targetLayout);
+        int targetPaneCount = m_multiPane.GetPaneCount();
+
+        if (targetPanePaths.empty()) {
+            m_multiPane.GetPane(0).NavigateTo(fallbackPath, false);
+            m_multiPane.GetPane(0).ClearHistory(fallbackPath);
             m_multiPane.GetPane(0).ClearSelection();
         } else {
-            for (size_t p = 0; p < newTab.panePaths.size() && p < 4; ++p) {
-                if (_wcsicmp(m_multiPane.GetPane((int)p).GetCurrentPath().c_str(), newTab.panePaths[p].c_str()) != 0) {
-                    m_multiPane.GetPane((int)p).NavigateTo(newTab.panePaths[p], false);
+            for (int p = 0; p < targetPaneCount && p < 4; ++p) {
+                std::wstring targetPath = (p < (int)targetPanePaths.size() && !targetPanePaths[p].empty())
+                                          ? targetPanePaths[p] : fallbackPath;
+                if (_wcsicmp(m_multiPane.GetPane(p).GetCurrentPath().c_str(), targetPath.c_str()) != 0 ||
+                    m_multiPane.GetPane(p).GetCurrentPath().empty()) {
+                    m_multiPane.GetPane(p).NavigateTo(targetPath, false);
                 }
-                if (p < newTab.paneHistories.size() && !newTab.paneHistories[p].history.empty()) {
-                    m_multiPane.GetPane((int)p).SetHistory(newTab.paneHistories[p].history, newTab.paneHistories[p].historyIndex);
+                if (p < (int)targetHistories.size() && !targetHistories[p].history.empty()) {
+                    m_multiPane.GetPane(p).SetHistory(targetHistories[p].history, targetHistories[p].historyIndex);
                 } else {
-                    m_multiPane.GetPane((int)p).ClearHistory(newTab.panePaths[p]);
-                }
-                if (p < newTab.paneSelectedPaths.size() && !newTab.paneSelectedPaths[p].empty()) {
-                    m_multiPane.GetPane((int)p).SetSelectedPaths(newTab.paneSelectedPaths[p]);
-                } else {
-                    m_multiPane.GetPane((int)p).ClearSelection();
+                    m_multiPane.GetPane(p).ClearHistory(targetPath);
                 }
             }
         }
-        m_multiPane.SetActivePane(newTab.activePaneIndex, true);
-        SetFocus(m_multiPane.GetPane(newTab.activePaneIndex).GetHwnd());
+
+        int safeActivePane = std::clamp(targetActivePane, 0, targetPaneCount - 1);
+        m_multiPane.SetActivePane(safeActivePane, true);
 
         FileListView* activeView = m_multiPane.GetActivePane();
-        std::wstring path = activeView ? activeView->GetCurrentPath() : m_tabBar.GetTabPath(idx);
+        std::wstring activePath = activeView ? activeView->GetCurrentPath() : fallbackPath;
 
-        m_breadcrumb.SetPath(path);
+        m_tabBar.SetTabPath(idx, activePath);
+        m_breadcrumb.SetPath(activePath);
         m_filterBar.SetText(activeView ? activeView->GetFilterQuery() : L"");
         if (m_treeVisible && Config::Get().autoExpandTree) {
-            m_tree.SelectPath(path);
+            m_tree.SelectPath(activePath);
         }
         UpdateNavButtons();
-        AddToHistory(path);
-        UpdateWindowTitle(path);
+        AddToHistory(activePath);
+        UpdateWindowTitle(activePath);
+        if (activeView) {
+            activeView->NotifyStatus();
+        }
         LayoutAll();
+
+        // Restore view states for all panes after layout and sizing are complete
+        for (int p = 0; p < targetPaneCount && p < 4; ++p) {
+            if (p < (int)targetViewStates.size()) {
+                m_multiPane.GetPane(p).RestoreViewState(targetViewStates[p]);
+            } else if (p < (int)targetSelections.size() && !targetSelections[p].empty()) {
+                m_multiPane.GetPane(p).SetSelectedPaths(targetSelections[p]);
+            } else {
+                m_multiPane.GetPane(p).ClearSelection();
+            }
+        }
+
+        m_isSwitchingTab = false;
+
+        SetFocus(m_multiPane.GetPane(safeActivePane).GetHwnd());
         if (m_previewVisible && activeView) {
             auto sel = activeView->GetSelectedPaths();
             if (!sel.empty()) {
@@ -761,6 +809,10 @@ void MainWindow::CreateControls() {
         if (act >= 0) {
             UpdateWindowTitle(m_tabBar.GetTabPath(act));
         }
+    };
+
+    m_tabBar.onTabOrderChanged = [this]() {
+        m_currentTabIndex = m_tabBar.GetActiveIndex();
     };
 
     m_tabBar.onNewTabRequested = [this]() {
@@ -814,9 +866,18 @@ void MainWindow::CreateControls() {
 
     // MultiPane layout change callback
     m_multiPane.onLayoutChanged = [this](PaneLayout newLayout) {
+        if (m_isSwitchingTab) return;
+
         int curTab = m_tabBar.GetActiveIndex();
         if (curTab >= 0 && curTab < m_tabBar.GetTabCount()) {
-            m_tabBar.GetTabItemRef(curTab).layout = (int)newLayout;
+            auto& tab = m_tabBar.GetTabItemRef(curTab);
+            tab.layout = (int)newLayout;
+            int pCount = m_multiPane.GetPaneCount();
+            tab.panePaths.resize(pCount);
+            for (int p = 0; p < pCount; ++p) {
+                tab.panePaths[p] = m_multiPane.GetPane(p).GetCurrentPath();
+            }
+            tab.activePaneIndex = m_multiPane.GetActiveIndex();
         }
         BuildMenu();
         LayoutAll();
@@ -891,15 +952,15 @@ void MainWindow::CreateControls() {
         } else if (cmd == CMD_NEOMDIE_OPEN_SPLIT) {
             int count = m_multiPane.GetPaneCount();
             if (count == 1) {
-                m_multiPane.SetLayout(PaneLayout::DualVertical);
+                SetLayout(PaneLayout::DualVertical);
                 m_multiPane.GetPane(1).NavigateTo(path);
                 m_multiPane.SetActivePane(1);
             } else if (count == 2) {
-                m_multiPane.SetLayout(PaneLayout::ThreeLeft);
+                SetLayout(PaneLayout::ThreeLeft);
                 m_multiPane.GetPane(2).NavigateTo(path);
                 m_multiPane.SetActivePane(2);
             } else if (count == 3) {
-                m_multiPane.SetLayout(PaneLayout::Quad);
+                SetLayout(PaneLayout::Quad);
                 m_multiPane.GetPane(3).NavigateTo(path);
                 m_multiPane.SetActivePane(3);
             } else {
@@ -919,6 +980,16 @@ void MainWindow::CreateControls() {
     auto setupViewCallbacks = [this](FileListView& view, int paneIdx) {
         view.onPathChanged = [this, paneIdx](const std::wstring& p) {
             m_multiPane.UpdatePaneHeader(paneIdx);
+            if (m_isSwitchingTab) return;
+
+            int curTab = m_tabBar.GetActiveIndex();
+            if (curTab >= 0 && curTab < m_tabBar.GetTabCount()) {
+                auto& tab = m_tabBar.GetTabItemRef(curTab);
+                if (paneIdx >= (int)tab.panePaths.size()) {
+                    tab.panePaths.resize(paneIdx + 1);
+                }
+                tab.panePaths[paneIdx] = p;
+            }
 
             if (m_multiPane.GetActiveIndex() == paneIdx) {
                 m_tabBar.SetTabPath(m_tabBar.GetActiveIndex(), p);
@@ -940,12 +1011,14 @@ void MainWindow::CreateControls() {
         };
 
         view.onSelectionChanged = [this, paneIdx](const std::wstring& sel) {
+            if (m_isSwitchingTab) return;
             if (m_previewVisible && m_multiPane.GetActiveIndex() == paneIdx) {
                 m_preview.SetFile(sel);
             }
         };
 
         view.onStatusUpdated = [this, paneIdx](int count, uint64_t totalSize) {
+            if (m_isSwitchingTab) return;
             if (m_multiPane.GetActiveIndex() == paneIdx) {
                 UpdateStatus(count, totalSize);
             }
@@ -963,10 +1036,22 @@ void MainWindow::CreateControls() {
     }
     m_multiPane.SetShowHidden(Config::Get().showHidden);
     m_multiPane.SetCalcFolderSize(Config::Get().calcFolderSize);
-    m_multiPane.SetShowHidden(Config::Get().showHidden);
-    m_multiPane.SetCalcFolderSize(Config::Get().calcFolderSize);
 
     m_multiPane.onActivePaneChanged = [this](int idx, const std::wstring& p) {
+        if (m_isSwitchingTab) return;
+
+        int curTab = m_tabBar.GetActiveIndex();
+        if (curTab >= 0 && curTab < m_tabBar.GetTabCount()) {
+            auto& tab = m_tabBar.GetTabItemRef(curTab);
+            tab.activePaneIndex = idx;
+            if (idx >= 0) {
+                if (idx >= (int)tab.panePaths.size()) {
+                    tab.panePaths.resize(idx + 1);
+                }
+                tab.panePaths[idx] = p;
+            }
+        }
+
         m_breadcrumb.SetPath(p);
         if (m_treeVisible && Config::Get().autoExpandTree) {
             m_tree.SelectPath(p);
@@ -1256,10 +1341,27 @@ void MainWindow::UpdateLanguageUI() {
 }
 
 void MainWindow::SetLayout(PaneLayout layout) {
+    int prevCount = m_multiPane.GetPaneCount();
     m_multiPane.SetLayout(layout);
+    int newCount = m_multiPane.GetPaneCount();
+
     int curTab = m_tabBar.GetActiveIndex();
     if (curTab >= 0 && curTab < m_tabBar.GetTabCount()) {
-        m_tabBar.GetTabItemRef(curTab).layout = (int)layout;
+        auto& tab = m_tabBar.GetTabItemRef(curTab);
+        tab.layout = (int)layout;
+        tab.panePaths.resize(newCount);
+
+        std::wstring initPath = m_multiPane.GetPane(m_multiPane.GetActiveIndex()).GetCurrentPath();
+        if (initPath.empty() && !tab.path.empty()) initPath = tab.path;
+        if (initPath.empty()) initPath = L"This PC";
+
+        for (int p = 0; p < newCount; ++p) {
+            if (m_multiPane.GetPane(p).GetCurrentPath().empty()) {
+                m_multiPane.GetPane(p).NavigateTo(initPath, false);
+            }
+            tab.panePaths[p] = m_multiPane.GetPane(p).GetCurrentPath();
+        }
+        tab.activePaneIndex = m_multiPane.GetActiveIndex();
     }
     BuildMenu();
     LayoutAll();
@@ -2025,7 +2127,7 @@ void MainWindow::OnCommand(UINT cmdId) {
         bool isZh = I18n::Get().IsChinese();
         std::wstring aboutText = isZh ?
             L"NeoMDIE - 现代化纯原生 Win32 多标签/多栏文件管理器\n"
-            L"版本: v1.0.0 (x64 Release)\n\n"
+            L"版本: v1.0.1 (x64 Release)\n\n"
             L"作者: Harry (https://mianao.info)\n"
             L"开源项目仓库: https://github.com/harry10086/NeoMDIE\n"
             L"致敬经典: MDIE (Tabbed File Manager for Windows)\n\n"
@@ -2035,7 +2137,7 @@ void MainWindow::OnCommand(UINT cmdId) {
             L"• 支持多栏分栏、鼠标手势、多标签彩色标记与即时搜索过滤\n\n"
             L"基于 GNU General Public License v3 (GPLv3) 开源协议发布。" :
             L"NeoMDIE - Modern Native Win32 Tabbed & Multi-Pane File Manager\n"
-            L"Version: v1.0.0 (x64 Release)\n\n"
+            L"Version: v1.0.1 (x64 Release)\n\n"
             L"Author: Harry (https://mianao.info)\n"
             L"Repository: https://github.com/harry10086/NeoMDIE\n"
             L"Inspired by: MDIE (Tabbed File Manager for Windows)\n\n"
@@ -2563,9 +2665,41 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         cfg.previewEnabled = m_previewVisible;
         cfg.previewWidth = m_previewWidth;
 
+        // Sync active tab multiPane state into TabItem before saving
+        int curTab = m_tabBar.GetActiveIndex();
+        if (curTab >= 0 && curTab < m_tabBar.GetTabCount()) {
+            auto& activeTab = m_tabBar.GetTabItemRef(curTab);
+            activeTab.layout = (int)m_multiPane.GetLayout();
+            activeTab.activePaneIndex = m_multiPane.GetActiveIndex();
+            activeTab.panePaths.clear();
+            activeTab.paneViewStates.clear();
+            int pCount = m_multiPane.GetPaneCount();
+            for (int p = 0; p < pCount; ++p) {
+                std::wstring pPath = m_multiPane.GetPane(p).GetCurrentPath();
+                if (pPath.empty()) pPath = (p == 0 && !activeTab.path.empty()) ? activeTab.path : L"This PC";
+                activeTab.panePaths.push_back(pPath);
+                activeTab.paneViewStates.push_back(m_multiPane.GetPane(p).GetViewState());
+            }
+            if (!activeTab.panePaths.empty()) {
+                int aIdx = std::clamp(activeTab.activePaneIndex, 0, (int)activeTab.panePaths.size() - 1);
+                activeTab.path = activeTab.panePaths[aIdx];
+            }
+        }
+
+        cfg.sessionTabsInfo.clear();
         cfg.sessionTabs.clear();
         for (int i = 0; i < m_tabBar.GetTabCount(); ++i) {
-            cfg.sessionTabs.push_back(m_tabBar.GetTabPath(i));
+            const auto& item = m_tabBar.GetTabItem(i);
+            Config::SessionTabInfo info;
+            info.path = item.path;
+            info.layout = item.layout;
+            info.activePaneIndex = item.activePaneIndex;
+            info.panePaths = item.panePaths;
+            if (info.panePaths.empty() && !info.path.empty()) {
+                info.panePaths.push_back(info.path);
+            }
+            cfg.sessionTabsInfo.push_back(info);
+            cfg.sessionTabs.push_back(item.path);
         }
         cfg.activeTabIndex = m_tabBar.GetActiveIndex();
         cfg.Save();

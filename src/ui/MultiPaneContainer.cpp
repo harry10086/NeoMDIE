@@ -199,9 +199,6 @@ void MultiPaneContainer::SetLayout(PaneLayout layout) {
   m_maximizedPane = -1; // Explicit layout change clears temporary maximize
   int count = GetPaneCount();
 
-  std::wstring curPath = m_panes[0].GetCurrentPath();
-  if (curPath.empty())
-    curPath = L"This PC";
 
   for (int i = 0; i < 4; ++i) {
     bool shouldShow = (i < count);
@@ -210,9 +207,6 @@ void MultiPaneContainer::SetLayout(PaneLayout layout) {
       bool showHdr = shouldShow && (count > 1);
       ShowWindow(m_hHeaders[i], showHdr ? SW_SHOW : SW_HIDE);
       UpdatePaneHeader(i);
-    }
-    if (shouldShow && m_panes[i].GetCurrentPath().empty()) {
-      m_panes[i].NavigateTo(curPath);
     }
   }
 

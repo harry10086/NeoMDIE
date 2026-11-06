@@ -70,14 +70,10 @@ STDMETHODIMP DropTarget::DragEnter(IDataObject* pDataObj, DWORD grfKeyState, POI
     if (!pdwEffect) return E_POINTER;
 
     m_cachedFiles.clear();
-    m_isRightDrag = (grfKeyState & MK_RBUTTON) != 0;
     m_acceptable = QueryDropFiles(pDataObj, m_cachedFiles) || HasVirtualDropFiles(pDataObj);
 
     if (m_acceptable) {
-        if (grfKeyState & MK_RBUTTON) {
-            m_isRightDrag = true;
-            *pdwEffect = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
-        } else if (grfKeyState & MK_CONTROL) {
+        if (grfKeyState & MK_CONTROL) {
             *pdwEffect = DROPEFFECT_COPY;
         } else if (grfKeyState & MK_SHIFT) {
             *pdwEffect = DROPEFFECT_MOVE;
@@ -111,10 +107,7 @@ STDMETHODIMP DropTarget::DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffect
     if (!pdwEffect) return E_POINTER;
 
     if (m_acceptable) {
-        if (grfKeyState & MK_RBUTTON) {
-            m_isRightDrag = true;
-            *pdwEffect = DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK;
-        } else if (grfKeyState & MK_CONTROL) {
+        if (grfKeyState & MK_CONTROL) {
             *pdwEffect = DROPEFFECT_COPY;
         } else if (grfKeyState & MK_SHIFT) {
             *pdwEffect = DROPEFFECT_MOVE;
@@ -146,7 +139,6 @@ STDMETHODIMP DropTarget::DragOver(DWORD grfKeyState, POINTL pt, DWORD* pdwEffect
 STDMETHODIMP DropTarget::DragLeave() {
     m_acceptable = false;
     m_cachedFiles.clear();
-    m_isRightDrag = false;
     if (onDragLeave) {
         onDragLeave();
     }
@@ -174,56 +166,25 @@ STDMETHODIMP DropTarget::Drop(IDataObject* pDataObj, DWORD grfKeyState, POINTL p
         bool isMove = false;
         bool isLink = false;
 
-        if (m_isRightDrag) {
-            HMENU hMenu = CreatePopupMenu();
-            bool isZh = I18n::Get().IsChinese();
-            AppendMenuW(hMenu, MF_STRING, 1, isZh ? L"复制到此处(&C)" : L"Copy here(&C)");
-            AppendMenuW(hMenu, MF_STRING, 2, isZh ? L"移动到此处(&M)" : L"Move here(&M)");
-            AppendMenuW(hMenu, MF_STRING, 3, isZh ? L"在此处创建快捷方式(&S)" : L"Create shortcut here(&S)");
-            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, 4, isZh ? L"取消" : L"Cancel");
-
-            SetForegroundWindow(m_hwnd);
-            int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, ptScreen.x, ptScreen.y, 0, m_hwnd, nullptr);
-            DestroyMenu(hMenu);
-
-            if (cmd == 1) {
-                isMove = false;
-                *pdwEffect = DROPEFFECT_COPY;
-            } else if (cmd == 2) {
-                isMove = true;
-                *pdwEffect = DROPEFFECT_MOVE;
-            } else if (cmd == 3) {
-                isLink = true;
-                *pdwEffect = DROPEFFECT_LINK;
-            } else {
-                *pdwEffect = DROPEFFECT_NONE;
-                m_cachedFiles.clear();
-                m_isRightDrag = false;
-                if (onDragLeave) onDragLeave();
-                return S_OK;
-            }
+        if (grfKeyState & MK_CONTROL) {
+            isMove = false;
+            *pdwEffect = DROPEFFECT_COPY;
+        } else if (grfKeyState & MK_SHIFT) {
+            isMove = true;
+            *pdwEffect = DROPEFFECT_MOVE;
+        } else if (grfKeyState & MK_ALT) {
+            isLink = true;
+            *pdwEffect = DROPEFFECT_LINK;
         } else {
-            if (grfKeyState & MK_CONTROL) {
-                isMove = false;
-                *pdwEffect = DROPEFFECT_COPY;
-            } else if (grfKeyState & MK_SHIFT) {
+            // Same volume = MOVE, different volume = COPY
+            if (files[0].length() > 1 && files[0][1] == L':' &&
+                targetDir.length() > 1 && targetDir[1] == L':' &&
+                towupper(files[0][0]) == towupper(targetDir[0])) {
                 isMove = true;
                 *pdwEffect = DROPEFFECT_MOVE;
-            } else if (grfKeyState & MK_ALT) {
-                isLink = true;
-                *pdwEffect = DROPEFFECT_LINK;
             } else {
-                // Same volume = MOVE, different volume = COPY
-                if (files[0].length() > 1 && files[0][1] == L':' &&
-                    targetDir.length() > 1 && targetDir[1] == L':' &&
-                    towupper(files[0][0]) == towupper(targetDir[0])) {
-                    isMove = true;
-                    *pdwEffect = DROPEFFECT_MOVE;
-                } else {
-                    isMove = false;
-                    *pdwEffect = DROPEFFECT_COPY;
-                }
+                isMove = false;
+                *pdwEffect = DROPEFFECT_COPY;
             }
         }
 
@@ -266,7 +227,6 @@ STDMETHODIMP DropTarget::Drop(IDataObject* pDataObj, DWORD grfKeyState, POINTL p
     }
 
     m_cachedFiles.clear();
-    m_isRightDrag = false;
     if (onDragLeave) {
         onDragLeave();
     }

@@ -95,7 +95,7 @@ HWND TabBar::Create(HWND hwndParent, int id) {
     IFileOperation *pfo = nullptr;
     if (SUCCEEDED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL,
                                    IID_PPV_ARGS(&pfo)))) {
-      pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR);
+      pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR | FOF_RENAMEONCOLLISION);
       pfo->SetOwnerWindow(m_hwnd);
 
       IShellItem *psiDest = nullptr;
@@ -163,12 +163,13 @@ int TabBar::AddTab(const std::wstring &path, bool activate) {
   item.activePaneIndex = 0;
   item.paneHistories = {{{path}, 0}};
   item.paneSelectedPaths = {{}};
+  item.paneViewStates = {{0, L"", L"", {}}};
 
   int index = (int)m_tabs.size();
   m_tabs.push_back(item);
 
   RecalcLayout();
-  if (activate || m_tabs.size() == 1) {
+  if (activate) {
     SetActiveTab(index);
   } else {
     EnsureTabVisible(index);
@@ -356,10 +357,10 @@ bool TabBar::IsTabPinned(int index) const {
   return false;
 }
 
-void TabBar::SetActiveTab(int index) {
+void TabBar::SetActiveTab(int index, bool force) {
   if (index < 0 || index >= (int)m_tabs.size())
     return;
-  if (m_activeIndex != index) {
+  if (force || m_activeIndex != index) {
     m_activeIndex = index;
     EnsureTabVisible(m_activeIndex);
     if (onTabChanged) {
@@ -387,9 +388,13 @@ void TabBar::SetTabPath(int index, const std::wstring &path) {
     if (m_tabs[index].panePaths.empty()) {
       m_tabs[index].panePaths.push_back(path);
     } else {
-      int pIdx = std::clamp(m_tabs[index].activePaneIndex, 0,
-                            (int)m_tabs[index].panePaths.size() - 1);
-      m_tabs[index].panePaths[pIdx] = path;
+      if (m_tabs[index].activePaneIndex >= (int)m_tabs[index].panePaths.size()) {
+        m_tabs[index].panePaths.resize(m_tabs[index].activePaneIndex + 1, path);
+      }
+      m_tabs[index].panePaths[m_tabs[index].activePaneIndex] = path;
+
+
+
     }
     if (m_hoverIndex == index) {
       UpdateTooltip(index);
@@ -972,6 +977,9 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
         }
         m_dragIndex = m_hoverIndex;
         RecalcLayout();
+        if (onTabOrderChanged) {
+          onTabOrderChanged();
+        }
         InvalidateRect(hwnd, nullptr, FALSE);
       }
     }

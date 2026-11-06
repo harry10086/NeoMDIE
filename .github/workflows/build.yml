@@ -40,7 +40,7 @@ jobs:
           $ver = if ($env:GITHUB_REF -like "refs/tags/*") {
               $env:GITHUB_REF -replace "refs/tags/", ""
           } else {
-              "v1.0.0"
+              "v1.0.1"
           }
           $pkgName = "NeoMDIE-$ver-windows-x64"
           $pkgDir = "release_pkg\$pkgName"
@@ -63,6 +63,9 @@ jobs:
           }
           if (Test-Path "README.md") {
               Copy-Item -Path "README.md" -Destination "$pkgDir\"
+          }
+          if (Test-Path "RELEASE_NOTES.md") {
+              Copy-Item -Path "RELEASE_NOTES.md" -Destination "$pkgDir\"
           }
           if (Test-Path "LICENSE") {
               Copy-Item -Path "LICENSE" -Destination "$pkgDir\"
@@ -94,6 +97,7 @@ jobs:
             bin/NeoMDIE.exe
           tag_name: ${{ steps.pkg.outputs.release_tag }}
           name: NeoMDIE ${{ steps.pkg.outputs.release_tag }}
+          body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: false

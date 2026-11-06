@@ -23,6 +23,7 @@ struct TabItem {
       paneHistories; // Independent navigation history per pane in this tab
   std::vector<std::vector<std::wstring>>
       paneSelectedPaths; // Selected paths per pane in this tab
+  std::vector<PaneViewState> paneViewStates;
 };
 
 class TabBar {
@@ -47,7 +48,7 @@ public:
   void PrevTab();
   void TogglePinTab(int index);
   bool IsTabPinned(int index) const;
-  void SetActiveTab(int index);
+  void SetActiveTab(int index, bool force = false);
   int GetActiveIndex() const { return m_activeIndex; }
   int GetTabCount() const { return (int)m_tabs.size(); }
   const std::vector<TabItem> &GetTabs() const { return m_tabs; }
@@ -71,6 +72,7 @@ public:
   // Callbacks
   std::function<void(int index)> onTabChanged;
   std::function<void(int index)> onTabClosed;
+  std::function<void()> onTabOrderChanged;
   std::function<void()> onNewTabRequested;
   std::function<void(const std::wstring &path)> onOpenTerminalRequested;
 
@@ -86,7 +88,7 @@ private:
   HWND m_hwnd = nullptr;
   std::vector<TabItem> m_tabs;
   std::vector<std::wstring> m_closedHistory;
-  int m_activeIndex = 0;
+  int m_activeIndex = -1;
   int m_hoverIndex = -1;
   bool m_hoverClose = false;
   bool m_hoverNewTab = false;

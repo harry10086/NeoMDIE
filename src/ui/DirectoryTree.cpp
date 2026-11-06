@@ -104,7 +104,7 @@ HWND DirectoryTree::Create(HWND hwndParent, int id) {
     IFileOperation *pfo = nullptr;
     if (SUCCEEDED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL,
                                    IID_PPV_ARGS(&pfo)))) {
-      pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR);
+      pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR | FOF_RENAMEONCOLLISION);
       pfo->SetOwnerWindow(m_hwnd);
 
       IShellItem *psiDest = nullptr;
@@ -505,11 +505,9 @@ LRESULT CALLBACK DirectoryTree::ParentSubclassProc(HWND hwnd, UINT msg,
         }
         break;
       }
-      case TVN_BEGINDRAGW:
-      case TVN_BEGINRDRAGW: {
+      case TVN_BEGINDRAGW: {
         NMTREEVIEWW *pnmtv = (NMTREEVIEWW *)lParam;
-        pThis->StartDragDrop(pnmtv->itemNew.hItem,
-                             pnm->code == TVN_BEGINRDRAGW);
+        pThis->StartDragDrop(pnmtv->itemNew.hItem);
         break;
       }
       case TVN_SELCHANGEDW: {
@@ -681,7 +679,7 @@ LRESULT CALLBACK DirectoryTree::TreeSubclassProc(HWND hwnd, UINT msg,
   return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
-void DirectoryTree::StartDragDrop(HTREEITEM hItem, bool isRightClick) {
+void DirectoryTree::StartDragDrop(HTREEITEM hItem) {
   if (!hItem)
     return;
   TVITEMW item = {0};
@@ -692,7 +690,7 @@ void DirectoryTree::StartDragDrop(HTREEITEM hItem, bool isRightClick) {
     if (pData && !pData->path.empty() && PathFileExistsW(pData->path.c_str())) {
       DWORD dwEffect = 0;
       HRESULT hr = ShellUtils::DoFileDragDrop(
-          m_hwnd, pData->path, {pData->path}, isRightClick, &dwEffect);
+          m_hwnd, pData->path, {pData->path}, &dwEffect);
       if (SUCCEEDED(hr) && dwEffect == DROPEFFECT_MOVE) {
         Refresh();
       }
