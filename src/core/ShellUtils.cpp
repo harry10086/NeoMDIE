@@ -1358,7 +1358,7 @@ std::wstring GetParentPath(const std::wstring& path) {
 }
 
 std::wstring GetDisplayName(const std::wstring& path) {
-    if (path.empty() || path == L"此电脑" || path == L"This PC") {
+    if (path.empty() || path == L"此电脑" || path == L"This PC" || path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
         return I18n::Get().T(StringId::ThisPC);
     }
     wchar_t buf[MAX_PATH];

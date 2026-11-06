@@ -158,6 +158,9 @@ namespace Util {
 
     inline std::wstring NormalizePath(const std::wstring& path) {
         if (path.empty()) return path;
+        if (path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
+            return L"This PC";
+        }
         std::wstring p = path;
         std::replace(p.begin(), p.end(), L'/', L'\\');
         while (p.length() > 3 && p.back() == L'\\') {

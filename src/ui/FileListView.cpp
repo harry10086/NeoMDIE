@@ -1232,25 +1232,21 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         return MA_ACTIVATE;
 
     case WM_LBUTTONDOWN: {
-        int x = GET_X_LPARAM(lParam);
-        int y = GET_Y_LPARAM(lParam);
-
-        LVHITTESTINFO lvhti = { 0 };
-        lvhti.pt = { x, y };
-        int hit = ListView_HitTest(hwnd, &lvhti);
-
         bool wasFocused = (GetFocus() == hwnd);
         if (!wasFocused) {
             SetFocus(hwnd);
-        }
+            int x = GET_X_LPARAM(lParam);
+            int y = GET_Y_LPARAM(lParam);
 
-        bool ctrl = (GetKeyState(VK_CONTROL) < 0);
-        bool shift = (GetKeyState(VK_SHIFT) < 0);
+            LVHITTESTINFO lvhti = { 0 };
+            lvhti.pt = { x, y };
+            int hit = ListView_HitTest(hwnd, &lvhti);
 
-        if (hit >= 0) {
-            if (!ctrl && !shift) {
-                UINT state = ListView_GetItemState(hwnd, hit, LVIS_SELECTED);
-                if (!wasFocused || !(state & LVIS_SELECTED) || ListView_GetSelectedCount(hwnd) > 1) {
+            bool ctrl = (GetKeyState(VK_CONTROL) < 0);
+            bool shift = (GetKeyState(VK_SHIFT) < 0);
+
+            if (hit >= 0) {
+                if (!ctrl && !shift) {
                     ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
                     ListView_SetItemState(hwnd, hit, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
                     ListView_EnsureVisible(hwnd, hit, FALSE);
@@ -1259,21 +1255,14 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
                         pThis->onSelectionChanged(pThis->m_allItems[idx].fullPath);
                     }
                 }
-            } else if (ctrl) {
-                UINT state = ListView_GetItemState(hwnd, hit, LVIS_SELECTED);
-                ListView_SetItemState(hwnd, hit, (state & LVIS_SELECTED) ? 0 : LVIS_SELECTED, LVIS_SELECTED);
-                ListView_SetItemState(hwnd, hit, LVIS_FOCUSED, LVIS_FOCUSED);
-                if (pThis->onSelectionChanged && hit < (int)pThis->m_filteredIndices.size()) {
-                    int idx = pThis->m_filteredIndices[hit];
-                    pThis->onSelectionChanged(pThis->m_allItems[idx].fullPath);
+            } else {
+                if (!ctrl && !shift) {
+                    ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
                 }
             }
-        } else {
-            if (!ctrl && !shift) {
-                ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
-            }
+            return 0; // Consume click on activation from another pane to prevent unintended label rename
         }
-        break;
+        break; // Already focused: let native SysListView32 handle selection/drag/F2
     }
     case WM_LBUTTONDBLCLK: {
         int x = GET_X_LPARAM(lParam);

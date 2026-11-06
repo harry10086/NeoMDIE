@@ -941,7 +941,7 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   // MDIE Style Editing controls below list
   int editY = ySc + scListH + Theme::Get().Scale(10, hwnd);
   createLabel(7, zh ? L"功能名称:" : L"Action:", marginX, editY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(70, hwnd), lineH);
-  s_hScActionCombo = createCombo(7, marginX + Theme::Get().Scale(75, hwnd), editY, 358, 220);
+  s_hScActionCombo = createCombo(7, marginX + Theme::Get().Scale(75, hwnd), editY, 354, 220);
   for (size_t a = 0; a < sizeof(s_allActions)/sizeof(s_allActions[0]); ++a) {
       SendMessageW(s_hScActionCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? s_allActions[a].nameZh : s_allActions[a].nameEn));
   }
@@ -953,7 +953,7 @@ void SettingsDialog::CreateControls(HWND hwnd) {
 
   editY += Theme::Get().Scale(32, hwnd);
   createLabel(7, zh ? L"按键:" : L"Key:", marginX, editY + Theme::Get().Scale(3, hwnd), Theme::Get().Scale(70, hwnd), lineH);
-  s_hScKeyCombo = createCombo(7, marginX + Theme::Get().Scale(75, hwnd), editY, 359, 100);
+  s_hScKeyCombo = createCombo(7, marginX + Theme::Get().Scale(75, hwnd), editY, 355, 100);
   for (size_t k = 0; k < sizeof(s_keyChoices)/sizeof(s_keyChoices[0]); ++k) {
       SendMessageW(s_hScKeyCombo, CB_ADDSTRING, 0, (LPARAM)s_keyChoices[k]);
   }
@@ -1501,19 +1501,39 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
       int aIdx = (int)SendMessageW(s_hScActionCombo, CB_GETCURSEL, 0, 0);
       int kIdx = (int)SendMessageW(s_hScKeyCombo, CB_GETCURSEL, 0, 0);
       int aCount = (int)SendMessageW(s_hScActionCombo, CB_GETCOUNT, 0, 0);
-      if (sel >= 0 && sel < (int)s_tempShortcuts.size() &&
-          aIdx >= 0 && aIdx < aCount &&
+      if (aIdx >= 0 && aIdx < aCount &&
           kIdx >= 0 && kIdx < (int)(sizeof(s_keyChoices)/sizeof(s_keyChoices[0]))) {
           wchar_t actBuf[256] = { 0 };
           SendMessageW(s_hScActionCombo, CB_GETLBTEXT, aIdx, (LPARAM)actBuf);
-          s_tempShortcuts[sel].name = actBuf;
-          s_tempShortcuts[sel].key = s_keyChoices[kIdx];
-          s_tempShortcuts[sel].shift = (SendMessageW(s_hScShift, BM_GETCHECK, 0, 0) == BST_CHECKED);
-          s_tempShortcuts[sel].ctrl = (SendMessageW(s_hScCtrl, BM_GETCHECK, 0, 0) == BST_CHECKED);
-          s_tempShortcuts[sel].alt = (SendMessageW(s_hScAlt, BM_GETCHECK, 0, 0) == BST_CHECKED);
-          s_tempShortcuts[sel].keyText = FormatShortcutKey(s_tempShortcuts[sel]);
-          PopulateShortcutList(s_hShortcutList);
-          ListView_SetItemState(s_hShortcutList, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+          if (sel < 0 || sel >= (int)s_tempShortcuts.size()) {
+              for (size_t i = 0; i < s_tempShortcuts.size(); ++i) {
+                  if (s_tempShortcuts[i].name == actBuf) {
+                      sel = (int)i;
+                      break;
+                  }
+              }
+          }
+          if (sel >= 0 && sel < (int)s_tempShortcuts.size()) {
+              s_tempShortcuts[sel].name = actBuf;
+              s_tempShortcuts[sel].key = s_keyChoices[kIdx];
+              s_tempShortcuts[sel].shift = (SendMessageW(s_hScShift, BM_GETCHECK, 0, 0) == BST_CHECKED);
+              s_tempShortcuts[sel].ctrl = (SendMessageW(s_hScCtrl, BM_GETCHECK, 0, 0) == BST_CHECKED);
+              s_tempShortcuts[sel].alt = (SendMessageW(s_hScAlt, BM_GETCHECK, 0, 0) == BST_CHECKED);
+              s_tempShortcuts[sel].keyText = FormatShortcutKey(s_tempShortcuts[sel]);
+              PopulateShortcutList(s_hShortcutList);
+              ListView_SetItemState(s_hShortcutList, sel, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+          } else {
+              ShortcutItem item;
+              item.name = actBuf;
+              item.key = s_keyChoices[kIdx];
+              item.shift = (SendMessageW(s_hScShift, BM_GETCHECK, 0, 0) == BST_CHECKED);
+              item.ctrl = (SendMessageW(s_hScCtrl, BM_GETCHECK, 0, 0) == BST_CHECKED);
+              item.alt = (SendMessageW(s_hScAlt, BM_GETCHECK, 0, 0) == BST_CHECKED);
+              item.keyText = FormatShortcutKey(item);
+              s_tempShortcuts.push_back(item);
+              PopulateShortcutList(s_hShortcutList);
+              ListView_SetItemState(s_hShortcutList, (int)s_tempShortcuts.size() - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+          }
       }
       return 0;
     } else if (id == 358) { // Delete Shortcut

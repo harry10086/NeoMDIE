@@ -129,6 +129,9 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
     }).detach();
 
     std::wstring cmdPath = initialPath;
+    if (cmdPath.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
+        cmdPath = L"This PC";
+    }
     if (cmdPath.empty() && __argc > 1 && __wargv && __wargv[1]) {
         std::wstring arg = __wargv[1];
         while (!arg.empty() && (arg.back() == L'"' || arg.back() == L' ')) arg.pop_back();
@@ -811,8 +814,10 @@ void MainWindow::CreateControls() {
 
     // MultiPane layout change callback
     m_multiPane.onLayoutChanged = [this](PaneLayout newLayout) {
-        Config::Get().paneLayout = (int)newLayout;
-        Config::Get().splitEnabled = (newLayout != PaneLayout::Single);
+        int curTab = m_tabBar.GetActiveIndex();
+        if (curTab >= 0 && curTab < m_tabBar.GetTabCount()) {
+            m_tabBar.GetTabItemRef(curTab).layout = (int)newLayout;
+        }
         BuildMenu();
         LayoutAll();
         InvalidateRect(m_hwnd, nullptr, TRUE);
@@ -1252,8 +1257,10 @@ void MainWindow::UpdateLanguageUI() {
 
 void MainWindow::SetLayout(PaneLayout layout) {
     m_multiPane.SetLayout(layout);
-    Config::Get().paneLayout = (int)layout;
-    Config::Get().Save();
+    int curTab = m_tabBar.GetActiveIndex();
+    if (curTab >= 0 && curTab < m_tabBar.GetTabCount()) {
+        m_tabBar.GetTabItemRef(curTab).layout = (int)layout;
+    }
     BuildMenu();
     LayoutAll();
     if (m_hwndBtnSplit) {
@@ -2147,6 +2154,9 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             while (!path.empty() && (path.back() == L'"' || path.back() == L' ')) path.pop_back();
             while (!path.empty() && path.front() == L'"') path.erase(path.begin());
             if (path.length() == 2 && path[1] == L':') path += L"\\";
+            if (path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
+                path = L"This PC";
+            }
             if (PathFileExistsW(path.c_str()) || path == L"此电脑" || path == L"This PC") {
                 m_tabBar.AddTab(path, true);
                 FileListView* activePane = m_multiPane.GetActivePane();
@@ -2550,7 +2560,6 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
         cfg.showTree = m_treeVisible;
         cfg.treeWidth = m_treeWidth;
-        cfg.paneLayout = (int)m_multiPane.GetLayout();
         cfg.previewEnabled = m_previewVisible;
         cfg.previewWidth = m_previewWidth;
 

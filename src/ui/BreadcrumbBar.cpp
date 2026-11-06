@@ -1,6 +1,7 @@
 #include "BreadcrumbBar.h"
 #include "Theme.h"
 #include "..\core\ShellUtils.h"
+#include "..\core\I18n.h"
 
 static const wchar_t* BREADCRUMB_CLASS = L"NeoMDIE_BreadcrumbBar";
 
@@ -54,10 +55,10 @@ void BreadcrumbBar::SetPath(const std::wstring& path) {
 
 void BreadcrumbBar::ParseSegments() {
     m_segments.clear();
-    if (m_currentPath.empty() || m_currentPath == L"此电脑" || m_currentPath == L"This PC") {
+    if (m_currentPath.empty() || m_currentPath == L"此电脑" || m_currentPath == L"This PC" || m_currentPath.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
         BreadcrumbSegment seg;
-        seg.name = L"此电脑";
-        seg.targetPath = L"此电脑";
+        seg.name = I18n::Get().T(StringId::ThisPC);
+        seg.targetPath = L"This PC";
         m_segments.push_back(seg);
         return;
     }
