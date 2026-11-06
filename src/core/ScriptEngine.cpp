@@ -261,9 +261,13 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
             bool isErr = (wOutput.find(L"错误") != std::wstring::npos ||
                           wOutput.find(L"Error") != std::wstring::npos ||
                           wOutput.find(L"error") != std::wstring::npos ||
-                          wOutput.find(L"Exception") != std::wstring::npos);
-            MessageBoxW(m_hwndMain, wOutput.c_str(), isZh ? L"NeoMDIE 脚本执行结果" : L"Script Execution Result",
-                        MB_OK | (isErr ? MB_ICONWARNING : MB_ICONINFORMATION));
+                          wOutput.find(L"Exception") != std::wstring::npos ||
+                          wOutput.find(L"Fail") != std::wstring::npos ||
+                          wOutput.find(L"fail") != std::wstring::npos);
+            if (isErr) {
+                MessageBoxW(m_hwndMain, wOutput.c_str(), isZh ? L"脚本提示" : L"Script Notice",
+                            MB_OK | MB_ICONWARNING);
+            }
         } else {
             Log(L"脚本执行完毕。");
         }

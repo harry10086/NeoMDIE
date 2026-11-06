@@ -27,7 +27,6 @@ if (!activePath || !fso.FolderExists(activePath)) {
 }
 
 if (!activePath || !fso.FolderExists(activePath)) {
-    WScript.Echo("【提示】未能获取当前有效的活动文件夹目录。请在标签页中进入具体目录后再执行本脚本。");
     WScript.Quit(1);
 }
 
@@ -43,7 +42,6 @@ while (fso.FileExists(targetFile)) {
 }
 
 // 3. 写入带标准 UTF-8 BOM 的表格，支持 Excel、WPS 直接双击打开不乱码
-var created = false;
 try {
     var stream = new ActiveXObject("ADODB.Stream");
     stream.Type = 2; // adTypeText
@@ -53,20 +51,13 @@ try {
     stream.WriteText("1,新建项目A," + new Date().toLocaleString() + ",NeoMDIE 自动创建\r\n");
     stream.SaveToFile(targetFile, 2); // adSaveCreateOverWrite
     stream.Close();
-    created = true;
 } catch (e) {
     try {
         var ts = fso.CreateTextFile(targetFile, true, true);
         ts.WriteLine("序号,项目名称,创建时间,备注");
         ts.WriteLine("1,新建项目A," + new Date().toLocaleString() + ",NeoMDIE 自动创建");
         ts.Close();
-        created = true;
     } catch (e2) {
         WScript.Echo("【错误】创建文件失败: " + e2.message);
     }
-}
-
-// 4. 提示 (遵循用户习惯: 提示成功但不自动调用程序打开)
-if (created) {
-    WScript.Echo("【成功】已成功在当前目录下创建表格文档：\r\n\r\n" + targetFile);
 }
