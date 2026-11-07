@@ -2141,7 +2141,7 @@ void MainWindow::OnCommand(UINT cmdId) {
         bool isZh = I18n::Get().IsChinese();
         std::wstring aboutText = isZh ?
             L"NeoMDIE - 现代化纯原生 Win32 多标签/多栏文件管理器\n"
-            L"版本: v1.0.1 (x64 Release)\n\n"
+            L"版本: v1.0.2 (x64 Release)\n\n"
             L"作者: Harry (https://mianao.info)\n"
             L"开源项目仓库: https://github.com/harry10086/NeoMDIE\n"
             L"致敬经典: MDIE (Tabbed File Manager for Windows)\n\n"
@@ -2151,7 +2151,7 @@ void MainWindow::OnCommand(UINT cmdId) {
             L"• 支持多栏分栏、鼠标手势、多标签彩色标记与即时搜索过滤\n\n"
             L"基于 GNU General Public License v3 (GPLv3) 开源协议发布。" :
             L"NeoMDIE - Modern Native Win32 Tabbed & Multi-Pane File Manager\n"
-            L"Version: v1.0.1 (x64 Release)\n\n"
+            L"Version: v1.0.2 (x64 Release)\n\n"
             L"Author: Harry (https://mianao.info)\n"
             L"Repository: https://github.com/harry10086/NeoMDIE\n"
             L"Inspired by: MDIE (Tabbed File Manager for Windows)\n\n"
