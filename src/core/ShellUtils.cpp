@@ -1849,7 +1849,7 @@ void CheckForUpdates(HWND hwndParent) {
         std::wstring wTagName = Util::Utf8ToWide(tagName);
         std::wstring wHtmlUrl = Util::Utf8ToWide(htmlUrl);
 
-        const std::wstring currentVer = L"v1.0.1";
+        const std::wstring currentVer = L"v1.0.2";
         if (!wTagName.empty() && wTagName != currentVer) {
             std::wstring msg = isZh
                 ? (L"发现 NeoMDIE 新版本: " + wTagName + L" (当前版本: " + currentVer + L")\n\n下载路径与发布页面:\n" + wHtmlUrl + L"\n\n是否立即前往 GitHub 下载更新？")

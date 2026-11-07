@@ -1,12 +1,12 @@
 // ==NeoScript==
-// @name         新建Excel工作表
-// @description  在当前活动目录下快速创建一个新的 Excel 表格文件 (.csv)
-// @hotkey       Ctrl+Shift+E
+// @name         新建CSV工作表
+// @description  在当前活动目录下快速创建一个新的 CSV 工作表文件 (.csv)
+// @hotkey       Ctrl+Alt+E
 // @toolbar      true
 // ==/NeoScript==
 
 /**
- * NeoMDIE 扩展脚本: 新建 Excel 表格 / 文档
+ * NeoMDIE 扩展脚本: 新建 CSV 工作表 / 文档
  */
 
 var shell = new ActiveXObject("WScript.Shell");

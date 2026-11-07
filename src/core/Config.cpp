@@ -127,10 +127,21 @@ void Config::Load() {
                 } else {
                     tabInfo.panePaths.push_back(tabInfo.path);
                 }
+
+                PaneViewState vs;
+                StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_SortCol", i, p);
+                vs.sortCol = GetPrivateProfileIntW(secTabs, pKey, 0, m_iniPath.c_str());
+                StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_SortAsc", i, p);
+                vs.sortAsc = GetPrivateProfileIntW(secTabs, pKey, 1, m_iniPath.c_str()) != 0;
+                StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_ViewMode", i, p);
+                vs.viewMode = GetPrivateProfileIntW(secTabs, pKey, -1, m_iniPath.c_str());
+                tabInfo.paneViewStates.push_back(vs);
             }
         }
         if (tabInfo.panePaths.empty()) {
             tabInfo.panePaths.push_back(tabInfo.path);
+            PaneViewState vs;
+            tabInfo.paneViewStates.push_back(vs);
         }
         sessionTabsInfo.push_back(tabInfo);
     }
@@ -147,6 +158,7 @@ void Config::Load() {
         defInfo.layout = 0;
         defInfo.activePaneIndex = 0;
         defInfo.panePaths = { L"This PC" };
+        defInfo.paneViewStates.push_back(PaneViewState{});
         sessionTabsInfo.push_back(defInfo);
     }
 
@@ -348,6 +360,16 @@ void Config::Save() {
                 wchar_t pKey[64];
                 StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d", (int)i, (int)p);
                 WritePrivateProfileStringW(secTabs, pKey, sessionTabsInfo[i].panePaths[p].c_str(), m_iniPath.c_str());
+
+                if (p < sessionTabsInfo[i].paneViewStates.size()) {
+                    const auto& vs = sessionTabsInfo[i].paneViewStates[p];
+                    StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_SortCol", (int)i, (int)p);
+                    writeInt(secTabs, pKey, vs.sortCol);
+                    StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_SortAsc", (int)i, (int)p);
+                    writeInt(secTabs, pKey, vs.sortAsc ? 1 : 0);
+                    StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_ViewMode", (int)i, (int)p);
+                    writeInt(secTabs, pKey, vs.viewMode);
+                }
             }
         }
     } else {

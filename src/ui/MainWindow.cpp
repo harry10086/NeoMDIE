@@ -158,6 +158,7 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
                 item.layout = info.layout;
                 item.activePaneIndex = info.activePaneIndex;
                 item.panePaths = info.panePaths;
+                item.paneViewStates = info.paneViewStates;
                 if (item.panePaths.empty()) {
                     item.panePaths.push_back(item.path.empty() ? L"This PC" : item.path);
                 }
@@ -403,7 +404,7 @@ void MainWindow::BuildMenu() {
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_LIST, isZh ? L"列表(&L)" : L"List(&L)");
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_DETAILS, isZh ? L"详细信息(&D)" : L"Details(&D)");
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_TILES, isZh ? L"平铺(&S)" : L"Tiles(&S)");
-    int curVm = Config::Get().viewMode;
+    int curVm = activeView ? activeView->GetViewMode() : Config::Get().viewMode;
     UINT activeVmId = ID_VIEW_DETAILS;
     if (curVm == 0) activeVmId = ID_VIEW_DETAILS;
     else if (curVm == 1) activeVmId = ID_VIEW_ICONS_LARGE;
@@ -664,8 +665,8 @@ void MainWindow::CreateControls() {
     Theme::Get().ApplyToWindow(m_hwndStatusBar);
     SendMessageW(m_hwndStatusBar, WM_SETFONT, (WPARAM)Theme::Get().GetUIFont(m_hwnd), TRUE);
 
-    int parts[] = { 200, 450, -1 };
-    SendMessageW(m_hwndStatusBar, SB_SETPARTS, 3, (LPARAM)parts);
+    int parts[] = { -1 };
+    SendMessageW(m_hwndStatusBar, SB_SETPARTS, 1, (LPARAM)parts);
 
     // Wire up links bar callbacks
     m_linksBar.onNavigate = [this](const std::wstring& path) {
@@ -1304,13 +1305,25 @@ void MainWindow::LayoutCenterArea() {
 void MainWindow::UpdateStatus(int itemCount, uint64_t totalSize) {
     if (!m_hwndStatusBar) return;
 
-    wchar_t buf1[64];
-    StringCchPrintfW(buf1, 64, I18n::Get().T(StringId::StatusItems), itemCount);
-    SendMessageW(m_hwndStatusBar, SB_SETTEXTW, 0, (LPARAM)buf1);
+    FileListView* activeView = m_multiPane.GetActivePane();
+    int selCount = (activeView && activeView->GetHwnd()) ? (int)ListView_GetSelectedCount(activeView->GetHwnd()) : 0;
+    bool isZh = I18n::Get().IsChinese();
 
-    wchar_t buf2[64];
-    StringCchPrintfW(buf2, 64, I18n::Get().T(StringId::StatusSize), Util::FormatBytes(totalSize).c_str());
-    SendMessageW(m_hwndStatusBar, SB_SETTEXTW, 1, (LPARAM)buf2);
+    wchar_t buf[128];
+    if (selCount > 0) {
+        if (isZh) {
+            StringCchPrintfW(buf, 128, L"已选择 %d 个项目    大小: %s", selCount, Util::FormatBytes(totalSize).c_str());
+        } else {
+            StringCchPrintfW(buf, 128, L"%d item(s) selected    Size: %s", selCount, Util::FormatBytes(totalSize).c_str());
+        }
+    } else {
+        if (isZh) {
+            StringCchPrintfW(buf, 128, L"%d 个项目    大小: %s", itemCount, Util::FormatBytes(totalSize).c_str());
+        } else {
+            StringCchPrintfW(buf, 128, L"%d items    Size: %s", itemCount, Util::FormatBytes(totalSize).c_str());
+        }
+    }
+    SendMessageW(m_hwndStatusBar, SB_SETTEXTW, 0, (LPARAM)buf);
 }
 
 void MainWindow::UpdateNavButtons() {
@@ -1880,7 +1893,8 @@ void MainWindow::OnCommand(UINT cmdId) {
         break;
     }
     case ID_FILE_EXIT:
-        PostMessageW(m_hwnd, WM_CLOSE, 0, 0);
+        m_forceClose = true;
+        SendMessageW(m_hwnd, WM_CLOSE, 0, 0);
         break;
 
     case ID_EDIT_CUT:
@@ -2340,6 +2354,31 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
         break;
     }
+    case WM_SYSKEYDOWN:
+    case WM_KEYDOWN: {
+        bool ctrl = (GetKeyState(VK_CONTROL) < 0);
+        bool shift = (GetKeyState(VK_SHIFT) < 0);
+        bool alt = (GetKeyState(VK_MENU) < 0);
+
+        if (wParam == VK_F7 && !ctrl && !shift && !alt) {
+            for (const auto& s : ScriptEngine::Get().GetScripts()) {
+                if (s.hotkey == L"F7") {
+                    OnCommand(s.commandId);
+                    return 0;
+                }
+            }
+        }
+        if ((wParam == 'E' || wParam == 'e') && ctrl && alt && !shift) {
+            for (const auto& s : ScriptEngine::Get().GetScripts()) {
+                if (s.hotkey == L"Ctrl+Alt+E") {
+                    OnCommand(s.commandId);
+                    return 0;
+                }
+            }
+        }
+        break;
+    }
+
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -2572,9 +2611,8 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 SetForegroundWindow(hwnd);
                 RemoveTrayIcon();
             } else if (cmd == 5002) {
-                RemoveTrayIcon();
-                Config::Get().closeToTray = false;
-                DestroyWindow(hwnd);
+                m_forceClose = true;
+                SendMessageW(hwnd, WM_CLOSE, 0, 0);
             }
         }
         return 0;
@@ -2642,12 +2680,13 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     }
 
     case WM_CLOSE: {
-        if (Config::Get().closeToTray) {
+        if (!m_forceClose && Config::Get().closeToTray) {
             m_wasMaximizedBeforeTray = (IsZoomed(hwnd) != FALSE);
             AddTrayIcon();
             ShowWindow(hwnd, SW_HIDE);
             return 0;
         }
+        bool wasHiddenInTray = m_hasTrayIcon || !IsWindowVisible(hwnd);
         ShowWindow(hwnd, SW_HIDE);
         RemoveTrayIcon();
         Config& cfg = Config::Get();
@@ -2657,7 +2696,11 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             cfg.window.y = wp.rcNormalPosition.top;
             cfg.window.width = wp.rcNormalPosition.right - wp.rcNormalPosition.left;
             cfg.window.height = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top;
-            cfg.window.maximized = (wp.showCmd == SW_SHOWMAXIMIZED);
+            if (wasHiddenInTray) {
+                cfg.window.maximized = m_wasMaximizedBeforeTray;
+            } else {
+                cfg.window.maximized = (wp.showCmd == SW_SHOWMAXIMIZED);
+            }
         }
 
         cfg.showTree = m_treeVisible;
@@ -2695,6 +2738,7 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             info.layout = item.layout;
             info.activePaneIndex = item.activePaneIndex;
             info.panePaths = item.panePaths;
+            info.paneViewStates = item.paneViewStates;
             if (info.panePaths.empty() && !info.path.empty()) {
                 info.panePaths.push_back(info.path);
             }
@@ -2828,31 +2872,9 @@ void MainWindow::RebuildAccelerators() {
         return 0;
     };
 
-    for (const auto& item : shortcuts) {
-        WORD vk = mapKey(item.key);
-        UINT cmd = mapAction(item.name);
-        if (vk != 0 && cmd != 0) {
-            ACCEL acc = { 0 };
-            acc.fVirt = FVIRTKEY;
-            if (item.ctrl) acc.fVirt |= FCONTROL;
-            if (item.shift) acc.fVirt |= FSHIFT;
-            if (item.alt) acc.fVirt |= FALT;
-            acc.key = vk;
-            acc.cmd = (WORD)cmd;
-            accels.push_back(acc);
-        }
-    }
-
-    auto hasCommand = [&](UINT cmd) {
-        for (const auto& a : accels) {
-            if (a.cmd == (WORD)cmd) return true;
-        }
-        return false;
-    };
-
-    // Register default script hotkeys from script metadata if not overridden
+    // 1. First register script hotkeys directly from script metadata (always up-to-date)
     for (const auto& s : ScriptEngine::Get().GetScripts()) {
-        if (!s.hotkey.empty() && !hasCommand(s.commandId)) {
+        if (!s.hotkey.empty()) {
             std::wstring hk = s.hotkey;
             bool ctrl = false, shift = false, alt = false;
             size_t plusPos;
@@ -2879,6 +2901,29 @@ void MainWindow::RebuildAccelerators() {
                 acc.cmd = (WORD)s.commandId;
                 accels.push_back(acc);
             }
+        }
+    }
+
+    auto hasCommand = [&](UINT cmd) {
+        for (const auto& a : accels) {
+            if (a.cmd == (WORD)cmd) return true;
+        }
+        return false;
+    };
+
+    // 2. Register other shortcuts from Config
+    for (const auto& item : shortcuts) {
+        WORD vk = mapKey(item.key);
+        UINT cmd = mapAction(item.name);
+        if (vk != 0 && cmd != 0 && !hasCommand(cmd)) {
+            ACCEL acc = { 0 };
+            acc.fVirt = FVIRTKEY;
+            if (item.ctrl) acc.fVirt |= FCONTROL;
+            if (item.shift) acc.fVirt |= FSHIFT;
+            if (item.alt) acc.fVirt |= FALT;
+            acc.key = vk;
+            acc.cmd = (WORD)cmd;
+            accels.push_back(acc);
         }
     }
 

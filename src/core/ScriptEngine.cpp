@@ -169,12 +169,42 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
 
     SetEnvironmentVariableW(L"NEOMDIE_ACTIVE_PATH", workingDir.c_str());
 
+    std::wstring scriptsDir = Util::GetExecutableDir() + L"\\scripts";
+    SetEnvironmentVariableW(L"NEOMDIE_SCRIPTS_DIR", scriptsDir.c_str());
+    SetEnvironmentVariableW(L"NEOMDIE_SCRIPT_FILE", filePath.c_str());
+
     std::wstring filesJoined;
     for (const auto& f : selectedFiles) {
         if (!filesJoined.empty()) filesJoined += L"|";
         filesJoined += f;
     }
     SetEnvironmentVariableW(L"NEOMDIE_SELECTED_FILES", filesJoined.c_str());
+
+    // 检查是否存在同名的 PowerShell (.ps1) 原生 GUI 界面扩展脚本
+    std::wstring ps1Path;
+    if (filePath.size() >= 4 && _wcsicmp(filePath.c_str() + filePath.size() - 4, L".ps1") == 0) {
+        ps1Path = filePath;
+    } else {
+        size_t dotPos = filePath.find_last_of(L'.');
+        if (dotPos != std::wstring::npos) {
+            ps1Path = filePath.substr(0, dotPos) + L".ps1";
+        }
+    }
+    if (!ps1Path.empty() && PathFileExistsW(ps1Path.c_str())) {
+        std::wstring cmd = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File \"" + ps1Path + L"\"";
+        STARTUPINFO si = { sizeof(si) };
+        PROCESS_INFORMATION pi = { 0 };
+        BOOL created = CreateProcessW(nullptr, &cmd[0], nullptr, nullptr, FALSE,
+                                      CREATE_NO_WINDOW, nullptr, workingDir.c_str(), &si, &pi);
+        if (created) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            Log(L"PowerShell 扩展界面脚本已无黑框平滑启动: " + ps1Path);
+            return true;
+        } else {
+            Log(L"启动 PowerShell 失败，错误码: " + std::to_wstring(GetLastError()));
+        }
+    }
 
     std::wstring scriptToRun = filePath;
     std::wstring tempScriptPath;

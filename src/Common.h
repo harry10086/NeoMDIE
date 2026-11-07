@@ -61,6 +61,9 @@ struct PaneViewState {
     std::wstring topItemPath;
     std::wstring focusedPath;
     std::vector<std::wstring> selectedPaths;
+    int sortCol = 0;
+    bool sortAsc = true;
+    int viewMode = -1;
 };
 
 namespace Util {

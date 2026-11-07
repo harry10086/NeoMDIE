@@ -278,7 +278,7 @@ const wchar_t* I18n::T(StringId id) const {
 
     case StringId::AboutDialogText:
         return zh ?
-            L"NeoMDIE v1.0\n"
+            L"NeoMDIE v1.0.2\n"
             L"新一代轻量现代化多标签资源管理器 (复刻经典 MDIE)\n\n"
             L"特性:\n"
             L" • 极低内存开销 (< 5MB) 与瞬时启动\n"
@@ -292,7 +292,7 @@ const wchar_t* I18n::T(StringId id) const {
             L" • 现代 JS 扩展脚本引擎 (F12 控制台)\n"
             L" • 完美支持 Win10 / Win11 深色模式与高分屏"
             :
-            L"NeoMDIE v1.0\n"
+            L"NeoMDIE v1.0.2\n"
             L"Next-Generation Lightweight Tabbed File Manager (MDIE Remake)\n\n"
             L"Features:\n"
             L" • Ultra-low memory (< 5MB) and instant startup\n"

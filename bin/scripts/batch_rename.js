@@ -1,7 +1,7 @@
 // ==NeoScript==
 // @name         批量重命名 (Batch Rename)
 // @description  为当前目录或当前选中的文件/文件夹批量添加前后缀、查找替换、自定义序号模板重命名
-// @hotkey       F4
+// @hotkey       F7
 // @toolbar      true
 // ==/NeoScript==
 
@@ -16,22 +16,49 @@
 var shell = new ActiveXObject("WScript.Shell");
 var fso = new ActiveXObject("Scripting.FileSystemObject");
 
-// 1. 获取当前脚本所在目录
-var scriptDir = "";
-try {
-    scriptDir = fso.GetParentFolderName(WScript.ScriptFullName);
-} catch(e) {
-    scriptDir = "";
+// 1. 获取当前脚本所在目录或主程序 scripts 目录
+var psFile = "";
+
+// 优先从环境变量获取由 NeoMDIE 传入的 scripts 目录
+var envScriptsDir = shell.Environment("PROCESS")("NEOMDIE_SCRIPTS_DIR");
+if (!envScriptsDir) {
+    envScriptsDir = shell.ExpandEnvironmentStrings("%NEOMDIE_SCRIPTS_DIR%");
+    if (envScriptsDir === "%NEOMDIE_SCRIPTS_DIR%") envScriptsDir = "";
+}
+if (envScriptsDir && fso.FileExists(envScriptsDir + "\\batch_rename.ps1")) {
+    psFile = envScriptsDir + "\\batch_rename.ps1";
 }
 
-// 2. 寻找 batch_rename.ps1
-var psFile = "";
-if (scriptDir && fso.FileExists(scriptDir + "\\batch_rename.ps1")) {
-    psFile = scriptDir + "\\batch_rename.ps1";
-} else {
+// 尝试从原始脚本路径环境变量获取
+if (!psFile) {
+    var origScript = shell.Environment("PROCESS")("NEOMDIE_SCRIPT_FILE");
+    if (!origScript) origScript = shell.ExpandEnvironmentStrings("%NEOMDIE_SCRIPT_FILE%");
+    if (origScript && origScript !== "%NEOMDIE_SCRIPT_FILE%") {
+        try {
+            var origDir = fso.GetParentFolderName(origScript);
+            if (origDir && fso.FileExists(origDir + "\\batch_rename.ps1")) {
+                psFile = origDir + "\\batch_rename.ps1";
+            }
+        } catch(e) {}
+    }
+}
+
+// 尝试从当前执行脚本路径获取
+if (!psFile) {
+    try {
+        var scriptDir = fso.GetParentFolderName(WScript.ScriptFullName);
+        if (scriptDir && fso.FileExists(scriptDir + "\\batch_rename.ps1")) {
+            psFile = scriptDir + "\\batch_rename.ps1";
+        }
+    } catch(e) {}
+}
+
+// 尝试常见相对路径
+if (!psFile) {
     var candidates = [
         "scripts\\batch_rename.ps1",
-        "bin\\scripts\\batch_rename.ps1"
+        "bin\\scripts\\batch_rename.ps1",
+        "..\\scripts\\batch_rename.ps1"
     ];
     for (var i = 0; i < candidates.length; i++) {
         if (fso.FileExists(candidates[i])) {

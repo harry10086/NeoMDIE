@@ -44,6 +44,7 @@ private:
     void AddTrayIcon();
     void RemoveTrayIcon();
     bool m_hasTrayIcon = false;
+    bool m_forceClose = false;
     bool m_wasMaximizedBeforeTray = false;
     HACCEL m_hAccel = nullptr;
 

@@ -808,18 +808,17 @@ void FileListView::SortItems() {
 void FileListView::SetViewMode(int mode) {
     m_viewMode = mode;
     DWORD style = GetWindowLongW(m_hwnd, GWL_STYLE) & ~LVS_TYPEMASK;
+    DWORD lvView = LV_VIEW_DETAILS;
     switch (mode) {
-    case 0: style |= LVS_REPORT; break;
-    case 1: style |= LVS_ICON; break;
-    case 2: style |= LVS_SMALLICON; break;
-    case 3: style |= LVS_LIST; break;
-    case 4: style |= LVS_ICON; break; // Tiles
-    default: style |= LVS_REPORT; break;
+    case 0: style |= LVS_REPORT; lvView = LV_VIEW_DETAILS; break;
+    case 1: style |= LVS_ICON; lvView = LV_VIEW_ICON; break;
+    case 2: style |= LVS_SMALLICON; lvView = LV_VIEW_SMALLICON; break;
+    case 3: style |= LVS_LIST; lvView = LV_VIEW_LIST; break;
+    case 4: style |= LVS_ICON; lvView = LV_VIEW_TILE; break; // Tiles
+    default: style |= LVS_REPORT; lvView = LV_VIEW_DETAILS; break;
     }
     SetWindowLongW(m_hwnd, GWL_STYLE, style);
-    if (mode == 4) {
-        SendMessageW(m_hwnd, LVM_SETVIEW, LV_VIEW_TILE, 0);
-    }
+    SendMessageW(m_hwnd, LVM_SETVIEW, lvView, 0);
     UpdateHeaderSortArrow();
     InvalidateRect(m_hwnd, nullptr, TRUE);
 }
@@ -908,6 +907,9 @@ PaneViewState FileListView::GetViewState() const {
     if (!m_hwnd) return state;
 
     state.selectedPaths = GetSelectedPaths();
+    state.sortCol = (int)m_sortCol;
+    state.sortAsc = m_sortAsc;
+    state.viewMode = m_viewMode;
 
     int focusedRow = ListView_GetNextItem(m_hwnd, -1, LVNI_FOCUSED);
     if (focusedRow >= 0 && focusedRow < (int)m_filteredIndices.size()) {
@@ -929,6 +931,14 @@ PaneViewState FileListView::GetViewState() const {
 
 void FileListView::RestoreViewState(const PaneViewState& state) {
     if (!m_hwnd) return;
+
+    // 0. Restore view mode & sort column first (before matching rows and scroll)
+    if (state.viewMode >= 0 && m_viewMode != state.viewMode) {
+        SetViewMode(state.viewMode);
+    }
+    if (state.sortCol >= 0 && ((int)m_sortCol != state.sortCol || m_sortAsc != state.sortAsc)) {
+        SetSort((SortColumn)state.sortCol, state.sortAsc);
+    }
 
     // 1. Clear previous selection & focus
     ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
@@ -999,13 +1009,27 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
 
 void FileListView::NotifyStatus() {
     if (onStatusUpdated) {
+        int selCount = (m_hwnd) ? (int)ListView_GetSelectedCount(m_hwnd) : 0;
         uint64_t totalSize = 0;
-        for (int idx : m_filteredIndices) {
-            if (idx >= 0 && idx < (int)m_allItems.size()) {
-                totalSize += m_allItems[idx].size;
+        if (selCount > 0) {
+            int item = -1;
+            while ((item = ListView_GetNextItem(m_hwnd, item, LVNI_SELECTED)) != -1) {
+                if (item >= 0 && item < (int)m_filteredIndices.size()) {
+                    int idx = m_filteredIndices[item];
+                    if (idx >= 0 && idx < (int)m_allItems.size()) {
+                        totalSize += m_allItems[idx].size;
+                    }
+                }
             }
+            onStatusUpdated(selCount, totalSize);
+        } else {
+            for (int idx : m_filteredIndices) {
+                if (idx >= 0 && idx < (int)m_allItems.size()) {
+                    totalSize += m_allItems[idx].size;
+                }
+            }
+            onStatusUpdated((int)m_filteredIndices.size(), totalSize);
         }
-        onStatusUpdated((int)m_filteredIndices.size(), totalSize);
     }
 }
 
@@ -1331,6 +1355,7 @@ void FileListView::OnFolderSizeReady(FolderSizeResult* pRes) {
             m_allItems[i].size = pRes->totalSize;
             m_allItems[i].isSizeCalculated = true;
             InvalidateRect(m_hwnd, nullptr, FALSE);
+            NotifyStatus();
             break;
         }
     }
@@ -1540,6 +1565,18 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         if (wParam == VK_F11) {
             HWND hTop = GetAncestor(hwnd, GA_ROOT);
             SendMessageW(hTop, WM_COMMAND, ID_WINDOW_MAXIMIZE, 0);
+            return 0;
+        }
+
+        if (wParam == VK_F7 && !ctrl && !shift && !alt) {
+            HWND hTop = GetAncestor(hwnd, GA_ROOT);
+            SendMessageW(hTop, msg, wParam, lParam);
+            return 0;
+        }
+
+        if ((wParam == 'E' || wParam == 'e') && ctrl && alt && !shift) {
+            HWND hTop = GetAncestor(hwnd, GA_ROOT);
+            SendMessageW(hTop, msg, wParam, lParam);
             return 0;
         }
 
@@ -1821,12 +1858,17 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
 
             case LVN_ITEMCHANGED: {
                 NMLISTVIEW* pnlv = (NMLISTVIEW*)lParam;
-                if ((pnlv->uChanged & LVIF_STATE) && (pnlv->uNewState & LVIS_SELECTED)) {
-                    if (pThis->onSelectionChanged) {
-                        int row = pnlv->iItem;
-                        if (row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
-                            int idx = pThis->m_filteredIndices[row];
-                            pThis->onSelectionChanged(pThis->m_allItems[idx].fullPath);
+                if (pnlv->uChanged & LVIF_STATE) {
+                    if ((pnlv->uNewState ^ pnlv->uOldState) & LVIS_SELECTED) {
+                        pThis->NotifyStatus();
+                    }
+                    if (pnlv->uNewState & LVIS_SELECTED) {
+                        if (pThis->onSelectionChanged) {
+                            int row = pnlv->iItem;
+                            if (row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
+                                int idx = pThis->m_filteredIndices[row];
+                                pThis->onSelectionChanged(pThis->m_allItems[idx].fullPath);
+                            }
                         }
                     }
                 }

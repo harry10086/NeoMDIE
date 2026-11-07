@@ -200,7 +200,10 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             RECT rcItem = { curX, Theme::Get().Scale(2, hwnd), curX + itemW, rc.bottom - Theme::Get().Scale(3, hwnd) };
             m_itemRects.push_back(rcItem);
 
-            if ((int)i == m_hoverIndex) {
+            if (m_dragging && (int)i == m_dragIndex) {
+                HBRUSH hbrDrag = Theme::Get().BrushSelected();
+                FillRect(hdc, &rcItem, hbrDrag);
+            } else if ((int)i == m_hoverIndex) {
                 HBRUSH hbrHover = Theme::Get().BrushHover();
                 FillRect(hdc, &rcItem, hbrHover);
             }
@@ -217,9 +220,57 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
     }
 
+    case WM_LBUTTONDOWN: {
+        int x = GET_X_LPARAM(lParam);
+        int y = GET_Y_LPARAM(lParam);
+        POINT pt = { x, y };
+        for (size_t i = 0; i < m_itemRects.size(); ++i) {
+            if (PtInRect(&m_itemRects[i], pt)) {
+                m_dragPotential = true;
+                m_dragging = false;
+                m_dragIndex = (int)i;
+                m_dragStart = pt;
+                SetCapture(hwnd);
+                return 0;
+            }
+        }
+        break;
+    }
+
     case WM_MOUSEMOVE: {
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
+
+        POINT pt = { x, y };
+
+        if (m_dragPotential && (wParam & MK_LBUTTON)) {
+            int dx = abs(x - m_dragStart.x);
+            int dy = abs(y - m_dragStart.y);
+            if (dx > 4 || dy > 4) {
+                m_dragging = true;
+                m_dragPotential = false;
+            }
+        }
+
+        if (m_dragging && (wParam & MK_LBUTTON)) {
+            int targetIndex = -1;
+            for (size_t i = 0; i < m_itemRects.size(); ++i) {
+                if (PtInRect(&m_itemRects[i], pt)) {
+                    targetIndex = (int)i;
+                    break;
+                }
+            }
+
+            if (targetIndex != -1 && targetIndex != m_dragIndex &&
+                targetIndex < (int)m_links.size() && m_dragIndex < (int)m_links.size()) {
+                std::swap(m_links[m_dragIndex], m_links[targetIndex]);
+                m_dragIndex = targetIndex;
+                m_hoverIndex = targetIndex;
+                SaveLinks();
+                InvalidateRect(hwnd, nullptr, TRUE);
+            }
+            return 0;
+        }
 
         int newHover = -1;
         for (size_t i = 0; i < m_itemRects.size(); ++i) {
@@ -241,15 +292,41 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_MOUSELEAVE: {
-        m_hoverIndex = -1;
-        UpdateTooltip(-1);
-        InvalidateRect(hwnd, nullptr, FALSE);
+        if (!m_dragging) {
+            m_hoverIndex = -1;
+            UpdateTooltip(-1);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
         return 0;
     }
+
+    case WM_CAPTURECHANGED: {
+        m_dragging = false;
+        m_dragPotential = false;
+        m_dragIndex = -1;
+        InvalidateRect(hwnd, nullptr, TRUE);
+        return 0;
+    }
+
 
     case WM_LBUTTONUP: {
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
+        POINT pt = { x, y };
+
+        bool wasDragging = m_dragging;
+        if (GetCapture() == hwnd) {
+            ReleaseCapture();
+        }
+        m_dragging = false;
+        m_dragPotential = false;
+
+        if (wasDragging) {
+            m_dragIndex = -1;
+            InvalidateRect(hwnd, nullptr, TRUE);
+            return 0;
+        }
+        m_dragIndex = -1;
 
         for (size_t i = 0; i < m_itemRects.size(); ++i) {
             if (PtInRect(&m_itemRects[i], { x, y })) {

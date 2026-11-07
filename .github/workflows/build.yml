@@ -40,7 +40,7 @@ jobs:
           $ver = if ($env:GITHUB_REF -like "refs/tags/*") {
               $env:GITHUB_REF -replace "refs/tags/", ""
           } else {
-              "v1.0.1"
+              "v1.0.2"
           }
           $pkgName = "NeoMDIE-$ver-windows-x64"
           $pkgDir = "release_pkg\$pkgName"

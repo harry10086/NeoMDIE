@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Windows.Forms
+﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -27,6 +27,11 @@ $form.Text = "批量文件重命名 (Batch Rename) - NeoMDIE"
 $form.Size = New-Object System.Drawing.Size(920, 680)
 $form.MinimumSize = New-Object System.Drawing.Size(800, 560)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+$form.TopMost = $true
+$form.Add_Shown({
+    $form.TopMost = $false
+    $form.Activate()
+})
 $form.Font = New-Object System.Drawing.Font("Microsoft YaHei UI", 9)
 $form.BackColor = [System.Drawing.Color]::FromArgb(248, 249, 250)
 $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi

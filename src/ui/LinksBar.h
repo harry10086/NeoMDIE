@@ -39,5 +39,9 @@ private:
     std::vector<LinkItem> m_links;
     std::vector<RECT> m_itemRects;
     int m_hoverIndex = -1;
+    bool m_dragging = false;
+    bool m_dragPotential = false;
+    int m_dragIndex = -1;
+    POINT m_dragStart = { 0, 0 };
     COLORREF m_customColors[16] = { 0 };
 };

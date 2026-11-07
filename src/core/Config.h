@@ -126,6 +126,7 @@ public:
         int layout = 0;
         int activePaneIndex = 0;
         std::vector<std::wstring> panePaths;
+        std::vector<PaneViewState> paneViewStates;
     };
     std::vector<SessionTabInfo> sessionTabsInfo;
     std::vector<std::wstring> sessionTabs;

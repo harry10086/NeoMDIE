@@ -117,9 +117,7 @@ if (!selectedFiles) {
     if (selectedFiles === "%NEOMDIE_SELECTED_FILES%") selectedFiles = "";
 }
 
-if (!selectedFiles || selectedFiles.length === 0) {
-    WScript.Echo("【提示】未选择任何文件。\r\n\r\n请在当前文件列表中选中一个或多个文件/文件夹后再运行此脚本。");
-} else {
+if (selectedFiles && selectedFiles.length > 0) {
     var files = selectedFiles.split("|");
     var names = [];
     for (var i = 0; i < files.length; i++) {
@@ -138,9 +136,7 @@ if (!selectedFiles || selectedFiles.length === 0) {
         }
     }
 
-    if (names.length === 0) {
-        WScript.Echo("【提示】未能检测到选中的有效文件名。");
-    } else {
+    if (names.length > 0) {
         var output = names.join("\r\n");
 
         var copied = false;
@@ -169,9 +165,6 @@ if (!selectedFiles || selectedFiles.length === 0) {
                 copied = true;
             } catch (e2) {}
         }
-
-        var preview = names.length > 6 ? (names.slice(0, 6).join("\r\n") + "\r\n... (共 " + names.length + " 项)") : output;
-        WScript.Echo("【复制成功】已将 " + names.length + " 个文件名复制到系统剪贴板！\r\n\r\n预览内容:\r\n" + preview);
     }
 }
 

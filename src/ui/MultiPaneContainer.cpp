@@ -129,33 +129,51 @@ void MultiPaneContainer::CycleActivePane() {
 
 void MultiPaneContainer::ClosePane(int index) {
   int count = GetPaneCount();
-  if (count <= 1) {
+  if (count <= 1 || index < 0 || index >= count) {
     return;
   }
 
   m_maximizedPane = -1;
 
+  int nextActive = m_activePane;
+  if (index == m_activePane) {
+    if (nextActive >= count - 1) {
+      nextActive = count - 2;
+    }
+  } else if (index < m_activePane) {
+    nextActive--;
+  }
+
   if (m_layout == PaneLayout::Quad) {
     // 4 -> 3
     for (int i = index; i < 3; ++i) {
-      m_panes[i].NavigateTo(m_panes[i + 1].GetCurrentPath());
+      m_panes[i].NavigateTo(m_panes[i + 1].GetCurrentPath(), false);
+      m_panes[i].SetHistory(m_panes[i + 1].GetHistory(), m_panes[i + 1].GetHistoryIndex());
+      m_panes[i].RestoreViewState(m_panes[i + 1].GetViewState());
     }
     SetLayout(PaneLayout::ThreeLeft);
   } else if (m_layout == PaneLayout::ThreeLeft) {
     // 3 -> 2
     for (int i = index; i < 2; ++i) {
-      m_panes[i].NavigateTo(m_panes[i + 1].GetCurrentPath());
+      m_panes[i].NavigateTo(m_panes[i + 1].GetCurrentPath(), false);
+      m_panes[i].SetHistory(m_panes[i + 1].GetHistory(), m_panes[i + 1].GetHistoryIndex());
+      m_panes[i].RestoreViewState(m_panes[i + 1].GetViewState());
     }
     SetLayout(PaneLayout::DualVertical);
   } else if (m_layout == PaneLayout::DualVertical ||
              m_layout == PaneLayout::DualHorizontal) {
     // 2 -> 1
     if (index == 0) {
-      m_panes[0].NavigateTo(m_panes[1].GetCurrentPath());
+      m_panes[0].NavigateTo(m_panes[1].GetCurrentPath(), false);
+      m_panes[0].SetHistory(m_panes[1].GetHistory(), m_panes[1].GetHistoryIndex());
+      m_panes[0].RestoreViewState(m_panes[1].GetViewState());
     }
     SetLayout(PaneLayout::Single);
-    SetActivePane(0);
   }
+
+  nextActive = std::clamp(nextActive, 0, GetPaneCount() - 1);
+  SetActivePane(nextActive, true);
+  SetFocus(m_panes[nextActive].GetHwnd());
 }
 
 void MultiPaneContainer::MinimizePane(int index) {
