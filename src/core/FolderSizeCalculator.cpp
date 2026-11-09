@@ -65,7 +65,6 @@ uint64_t FolderSizeCalculator::CalculateRecursive(const std::wstring& path, std:
 
     for (const auto& sub : subdirs) {
         if (cancelToken || !m_running) {
-            FindClose(hFind);
             return 0;
         }
         total += CalculateRecursive(sub, cancelToken);

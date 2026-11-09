@@ -64,6 +64,7 @@ struct PaneViewState {
     int sortCol = 0;
     bool sortAsc = true;
     int viewMode = -1;
+    int foldersFirst = -1; // -1: use default, 0: files first, 1: folders first
 };
 
 namespace Util {

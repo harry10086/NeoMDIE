@@ -96,40 +96,19 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
 
     BuildMenu();
     RebuildAccelerators();
+    AddClipboardFormatListener(m_hwnd);
     if (ShellUtils::IsExplorerReplaced()) {
         RegisterHotKey(m_hwnd, 9001, MOD_WIN, 'E');
     }
 
-    // Pre-warm Windows Shell COM & ShellNew registry scan in background thread to eliminate cold start right-click lag
-    std::thread([]() {
-        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-        ShellUtils::GetShellNewItems();
-        IShellFolder* pDesktop = nullptr;
-        if (SUCCEEDED(SHGetDesktopFolder(&pDesktop)) && pDesktop) {
-            PIDLIST_ABSOLUTE pidl = nullptr;
-            wchar_t tempPath[MAX_PATH];
-            GetTempPathW(MAX_PATH, tempPath);
-            if (SUCCEEDED(SHParseDisplayName(tempPath, nullptr, &pidl, 0, nullptr)) && pidl) {
-                PCUITEMID_CHILD pidlChild = nullptr;
-                IShellFolder* pParent = nullptr;
-                if (SUCCEEDED(SHBindToParent(pidl, IID_IShellFolder, (void**)&pParent, &pidlChild)) && pParent) {
-                    IContextMenu* pcm = nullptr;
-                    if (SUCCEEDED(pParent->GetUIObjectOf(nullptr, 1, &pidlChild, IID_IContextMenu, nullptr, (void**)&pcm)) && pcm) {
-                        HMENU hDummy = CreatePopupMenu();
-                        pcm->QueryContextMenu(hDummy, 0, 1, 0x1000, CMF_EXPLORE);
-                        DestroyMenu(hDummy);
-                        pcm->Release();
-                    }
-                    pParent->Release();
-                }
-                ILFree(pidl);
-            }
-            pDesktop->Release();
-        }
-        CoUninitialize();
-    }).detach();
+// Shell COM initialized cleanly on main UI thread
 
     std::wstring cmdPath = initialPath;
+    if (cmdPath.find(L"645FF040-5081-101B-9F08-00AA002F954E") != std::wstring::npos ||
+        cmdPath.find(L"RecycleBinFolder") != std::wstring::npos) {
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", L"::{645FF040-5081-101B-9F08-00AA002F954E}", nullptr, SW_SHOWNORMAL);
+        cmdPath.clear();
+    }
     if (cmdPath.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
         cmdPath = L"This PC";
     }
@@ -145,10 +124,6 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
 
     if (!cmdPath.empty()) {
         m_tabBar.AddTab(cmdPath, true);
-        FileListView* activePane = m_multiPane.GetActivePane();
-        if (activePane) {
-            activePane->NavigateTo(cmdPath, false);
-        }
     } else {
         if (cfg.restoreTabsOnStartup && !cfg.sessionTabsInfo.empty()) {
             for (size_t i = 0; i < cfg.sessionTabsInfo.size(); ++i) {
@@ -431,6 +406,14 @@ void MainWindow::BuildMenu() {
                 ID_VIEW_SORT_ASC, isZh ? L"递增排序(&A)" : L"Ascending(&A)");
     AppendMenuW(hSortSubmenu, MF_STRING | (!isAsc ? MF_CHECKED : MF_UNCHECKED),
                 ID_VIEW_SORT_DESC, isZh ? L"递减排序(&D)" : L"Descending(&D)");
+    AppendMenuW(hSortSubmenu, MF_SEPARATOR, 0, nullptr);
+    bool foldersFirst = activeView ? activeView->IsFoldersFirst() : Config::Get().foldersFirst;
+    AppendMenuW(hSortSubmenu, MF_STRING | (foldersFirst ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_SORT_FOLDERS_FIRST, isZh ? L"文件夹在前(&F)" : L"Folders First(&F)");
+    AppendMenuW(hSortSubmenu, MF_STRING | (!foldersFirst ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_SORT_FILES_FIRST, isZh ? L"文件在前(&L)" : L"Files First(&L)");
+    CheckMenuRadioItem(hSortSubmenu, ID_VIEW_SORT_FOLDERS_FIRST, ID_VIEW_SORT_FILES_FIRST,
+                       foldersFirst ? ID_VIEW_SORT_FOLDERS_FIRST : ID_VIEW_SORT_FILES_FIRST, MF_BYCOMMAND);
     AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hSortSubmenu, isZh ? L"排列图标(&I)" : L"Sort By(&I)");
 
     AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
@@ -652,6 +635,7 @@ void MainWindow::CreateControls() {
 
     // 6. Multi-Pane Container in Center
     m_multiPane.Create(m_hwnd, 104);
+    m_splitOverlay.Create(m_hwnd);
 
     // 7. Preview Pane on Right
     m_preview.Create(m_hwnd, 105);
@@ -766,7 +750,8 @@ void MainWindow::CreateControls() {
         m_breadcrumb.SetPath(activePath);
         m_filterBar.SetText(activeView ? activeView->GetFilterQuery() : L"");
         if (m_treeVisible && Config::Get().autoExpandTree) {
-            m_tree.SelectPath(activePath);
+            m_pendingTreePath = activePath;
+            PostMessageW(m_hwnd, WM_SYNC_TREE_SELECTION, 0, 0);
         }
         UpdateNavButtons();
         AddToHistory(activePath);
@@ -788,6 +773,7 @@ void MainWindow::CreateControls() {
         }
 
         m_isSwitchingTab = false;
+        BuildMenu();
 
         SetFocus(m_multiPane.GetPane(safeActivePane).GetHwnd());
         if (m_previewVisible && activeView) {
@@ -824,6 +810,22 @@ void MainWindow::CreateControls() {
 
     m_tabBar.onOpenTerminalRequested = [this](const std::wstring& path) {
         ShellUtils::LaunchTerminal(path);
+    };
+
+    m_tabBar.onTabDragMove = [this](int dragIndex, int hostTabIndex, POINT ptScreen) {
+        HandleTabDragMove(dragIndex, hostTabIndex, ptScreen);
+    };
+
+    m_tabBar.onTabDragEnd = [this](int dragIndex, int hostTabIndex, POINT ptScreen) {
+        HandleTabDragEnd(dragIndex, hostTabIndex, ptScreen);
+    };
+
+    m_multiPane.onPaneDragMove = [this](int paneIdx, POINT ptScreen) {
+        HandlePaneDragMove(paneIdx, ptScreen);
+    };
+
+    m_multiPane.onPaneDragEnd = [this](int paneIdx, POINT ptScreen) {
+        HandlePaneDragEnd(paneIdx, ptScreen);
     };
 
     // Window Action: Breadcrumb / Address Bar
@@ -935,6 +937,7 @@ void MainWindow::CreateControls() {
         case GestureAction::ToggleHidden: OnCommand(ID_VIEW_SHOW_HIDDEN); break;
         case GestureAction::OpenSettings: OnCommand(ID_TOOLS_SETTINGS); break;
         case GestureAction::InvertSelection: OnCommand(ID_EDIT_INVERT_SELECTION); break;
+        case GestureAction::Undo:            OnCommand(ID_EDIT_UNDO); break;
         default: {
             int intAct = static_cast<int>(act);
             if (intAct >= ID_SCRIPT_COMMAND_START && intAct <= ID_SCRIPT_COMMAND_END) {
@@ -972,6 +975,8 @@ void MainWindow::CreateControls() {
             m_linksBar.AddLink(L"", path);
         } else if (cmd == CMD_NEOMDIE_SETTINGS) {
             OnCommand(ID_TOOLS_SETTINGS);
+        } else if (cmd == CMD_NEOMDIE_OPEN_EXPLORER) {
+            ShellUtils::OpenInExplorer(path);
         }
     };
 
@@ -996,7 +1001,8 @@ void MainWindow::CreateControls() {
                 m_tabBar.SetTabPath(m_tabBar.GetActiveIndex(), p);
                 m_breadcrumb.SetPath(p);
                 if (m_treeVisible && Config::Get().autoExpandTree) {
-                    m_tree.SelectPath(p);
+                    m_pendingTreePath = p;
+                    PostMessageW(m_hwnd, WM_SYNC_TREE_SELECTION, 0, 0);
                 }
                 UpdateNavButtons();
                 AddToHistory(p);
@@ -1055,7 +1061,8 @@ void MainWindow::CreateControls() {
 
         m_breadcrumb.SetPath(p);
         if (m_treeVisible && Config::Get().autoExpandTree) {
-            m_tree.SelectPath(p);
+            m_pendingTreePath = p;
+            PostMessageW(m_hwnd, WM_SYNC_TREE_SELECTION, 0, 0);
         }
         m_tabBar.SetTabPath(m_tabBar.GetActiveIndex(), p);
         UpdateNavButtons();
@@ -1413,6 +1420,623 @@ void MainWindow::ShowLayoutMenu(POINT ptScreen) {
     }
 }
 
+void MainWindow::HandleTabDragMove(int dragIndex, int hostTabIndex, POINT ptScreen) {
+    if (dragIndex < 0 || dragIndex >= m_tabBar.GetTabCount()) {
+        m_splitOverlay.Hide();
+        return;
+    }
+
+    HWND hMulti = m_multiPane.GetHwnd();
+    if (!hMulti || !IsWindow(hMulti)) {
+        m_splitOverlay.Hide();
+        return;
+    }
+
+    RECT rcPane;
+    GetWindowRect(hMulti, &rcPane);
+    if (!PtInRect(&rcPane, ptScreen)) {
+        m_splitOverlay.Hide();
+        return;
+    }
+
+    SplitDropAction action = CalculateDropAction(dragIndex, hostTabIndex, ptScreen);
+    if (action.type != SplitDropAction::None) {
+        m_splitOverlay.Show(action.overlayRect, action.overlayText);
+    } else {
+        m_splitOverlay.Hide();
+    }
+}
+
+MainWindow::SplitDropAction MainWindow::CalculateDropAction(int dragIndex, int hostTabIndex, POINT ptScreen) {
+    SplitDropAction act;
+    act.type = SplitDropAction::None;
+
+    HWND hMulti = m_multiPane.GetHwnd();
+    if (!hMulti) return act;
+
+    RECT rc;
+    GetWindowRect(hMulti, &rc);
+    int totalW = rc.right - rc.left;
+    int totalH = rc.bottom - rc.top;
+    if (totalW <= 50 || totalH <= 50) return act;
+
+    int rx = ptScreen.x - rc.left;
+    int ry = ptScreen.y - rc.top;
+
+    PaneLayout curLayout = m_multiPane.GetLayout();
+    bool isZh = I18n::Get().IsChinese();
+
+    std::wstring dragTitle = (dragIndex >= 0 && dragIndex < m_tabBar.GetTabCount())
+        ? m_tabBar.GetTabItem(dragIndex).title : L"";
+    std::wstring hostTitle = (hostTabIndex >= 0 && hostTabIndex < m_tabBar.GetTabCount())
+        ? m_tabBar.GetTabItem(hostTabIndex).title : L"";
+    if (dragTitle.empty()) dragTitle = isZh ? L"标签页" : L"Tab";
+    if (hostTitle.empty()) hostTitle = isZh ? L"当前标签页" : L"Current Tab";
+
+    auto fmtMerge = [&](const std::wstring& posZh, const std::wstring& posEn) -> std::wstring {
+        if (isZh) {
+            return L"将【" + dragTitle + L"】合并到【" + hostTitle + L"】(" + posZh + L")";
+        } else {
+            return L"Merge [" + dragTitle + L"] into [" + hostTitle + L"] (" + posEn + L")";
+        }
+    };
+
+    if (curLayout == PaneLayout::Single) {
+        if (rx > totalW * 0.5) {
+            if (ry > totalH * 0.75) {
+                act.type = SplitDropAction::SplitDualHorizontalBottom;
+                act.overlayRect = { rc.left, rc.top + totalH / 2, rc.right, rc.bottom };
+                act.overlayText = fmtMerge(L"下方双栏", L"Bottom Dual");
+            } else {
+                act.type = SplitDropAction::SplitDualVerticalRight;
+                act.overlayRect = { rc.left + totalW / 2, rc.top, rc.right, rc.bottom };
+                act.overlayText = fmtMerge(L"右侧双栏", L"Right Dual");
+            }
+        } else {
+            if (ry > totalH * 0.75) {
+                act.type = SplitDropAction::SplitDualHorizontalBottom;
+                act.overlayRect = { rc.left, rc.top + totalH / 2, rc.right, rc.bottom };
+                act.overlayText = fmtMerge(L"下方双栏", L"Bottom Dual");
+            } else if (ry < totalH * 0.25) {
+                act.type = SplitDropAction::SplitDualHorizontalTop;
+                act.overlayRect = { rc.left, rc.top, rc.right, rc.top + totalH / 2 };
+                act.overlayText = fmtMerge(L"上方双栏", L"Top Dual");
+            } else {
+                act.type = SplitDropAction::SplitDualVerticalLeft;
+                act.overlayRect = { rc.left, rc.top, rc.left + totalW / 2, rc.bottom };
+                act.overlayText = fmtMerge(L"左侧双栏", L"Left Dual");
+            }
+        }
+    } else if (curLayout == PaneLayout::DualVertical) {
+        int midX = rc.left + totalW / 2;
+        if (ptScreen.x >= midX) {
+            if (ry > totalH * 0.5) {
+                act.type = SplitDropAction::SplitThreeRightBottom;
+                act.overlayRect = { midX, rc.top + totalH / 2, rc.right, rc.bottom };
+                act.overlayText = fmtMerge(L"三分栏右下", L"3-Pane Bottom-Right");
+            } else {
+                act.type = SplitDropAction::SplitThreeRightTop;
+                act.overlayRect = { midX, rc.top, rc.right, rc.top + totalH / 2 };
+                act.overlayText = fmtMerge(L"三分栏右上", L"3-Pane Top-Right");
+            }
+        } else {
+            if (ry > totalH * 0.5) {
+                act.type = SplitDropAction::SplitQuadBottomLeft;
+                act.overlayRect = { rc.left, rc.top + totalH / 2, midX, rc.bottom };
+                act.overlayText = fmtMerge(L"四分栏左下", L"4-Pane Bottom-Left");
+            } else {
+                act.type = SplitDropAction::MergeIntoPane;
+                act.targetPaneIndex = 0;
+                act.overlayRect = { rc.left, rc.top, midX, rc.bottom };
+                act.overlayText = fmtMerge(L"覆盖左侧分栏", L"Cover Left Pane");
+            }
+        }
+    } else if (curLayout == PaneLayout::DualHorizontal) {
+        int midY = rc.top + totalH / 2;
+        if (rx > totalW * 0.5) {
+            act.type = SplitDropAction::SplitQuad;
+            act.overlayRect = { rc.left + totalW / 2, rc.top, rc.right, rc.bottom };
+            act.overlayText = fmtMerge(L"四分栏网格", L"4-Pane Grid");
+        } else {
+            if (ptScreen.y < midY) {
+                act.type = SplitDropAction::MergeIntoPane;
+                act.targetPaneIndex = 0;
+                act.overlayRect = { rc.left, rc.top, rc.left + totalW / 2, midY };
+                act.overlayText = fmtMerge(L"覆盖上方分栏", L"Cover Top Pane");
+            } else {
+                act.type = SplitDropAction::MergeIntoPane;
+                act.targetPaneIndex = 1;
+                act.overlayRect = { rc.left, midY, rc.left + totalW / 2, rc.bottom };
+                act.overlayText = fmtMerge(L"覆盖下方分栏", L"Cover Bottom Pane");
+            }
+        }
+    } else if (curLayout == PaneLayout::ThreeLeft) {
+        int midX = rc.left + totalW / 2;
+        if (ptScreen.x < midX) {
+            act.type = SplitDropAction::SplitQuadBottomLeft;
+            act.overlayRect = { rc.left, rc.top + totalH / 2, midX, rc.bottom };
+            act.overlayText = fmtMerge(L"扩展四分栏(左下)", L"Expand 4-Pane Bottom-Left");
+        } else {
+            int midY = rc.top + totalH / 2;
+            if (ptScreen.y < midY) {
+                act.type = SplitDropAction::MergeIntoPane;
+                act.targetPaneIndex = 1;
+                act.overlayRect = { midX, rc.top, rc.right, midY };
+                act.overlayText = fmtMerge(L"覆盖右上分栏", L"Cover Top-Right Pane");
+            } else {
+                act.type = SplitDropAction::MergeIntoPane;
+                act.targetPaneIndex = 2;
+                act.overlayRect = { midX, midY, rc.right, rc.bottom };
+                act.overlayText = fmtMerge(L"覆盖右下分栏", L"Cover Bottom-Right Pane");
+            }
+        }
+    } else if (curLayout == PaneLayout::Quad) {
+        int midX = rc.left + totalW / 2;
+        int midY = rc.top + totalH / 2;
+        if (ptScreen.x < midX && ptScreen.y < midY) {
+            act.type = SplitDropAction::MergeIntoPane;
+            act.targetPaneIndex = 0;
+            act.overlayRect = { rc.left, rc.top, midX, midY };
+            act.overlayText = fmtMerge(L"覆盖左上分栏", L"Cover Top-Left Pane");
+        } else if (ptScreen.x >= midX && ptScreen.y < midY) {
+            act.type = SplitDropAction::MergeIntoPane;
+            act.targetPaneIndex = 1;
+            act.overlayRect = { midX, rc.top, rc.right, midY };
+            act.overlayText = fmtMerge(L"覆盖右上分栏", L"Cover Top-Right Pane");
+        } else if (ptScreen.x < midX && ptScreen.y >= midY) {
+            act.type = SplitDropAction::MergeIntoPane;
+            act.targetPaneIndex = 2;
+            act.overlayRect = { rc.left, midY, midX, rc.bottom };
+            act.overlayText = fmtMerge(L"覆盖左下分栏", L"Cover Bottom-Left Pane");
+        } else {
+            act.type = SplitDropAction::MergeIntoPane;
+            act.targetPaneIndex = 3;
+            act.overlayRect = { midX, midY, rc.right, rc.bottom };
+            act.overlayText = fmtMerge(L"覆盖右下分栏", L"Cover Bottom-Right Pane");
+        }
+    }
+
+    return act;
+}
+
+void MainWindow::HandleTabDragEnd(int dragIndex, int hostTabIndex, POINT ptScreen) {
+    m_splitOverlay.Hide();
+
+    if (dragIndex < 0 || dragIndex >= m_tabBar.GetTabCount()) return;
+
+    SplitDropAction action = CalculateDropAction(dragIndex, hostTabIndex, ptScreen);
+    if (action.type == SplitDropAction::None) return;
+
+    std::wstring draggedPath = m_tabBar.GetTabPath(dragIndex);
+    if (draggedPath.empty()) draggedPath = L"This PC";
+
+    bool shouldCloseDragged = (m_tabBar.GetTabCount() > 1);
+
+    // If hostTab is different and valid, make sure hostTab is activated
+    if (hostTabIndex >= 0 && hostTabIndex < m_tabBar.GetTabCount() && hostTabIndex != dragIndex) {
+        m_tabBar.SetActiveTab(hostTabIndex, true);
+    } else if (shouldCloseDragged && m_tabBar.GetActiveIndex() == dragIndex) {
+        int prev = m_tabBar.GetPrevActiveIndex();
+        int newHost = (prev >= 0 && prev < m_tabBar.GetTabCount() && prev != dragIndex)
+            ? prev
+            : ((dragIndex > 0) ? (dragIndex - 1) : 1);
+        m_tabBar.SetActiveTab(newHost, true);
+    }
+
+    std::wstring p0 = m_multiPane.GetPane(0).GetCurrentPath();
+    std::wstring p1 = m_multiPane.GetPane(1).GetCurrentPath();
+    std::wstring p2 = m_multiPane.GetPane(2).GetCurrentPath();
+    std::wstring p3 = m_multiPane.GetPane(3).GetCurrentPath();
+
+    if (p0.empty()) p0 = draggedPath;
+    if (p1.empty()) p1 = draggedPath;
+    if (p2.empty()) p2 = draggedPath;
+    if (p3.empty()) p3 = draggedPath;
+
+    switch (action.type) {
+    case SplitDropAction::SplitDualVerticalRight:
+        SetLayout(PaneLayout::DualVertical);
+        m_multiPane.GetPane(0).NavigateTo(p0, false);
+        m_multiPane.GetPane(1).NavigateTo(draggedPath, false);
+        m_multiPane.SetActivePane(1);
+        break;
+
+    case SplitDropAction::SplitDualVerticalLeft:
+        SetLayout(PaneLayout::DualVertical);
+        m_multiPane.GetPane(0).NavigateTo(draggedPath, false);
+        m_multiPane.GetPane(1).NavigateTo(p0, false);
+        m_multiPane.SetActivePane(0);
+        break;
+
+    case SplitDropAction::SplitDualHorizontalBottom:
+        SetLayout(PaneLayout::DualHorizontal);
+        m_multiPane.GetPane(0).NavigateTo(p0, false);
+        m_multiPane.GetPane(1).NavigateTo(draggedPath, false);
+        m_multiPane.SetActivePane(1);
+        break;
+
+    case SplitDropAction::SplitDualHorizontalTop:
+        SetLayout(PaneLayout::DualHorizontal);
+        m_multiPane.GetPane(0).NavigateTo(draggedPath, false);
+        m_multiPane.GetPane(1).NavigateTo(p0, false);
+        m_multiPane.SetActivePane(0);
+        break;
+
+    case SplitDropAction::SplitThreeRightBottom:
+        SetLayout(PaneLayout::ThreeLeft);
+        m_multiPane.GetPane(0).NavigateTo(p0, false);
+        m_multiPane.GetPane(1).NavigateTo(p1, false);
+        m_multiPane.GetPane(2).NavigateTo(draggedPath, false);
+        m_multiPane.SetActivePane(2);
+        break;
+
+    case SplitDropAction::SplitThreeRightTop:
+        SetLayout(PaneLayout::ThreeLeft);
+        m_multiPane.GetPane(0).NavigateTo(p0, false);
+        m_multiPane.GetPane(1).NavigateTo(draggedPath, false);
+        m_multiPane.GetPane(2).NavigateTo(p1, false);
+        m_multiPane.SetActivePane(1);
+        break;
+
+    case SplitDropAction::SplitQuadBottomLeft:
+        SetLayout(PaneLayout::Quad);
+        m_multiPane.GetPane(0).NavigateTo(p0, false);
+        m_multiPane.GetPane(1).NavigateTo(p1, false);
+        m_multiPane.GetPane(2).NavigateTo(draggedPath, false);
+        m_multiPane.GetPane(3).NavigateTo(!p2.empty() ? p2 : p1, false);
+        m_multiPane.SetActivePane(2);
+        break;
+
+    case SplitDropAction::SplitQuad:
+        SetLayout(PaneLayout::Quad);
+        m_multiPane.GetPane(0).NavigateTo(p0, false);
+        m_multiPane.GetPane(1).NavigateTo(draggedPath, false);
+        m_multiPane.GetPane(2).NavigateTo(p1, false);
+        m_multiPane.GetPane(3).NavigateTo(draggedPath, false);
+        m_multiPane.SetActivePane(1);
+        break;
+
+    case SplitDropAction::MergeIntoPane:
+        m_multiPane.GetPane(action.targetPaneIndex).NavigateTo(draggedPath, false);
+        m_multiPane.SetActivePane(action.targetPaneIndex);
+        break;
+
+    default:
+        break;
+    }
+
+    if (shouldCloseDragged) {
+        m_tabBar.CloseTab(dragIndex);
+    }
+
+    int curTab = m_tabBar.GetActiveIndex();
+    if (curTab >= 0 && curTab < m_tabBar.GetTabCount()) {
+        auto& tab = m_tabBar.GetTabItemRef(curTab);
+        tab.layout = (int)m_multiPane.GetLayout();
+        tab.activePaneIndex = m_multiPane.GetActiveIndex();
+        int pCount = m_multiPane.GetPaneCount();
+        tab.panePaths.resize(pCount);
+        for (int p = 0; p < pCount; ++p) {
+            tab.panePaths[p] = m_multiPane.GetPane(p).GetCurrentPath();
+        }
+    }
+    LayoutAll();
+    BuildMenu();
+}
+
+MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POINT ptScreen) {
+    PaneDragAction act;
+    act.type = PaneDragActionType::None;
+
+    if (paneIdx < 0 || paneIdx >= m_multiPane.GetPaneCount()) return act;
+
+    HWND hTabBar = m_tabBar.GetHwnd();
+    HWND hMulti = m_multiPane.GetHwnd();
+    if (!hTabBar || !hMulti) return act;
+
+    RECT rcTab;
+    GetWindowRect(hTabBar, &rcTab);
+    RECT rcMulti;
+    GetWindowRect(hMulti, &rcMulti);
+
+    bool isZh = I18n::Get().IsChinese();
+    std::wstring curPanePath = m_multiPane.GetPane(paneIdx).GetCurrentPath();
+    std::wstring curPaneTitle = ShellUtils::GetDisplayName(curPanePath);
+    if (curPaneTitle.empty()) curPaneTitle = curPanePath;
+
+    // 1. Check if dragging UP towards TabBar to detach as tab
+    if (ptScreen.y <= rcTab.bottom + 20) {
+        act.type = PaneDragActionType::DetachToTab;
+        act.overlayRect = rcTab;
+        act.overlayText = isZh ? (L"还原为独立标签页: 【" + curPaneTitle + L"】")
+                               : (L"Detach as Tab: [" + curPaneTitle + L"]");
+        return act;
+    }
+
+    // 2. Check if dragging inside MultiPaneContainer
+    if (!PtInRect(&rcMulti, ptScreen)) {
+        return act;
+    }
+
+    int totalW = rcMulti.right - rcMulti.left;
+    int totalH = rcMulti.bottom - rcMulti.top;
+    if (totalW <= 50 || totalH <= 50) return act;
+
+    int rx = ptScreen.x - rcMulti.left;
+    int ry = ptScreen.y - rcMulti.top;
+    PaneLayout curLayout = m_multiPane.GetLayout();
+
+    if (curLayout == PaneLayout::DualVertical) {
+        int midX = rcMulti.left + totalW / 2;
+        RECT rcLeft = { rcMulti.left, rcMulti.top, midX, rcMulti.bottom };
+        RECT rcRight = { midX, rcMulti.top, rcMulti.right, rcMulti.bottom };
+
+        std::wstring title0 = ShellUtils::GetDisplayName(m_multiPane.GetPane(0).GetCurrentPath());
+        std::wstring title1 = ShellUtils::GetDisplayName(m_multiPane.GetPane(1).GetCurrentPath());
+        if (title0.empty()) title0 = isZh ? L"左侧分栏" : L"Left Pane";
+        if (title1.empty()) title1 = isZh ? L"右侧分栏" : L"Right Pane";
+
+        if (paneIdx == 0) {
+            // Dragging left pane
+            if (ptScreen.x >= midX) {
+                if (ry > totalH * 0.75) {
+                    act.type = PaneDragActionType::DualVertical_To_DualHorizontal;
+                    act.overlayRect = { rcMulti.left, rcMulti.top + totalH / 2, rcMulti.right, rcMulti.bottom };
+                    act.overlayText = isZh ? L"转换为上下双栏 (下方)" : L"Convert to Dual Horizontal (Bottom)";
+                } else {
+                    act.type = PaneDragActionType::SwapPanes;
+                    act.targetPaneIdx = 1;
+                    act.overlayRect = rcRight;
+                    act.overlayText = isZh ? (L"互换左右分栏: 【" + title0 + L"】⇄【" + title1 + L"】")
+                                           : (L"Swap Left/Right: [" + title0 + L"] <-> [" + title1 + L"]");
+                }
+            } else {
+                if (ry > totalH * 0.75) {
+                    act.type = PaneDragActionType::DualVertical_To_DualHorizontal;
+                    act.overlayRect = { rcMulti.left, rcMulti.top + totalH / 2, rcMulti.right, rcMulti.bottom };
+                    act.overlayText = isZh ? L"转换为上下双栏 (下方)" : L"Convert to Dual Horizontal (Bottom)";
+                }
+            }
+        } else if (paneIdx == 1) {
+            // Dragging right pane
+            if (ptScreen.x < midX) {
+                if (ry > totalH * 0.75) {
+                    act.type = PaneDragActionType::DualVertical_To_DualHorizontal;
+                    act.overlayRect = { rcMulti.left, rcMulti.top + totalH / 2, rcMulti.right, rcMulti.bottom };
+                    act.overlayText = isZh ? L"转换为上下双栏 (下方)" : L"Convert to Dual Horizontal (Bottom)";
+                } else {
+                    act.type = PaneDragActionType::SwapPanes;
+                    act.targetPaneIdx = 0;
+                    act.overlayRect = rcLeft;
+                    act.overlayText = isZh ? (L"互换左右分栏: 【" + title1 + L"】⇄【" + title0 + L"】")
+                                           : (L"Swap Left/Right: [" + title1 + L"] <-> [" + title0 + L"]");
+                }
+            } else {
+                if (ry > totalH * 0.75) {
+                    act.type = PaneDragActionType::SplitThreeRightBottom;
+                    act.overlayRect = { midX, rcMulti.top + totalH / 2, rcMulti.right, rcMulti.bottom };
+                    act.overlayText = isZh ? L"拆分为三分栏 (右下)" : L"Split to 3 Panes (Bottom-Right)";
+                }
+            }
+        }
+    } else if (curLayout == PaneLayout::DualHorizontal) {
+        int midY = rcMulti.top + totalH / 2;
+        RECT rcTop = { rcMulti.left, rcMulti.top, rcMulti.right, midY };
+        RECT rcBottom = { rcMulti.left, midY, rcMulti.right, rcMulti.bottom };
+
+        std::wstring title0 = ShellUtils::GetDisplayName(m_multiPane.GetPane(0).GetCurrentPath());
+        std::wstring title1 = ShellUtils::GetDisplayName(m_multiPane.GetPane(1).GetCurrentPath());
+        if (title0.empty()) title0 = isZh ? L"上方分栏" : L"Top Pane";
+        if (title1.empty()) title1 = isZh ? L"下方分栏" : L"Bottom Pane";
+
+        if (paneIdx == 0) {
+            // Dragging top pane
+            if (ptScreen.y >= midY) {
+                if (rx > totalW * 0.75) {
+                    act.type = PaneDragActionType::DualHorizontal_To_DualVertical;
+                    act.overlayRect = { rcMulti.left + totalW / 2, rcMulti.top, rcMulti.right, rcMulti.bottom };
+                    act.overlayText = isZh ? L"转换为左右双栏 (右侧)" : L"Convert to Dual Vertical (Right)";
+                } else {
+                    act.type = PaneDragActionType::SwapPanes;
+                    act.targetPaneIdx = 1;
+                    act.overlayRect = rcBottom;
+                    act.overlayText = isZh ? (L"互换上下分栏: 【" + title0 + L"】⇄【" + title1 + L"】")
+                                           : (L"Swap Top/Bottom: [" + title0 + L"] <-> [" + title1 + L"]");
+                }
+            } else {
+                if (rx > totalW * 0.75) {
+                    act.type = PaneDragActionType::DualHorizontal_To_DualVertical;
+                    act.overlayRect = { rcMulti.left + totalW / 2, rcMulti.top, rcMulti.right, rcMulti.bottom };
+                    act.overlayText = isZh ? L"转换为左右双栏 (右侧)" : L"Convert to Dual Vertical (Right)";
+                }
+            }
+        } else if (paneIdx == 1) {
+            // Dragging bottom pane
+            if (ptScreen.y < midY) {
+                if (rx > totalW * 0.75) {
+                    act.type = PaneDragActionType::DualHorizontal_To_DualVertical;
+                    act.overlayRect = { rcMulti.left + totalW / 2, rcMulti.top, rcMulti.right, rcMulti.bottom };
+                    act.overlayText = isZh ? L"转换为左右双栏 (右侧)" : L"Convert to Dual Vertical (Right)";
+                } else {
+                    act.type = PaneDragActionType::SwapPanes;
+                    act.targetPaneIdx = 0;
+                    act.overlayRect = rcTop;
+                    act.overlayText = isZh ? (L"互换上下分栏: 【" + title1 + L"】⇄【" + title0 + L"】")
+                                           : (L"Swap Top/Bottom: [" + title1 + L"] <-> [" + title0 + L"]");
+                }
+            } else {
+                if (rx > totalW * 0.75) {
+                    act.type = PaneDragActionType::SplitQuad;
+                    act.overlayRect = { rcMulti.left + totalW / 2, rcMulti.top, rcMulti.right, rcMulti.bottom };
+                    act.overlayText = isZh ? L"拆分为四分栏网格" : L"Split to 4 Panes Grid";
+                }
+            }
+        }
+    } else if (curLayout == PaneLayout::ThreeLeft) {
+        int midX = rcMulti.left + totalW / 2;
+        int midY = rcMulti.top + totalH / 2;
+        if (paneIdx == 0) {
+            if (ptScreen.x >= midX) {
+                act.type = PaneDragActionType::SwapPanes;
+                act.targetPaneIdx = (ptScreen.y < midY) ? 1 : 2;
+                act.overlayRect = (ptScreen.y < midY)
+                    ? RECT{ midX, rcMulti.top, rcMulti.right, midY }
+                    : RECT{ midX, midY, rcMulti.right, rcMulti.bottom };
+                act.overlayText = isZh ? L"交换左侧分栏与右侧分栏" : L"Swap Left Pane with Right Pane";
+            } else if (ry > totalH * 0.75) {
+                act.type = PaneDragActionType::SplitQuad;
+                act.overlayRect = { rcMulti.left, rcMulti.top + totalH / 2, midX, rcMulti.bottom };
+                act.overlayText = isZh ? L"扩展为四分栏 (左下)" : L"Expand to 4 Panes (Bottom-Left)";
+            }
+        } else if (paneIdx == 1) {
+            if (ptScreen.x < midX) {
+                act.type = PaneDragActionType::SwapPanes;
+                act.targetPaneIdx = 0;
+                act.overlayRect = { rcMulti.left, rcMulti.top, midX, rcMulti.bottom };
+                act.overlayText = isZh ? L"交换右上分栏与左侧主分栏" : L"Swap Top-Right with Main Pane";
+            } else if (ptScreen.y >= midY) {
+                act.type = PaneDragActionType::SwapPanes;
+                act.targetPaneIdx = 2;
+                act.overlayRect = { midX, midY, rcMulti.right, rcMulti.bottom };
+                act.overlayText = isZh ? L"互换右上与右下分栏" : L"Swap Top-Right and Bottom-Right";
+            }
+        } else if (paneIdx == 2) {
+            if (ptScreen.x < midX) {
+                act.type = PaneDragActionType::SwapPanes;
+                act.targetPaneIdx = 0;
+                act.overlayRect = { rcMulti.left, rcMulti.top, midX, rcMulti.bottom };
+                act.overlayText = isZh ? L"交换右下分栏与左侧主分栏" : L"Swap Bottom-Right with Main Pane";
+            } else if (ptScreen.y < midY) {
+                act.type = PaneDragActionType::SwapPanes;
+                act.targetPaneIdx = 1;
+                act.overlayRect = { midX, rcMulti.top, rcMulti.right, midY };
+                act.overlayText = isZh ? L"互换右上与右下分栏" : L"Swap Top-Right and Bottom-Right";
+            }
+        }
+    } else if (curLayout == PaneLayout::Quad) {
+        int midX = rcMulti.left + totalW / 2;
+        int midY = rcMulti.top + totalH / 2;
+        int hoverQ = -1;
+        RECT rcQ = { 0 };
+        if (ptScreen.x < midX && ptScreen.y < midY) {
+            hoverQ = 0;
+            rcQ = { rcMulti.left, rcMulti.top, midX, midY };
+        } else if (ptScreen.x >= midX && ptScreen.y < midY) {
+            hoverQ = 1;
+            rcQ = { midX, rcMulti.top, rcMulti.right, midY };
+        } else if (ptScreen.x < midX && ptScreen.y >= midY) {
+            hoverQ = 2;
+            rcQ = { rcMulti.left, midY, midX, rcMulti.bottom };
+        } else {
+            hoverQ = 3;
+            rcQ = { midX, midY, rcMulti.right, rcMulti.bottom };
+        }
+
+        if (hoverQ >= 0 && hoverQ != paneIdx) {
+            act.type = PaneDragActionType::SwapPanes;
+            act.targetPaneIdx = hoverQ;
+            act.overlayRect = rcQ;
+            std::wstring tA = ShellUtils::GetDisplayName(m_multiPane.GetPane(paneIdx).GetCurrentPath());
+            std::wstring tB = ShellUtils::GetDisplayName(m_multiPane.GetPane(hoverQ).GetCurrentPath());
+            act.overlayText = isZh ? (L"互换分栏位置: 【" + tA + L"】⇄【" + tB + L"】")
+                                   : (L"Swap Panes: [" + tA + L"] <-> [" + tB + L"]");
+        }
+    }
+
+    return act;
+}
+
+void MainWindow::HandlePaneDragMove(int paneIdx, POINT ptScreen) {
+    if (paneIdx < 0 || paneIdx >= m_multiPane.GetPaneCount()) {
+        m_splitOverlay.Hide();
+        return;
+    }
+
+    PaneDragAction act = CalculatePaneDropAction(paneIdx, ptScreen);
+    if (act.type != PaneDragActionType::None) {
+        m_splitOverlay.Show(act.overlayRect, act.overlayText);
+    } else {
+        m_splitOverlay.Hide();
+    }
+}
+
+void MainWindow::HandlePaneDragEnd(int paneIdx, POINT ptScreen) {
+    m_splitOverlay.Hide();
+
+    if (paneIdx < 0 || paneIdx >= m_multiPane.GetPaneCount()) return;
+
+    PaneDragAction act = CalculatePaneDropAction(paneIdx, ptScreen);
+    if (act.type == PaneDragActionType::None) return;
+
+    switch (act.type) {
+    case PaneDragActionType::DetachToTab: {
+        FileListView& pane = m_multiPane.GetPane(paneIdx);
+        std::wstring panePath = pane.GetCurrentPath();
+        if (panePath.empty()) panePath = L"This PC";
+        auto hist = pane.GetHistory();
+        int histIdx = pane.GetHistoryIndex();
+        auto vstate = pane.GetViewState();
+
+        // 1. Close this split pane from container
+        m_multiPane.ClosePane(paneIdx);
+
+        // 2. Add as a new tab and activate it
+        int newTabIdx = m_tabBar.AddTab(panePath, true);
+        if (newTabIdx >= 0) {
+            FileListView* curActive = m_multiPane.GetActivePane();
+            if (curActive) {
+                curActive->SetHistory(hist, histIdx);
+                curActive->RestoreViewState(vstate);
+            }
+        }
+        break;
+    }
+
+    case PaneDragActionType::SwapPanes: {
+        if (act.targetPaneIdx >= 0 && act.targetPaneIdx < m_multiPane.GetPaneCount()) {
+            m_multiPane.SwapPanes(paneIdx, act.targetPaneIdx);
+        }
+        break;
+    }
+
+    case PaneDragActionType::DualVertical_To_DualHorizontal: {
+        SetLayout(PaneLayout::DualHorizontal);
+        break;
+    }
+
+    case PaneDragActionType::DualHorizontal_To_DualVertical: {
+        SetLayout(PaneLayout::DualVertical);
+        break;
+    }
+
+    case PaneDragActionType::SplitThreeRightBottom: {
+        SetLayout(PaneLayout::ThreeLeft);
+        break;
+    }
+
+    case PaneDragActionType::SplitQuad: {
+        SetLayout(PaneLayout::Quad);
+        break;
+    }
+
+    default:
+        break;
+    }
+
+    int curTab = m_tabBar.GetActiveIndex();
+    if (curTab >= 0 && curTab < m_tabBar.GetTabCount()) {
+        auto& tab = m_tabBar.GetTabItemRef(curTab);
+        tab.layout = (int)m_multiPane.GetLayout();
+        tab.activePaneIndex = m_multiPane.GetActiveIndex();
+        int pCount = m_multiPane.GetPaneCount();
+        tab.panePaths.resize(pCount);
+        for (int p = 0; p < pCount; ++p) {
+            tab.panePaths[p] = m_multiPane.GetPane(p).GetCurrentPath();
+        }
+    }
+    LayoutAll();
+    BuildMenu();
+}
 void MainWindow::ToggleTree() {
     m_treeVisible = !m_treeVisible;
     Config::Get().showTree = m_treeVisible;
@@ -1702,13 +2326,9 @@ void MainWindow::OnCommand(UINT cmdId) {
         break;
     }
     case ID_EDIT_UNDO: {
-        HWND hList = activeView->GetHwnd();
-        if (hList) {
-            SetFocus(hList);
-            keybd_event(VK_CONTROL, 0, 0, 0);
-            keybd_event('Z', 0, 0, 0);
-            keybd_event('Z', 0, KEYEVENTF_KEYUP, 0);
-            keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+        ShellUtils::ExecuteUndo(m_hwnd);
+        if (activeView) {
+            activeView->Refresh();
         }
         break;
     }
@@ -1830,6 +2450,7 @@ void MainWindow::OnCommand(UINT cmdId) {
             newDir = activeView->GetCurrentPath() + L"\\" + I18n::Get().T(StringId::NewFolder) + L" (" + std::to_wstring(idx++) + L")";
         }
         if (CreateDirectoryW(newDir.c_str(), nullptr)) {
+            ShellUtils::RecordCreate(newDir);
             activeView->Refresh();
             activeView->SelectItemByPath(newDir);
             activeView->StartRename();
@@ -1850,6 +2471,7 @@ void MainWindow::OnCommand(UINT cmdId) {
             DWORD written = 0;
             WriteFile(hF, initContent, (DWORD)strlen(initContent), &written, nullptr);
             CloseHandle(hF);
+            ShellUtils::RecordCreate(newFile);
             activeView->Refresh();
             activeView->SelectItemByPath(newFile);
             activeView->StartRename();
@@ -1877,6 +2499,7 @@ void MainWindow::OnCommand(UINT cmdId) {
         HANDLE hF = CreateFileW(newFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hF != INVALID_HANDLE_VALUE) {
             CloseHandle(hF);
+            ShellUtils::RecordCreate(newFile);
             activeView->Refresh();
             activeView->SelectItemByPath(newFile);
             activeView->StartRename();
@@ -2010,6 +2633,26 @@ void MainWindow::OnCommand(UINT cmdId) {
         break;
     case ID_VIEW_SORT_DESC:
         activeView->SetSort(activeView->GetSortColumn(), false);
+        BuildMenu();
+        break;
+
+    case ID_VIEW_SORT_FOLDERS_FIRST:
+        if (activeView) {
+            activeView->SetFoldersFirst(true);
+        } else {
+            Config::Get().foldersFirst = true;
+            Config::Get().Save();
+        }
+        BuildMenu();
+        break;
+
+    case ID_VIEW_SORT_FILES_FIRST:
+        if (activeView) {
+            activeView->SetFoldersFirst(false);
+        } else {
+            Config::Get().foldersFirst = false;
+            Config::Get().Save();
+        }
         BuildMenu();
         break;
 
@@ -2263,6 +2906,20 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
 }
 LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_DEVICECHANGE: {
+        // 0x8000: DBT_DEVICEARRIVAL, 0x8004: DBT_DEVICEREMOVECOMPLETE
+        if (wParam == 0x8000 || wParam == 0x8004) {
+            m_tree.Refresh();
+            for (int i = 0; i < m_multiPane.GetPaneCount(); ++i) {
+                FileListView& pane = m_multiPane.GetPane(i);
+                std::wstring p = pane.GetCurrentPath();
+                if (p == L"This PC" || p == L"此电脑" || p == L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") {
+                    pane.Refresh();
+                }
+            }
+        }
+        break;
+    }
     case WM_COPYDATA: {
         PCOPYDATASTRUCT pcds = (PCOPYDATASTRUCT)lParam;
         if (pcds && pcds->lpData && pcds->cbData > 0) {
@@ -2270,15 +2927,16 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             while (!path.empty() && (path.back() == L'"' || path.back() == L' ')) path.pop_back();
             while (!path.empty() && path.front() == L'"') path.erase(path.begin());
             if (path.length() == 2 && path[1] == L':') path += L"\\";
+            if (path.find(L"645FF040-5081-101B-9F08-00AA002F954E") != std::wstring::npos ||
+                path.find(L"RecycleBinFolder") != std::wstring::npos) {
+                ShellExecuteW(nullptr, L"open", L"explorer.exe", L"::{645FF040-5081-101B-9F08-00AA002F954E}", nullptr, SW_SHOWNORMAL);
+                return 0;
+            }
             if (path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
                 path = L"This PC";
             }
             if (PathFileExistsW(path.c_str()) || path == L"此电脑" || path == L"This PC") {
                 m_tabBar.AddTab(path, true);
-                FileListView* activePane = m_multiPane.GetActivePane();
-                if (activePane) {
-                    activePane->NavigateTo(path, true);
-                }
             }
             if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) {
                 ShowWindow(hwnd, SW_RESTORE);
@@ -2618,6 +3276,15 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         return 0;
     }
 
+    case WM_SYNC_TREE_SELECTION: {
+        if (m_treeVisible && Config::Get().autoExpandTree && !m_pendingTreePath.empty()) {
+            std::wstring syncPath = m_pendingTreePath;
+            m_pendingTreePath.clear();
+            m_tree.SelectPath(syncPath);
+        }
+        return 0;
+    }
+
     case WM_COMMAND:
         OnCommand(LOWORD(wParam));
         return 0;
@@ -2687,8 +3354,8 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
         }
         bool wasHiddenInTray = m_hasTrayIcon || !IsWindowVisible(hwnd);
-        ShowWindow(hwnd, SW_HIDE);
-        RemoveTrayIcon();
+        bool wasMaximized = wasHiddenInTray ? m_wasMaximizedBeforeTray : (IsZoomed(hwnd) != FALSE);
+
         Config& cfg = Config::Get();
         WINDOWPLACEMENT wp = { sizeof(wp) };
         if (GetWindowPlacement(hwnd, &wp)) {
@@ -2696,17 +3363,21 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             cfg.window.y = wp.rcNormalPosition.top;
             cfg.window.width = wp.rcNormalPosition.right - wp.rcNormalPosition.left;
             cfg.window.height = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top;
-            if (wasHiddenInTray) {
-                cfg.window.maximized = m_wasMaximizedBeforeTray;
-            } else {
-                cfg.window.maximized = (wp.showCmd == SW_SHOWMAXIMIZED);
-            }
+            cfg.window.maximized = wasMaximized;
         }
+
+        ShowWindow(hwnd, SW_HIDE);
+        RemoveTrayIcon();
 
         cfg.showTree = m_treeVisible;
         cfg.treeWidth = m_treeWidth;
         cfg.previewEnabled = m_previewVisible;
         cfg.previewWidth = m_previewWidth;
+
+        // Save column widths from all panes
+        for (int p = 0; p < m_multiPane.GetPaneCount(); ++p) {
+            m_multiPane.GetPane(p).SaveColumnWidths();
+        }
 
         // Sync active tab multiPane state into TabItem before saving
         int curTab = m_tabBar.GetActiveIndex();
@@ -2752,7 +3423,20 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         return 0;
     }
 
+    case WM_CLIPBOARDUPDATE: {
+        if (m_multiPane.GetHwnd()) {
+            for (int i = 0; i < 4; ++i) {
+                HWND hPane = m_multiPane.GetPane(i).GetHwnd();
+                if (hPane && IsWindow(hPane)) {
+                    InvalidateRect(hPane, nullptr, TRUE);
+                }
+            }
+        }
+        return 0;
+    }
+
     case WM_DESTROY:
+        RemoveClipboardFormatListener(m_hwnd);
         PostQuitMessage(0);
         return 0;
     }
@@ -2856,6 +3540,7 @@ void MainWindow::RebuildAccelerators() {
         if (name == L"显示/隐藏隐藏文件" || name == L"Toggle Hidden Files") return ID_VIEW_SHOW_HIDDEN;
         if (name == L"选项与设置" || name == L"Options & Settings") return ID_TOOLS_SETTINGS;
         if (name == L"反向选择" || name == L"Invert Selection") return ID_EDIT_INVERT_SELECTION;
+        if (name == L"撤销" || name == L"Undo") return ID_EDIT_UNDO;
         if (name == L"删除选中项" || name == L"删除" || name == L"Delete") return ID_EDIT_DELETE;
         if (name == L"重命名" || name == L"Rename") return ID_EDIT_RENAME;
         if (name == L"复制当前路径" || name == L"Copy Path") return ID_EDIT_COPY_PATH;
@@ -2927,7 +3612,7 @@ void MainWindow::RebuildAccelerators() {
         }
     }
 
-    // Guarantee critical default hotkeys (F5, F11, Alt+Enter) are always registered
+    // Guarantee critical default hotkeys (F5, F11, Alt+Enter, Ctrl+A, Ctrl+I, Ctrl+Z) are always registered
     if (!hasCommand(ID_VIEW_REFRESH)) {
         accels.push_back({ FVIRTKEY, (WORD)VK_F5, (WORD)ID_VIEW_REFRESH });
     }
@@ -2936,6 +3621,15 @@ void MainWindow::RebuildAccelerators() {
     }
     if (!hasCommand(ID_FILE_PROPERTIES)) {
         accels.push_back({ FVIRTKEY | FALT, (WORD)VK_RETURN, (WORD)ID_FILE_PROPERTIES });
+    }
+    if (!hasCommand(ID_EDIT_SELECT_ALL)) {
+        accels.push_back({ FVIRTKEY | FCONTROL, (WORD)'A', (WORD)ID_EDIT_SELECT_ALL });
+    }
+    if (!hasCommand(ID_EDIT_INVERT_SELECTION)) {
+        accels.push_back({ FVIRTKEY | FCONTROL, (WORD)'I', (WORD)ID_EDIT_INVERT_SELECTION });
+    }
+    if (!hasCommand(ID_EDIT_UNDO)) {
+        accels.push_back({ FVIRTKEY | FCONTROL, (WORD)'Z', (WORD)ID_EDIT_UNDO });
     }
 
     if (!accels.empty()) {

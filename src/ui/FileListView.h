@@ -58,6 +58,7 @@ public:
   void UpdateHeaderSortArrow();
   void ShowColumnHeaderMenu(POINT ptScreen);
   void RebuildColumns();
+  void SaveColumnWidths();
   void ToggleColumn(ColumnId id);
   void ShowChooseColumnsDialog();
   const std::vector<ColumnId> &GetActiveColumns() const {
@@ -73,6 +74,9 @@ public:
   void StartRename();
 
   void SetSort(SortColumn col, bool ascending);
+  void SetFoldersFirst(bool foldersFirst);
+  bool IsFoldersFirst() const { return m_foldersFirst; }
+  void ReSort();
   SortColumn GetSortColumn() const { return m_sortCol; }
   bool IsSortAscending() const { return m_sortAsc; }
 
@@ -137,10 +141,12 @@ private:
   std::vector<ColumnId> m_activeColumns;
   SortColumn m_sortCol = SortColumn::Name;
   bool m_sortAsc = true;
+  bool m_foldersFirst = true;
   bool m_showHidden = false;
   bool m_calcFolderSize = false;
 
   int m_dropHighlightItem = -1;
+  bool m_preventRenameOnActivate = false;
   DropTarget *m_pDropTarget = nullptr;
   void StartDragDrop(int itemIndex);
 

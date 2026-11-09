@@ -127,6 +127,34 @@ void MultiPaneContainer::CycleActivePane() {
   }
 }
 
+void MultiPaneContainer::SwapPanes(int idxA, int idxB) {
+  if (idxA < 0 || idxA >= 4 || idxB < 0 || idxB >= 4 || idxA == idxB)
+    return;
+
+  std::wstring pathA = m_panes[idxA].GetCurrentPath();
+  auto histA = m_panes[idxA].GetHistory();
+  int histIdxA = m_panes[idxA].GetHistoryIndex();
+  auto vsA = m_panes[idxA].GetViewState();
+
+  std::wstring pathB = m_panes[idxB].GetCurrentPath();
+  auto histB = m_panes[idxB].GetHistory();
+  int histIdxB = m_panes[idxB].GetHistoryIndex();
+  auto vsB = m_panes[idxB].GetViewState();
+
+  m_panes[idxA].NavigateTo(pathB, false);
+  m_panes[idxA].SetHistory(histB, histIdxB);
+  m_panes[idxA].RestoreViewState(vsB);
+
+  m_panes[idxB].NavigateTo(pathA, false);
+  m_panes[idxB].SetHistory(histA, histIdxA);
+  m_panes[idxB].RestoreViewState(vsA);
+
+  UpdatePaneHeader(idxA);
+  UpdatePaneHeader(idxB);
+  InvalidateRect(m_panes[idxA].GetHwnd(), nullptr, TRUE);
+  InvalidateRect(m_panes[idxB].GetHwnd(), nullptr, TRUE);
+}
+
 void MultiPaneContainer::ClosePane(int index) {
   int count = GetPaneCount();
   if (count <= 1 || index < 0 || index >= count) {
@@ -261,6 +289,14 @@ void MultiPaneContainer::SetShowHidden(bool show) {
 void MultiPaneContainer::SetCalcFolderSize(bool calc) {
   for (int i = 0; i < 4; ++i) {
     m_panes[i].SetCalcFolderSize(calc);
+  }
+}
+
+void MultiPaneContainer::ReSortAllPanes() {
+  for (int i = 0; i < 4; ++i) {
+    if (m_panes[i].GetHwnd()) {
+      m_panes[i].ReSort();
+    }
   }
 }
 
@@ -516,6 +552,24 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg,
     RECT rc;
     GetClientRect(hwnd, &rc);
     int x = GET_X_LPARAM(lParam);
+    int y = GET_Y_LPARAM(lParam);
+
+    if ((wParam & MK_LBUTTON) && m_dragPaneIdx >= 0) {
+      if (!m_draggingPane) {
+        if (abs(x - m_dragPaneStart.x) >= 4 || abs(y - m_dragPaneStart.y) >= 4) {
+          m_draggingPane = true;
+        }
+      }
+      if (m_draggingPane) {
+        POINT ptScreen = {x, y};
+        ClientToScreen(hwnd, &ptScreen);
+        if (onPaneDragMove) {
+          onPaneDragMove(m_dragPaneIdx, ptScreen);
+        }
+        return 0;
+      }
+    }
+
     int btnW = Theme::Get().Scale(24, hwnd);
     int newHover = 0;
     if (x >= rc.right - btnW && x <= rc.right) {
@@ -545,6 +599,7 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg,
     RECT rc;
     GetClientRect(hwnd, &rc);
     int x = GET_X_LPARAM(lParam);
+    int y = GET_Y_LPARAM(lParam);
     int btnW = Theme::Get().Scale(24, hwnd);
 
     if (x >= rc.right - btnW && x <= rc.right) {
@@ -555,6 +610,46 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg,
     } else if (x >= rc.right - btnW * 2 && x < rc.right - btnW) {
       ToggleMaximizePane(paneIdx);
       return 0;
+    }
+
+    if (GetPaneCount() > 1) {
+      m_dragPaneIdx = paneIdx;
+      m_dragPaneStart = {x, y};
+      m_draggingPane = false;
+      SetCapture(hwnd);
+    }
+    return 0;
+  }
+
+  case WM_LBUTTONUP: {
+    if (m_draggingPane) {
+      int dragIdx = m_dragPaneIdx;
+      m_draggingPane = false;
+      m_dragPaneIdx = -1;
+      ReleaseCapture();
+
+      POINT ptScreen = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+      ClientToScreen(hwnd, &ptScreen);
+      if (onPaneDragEnd) {
+        onPaneDragEnd(dragIdx, ptScreen);
+      }
+      return 0;
+    } else if (m_dragPaneIdx >= 0) {
+      m_dragPaneIdx = -1;
+      ReleaseCapture();
+    }
+    return 0;
+  }
+
+  case WM_CAPTURECHANGED: {
+    if (m_draggingPane) {
+      m_draggingPane = false;
+      m_dragPaneIdx = -1;
+      if (onPaneDragMove) {
+        POINT ptScreen = {0, 0};
+        GetCursorPos(&ptScreen);
+        onPaneDragMove(-1, ptScreen);
+      }
     }
     return 0;
   }

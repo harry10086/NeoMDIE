@@ -5,6 +5,7 @@
 #include "FilterBar.h"
 #include "LinksBar.h"
 #include "MultiPaneContainer.h"
+#include "DropIndicatorOverlay.h"
 #include "PreviewPane.h"
 #include "DirectoryTree.h"
 
@@ -37,6 +38,48 @@ private:
     void ShowToolbarContextMenu(POINT ptScreen);
     void AddToHistory(const std::wstring& path);
     void DrawToolbarButton(DRAWITEMSTRUCT* pdis);
+
+    struct SplitDropAction {
+        enum Type {
+            None,
+            SplitDualVerticalRight,
+            SplitDualVerticalLeft,
+            SplitDualHorizontalBottom,
+            SplitDualHorizontalTop,
+            SplitThreeRightBottom,
+            SplitThreeRightTop,
+            SplitQuadBottomLeft,
+            SplitQuad,
+            MergeIntoPane
+        } type = None;
+        RECT overlayRect = { 0, 0, 0, 0 };
+        std::wstring overlayText;
+        int targetPaneIndex = 0;
+    };
+
+    void HandleTabDragMove(int dragIndex, int hostTabIndex, POINT ptScreen);
+    void HandleTabDragEnd(int dragIndex, int hostTabIndex, POINT ptScreen);
+    SplitDropAction CalculateDropAction(int dragIndex, int hostTabIndex, POINT ptScreen);
+    enum class PaneDragActionType {
+        None,
+        DetachToTab,
+        SwapPanes,
+        DualVertical_To_DualHorizontal,
+        DualHorizontal_To_DualVertical,
+        SplitThreeRightBottom,
+        SplitQuad
+    };
+
+    struct PaneDragAction {
+        PaneDragActionType type = PaneDragActionType::None;
+        RECT overlayRect = { 0, 0, 0, 0 };
+        std::wstring overlayText;
+        int targetPaneIdx = -1;
+    };
+
+    PaneDragAction CalculatePaneDropAction(int paneIdx, POINT ptScreen);
+    void HandlePaneDragMove(int paneIdx, POINT ptScreen);
+    void HandlePaneDragEnd(int paneIdx, POINT ptScreen);
     void UpdateWindowTitle(const std::wstring& path);
     void LayoutCenterArea();
     void ApplyTheme();
@@ -69,6 +112,7 @@ private:
     LinksBar m_linksBar;
     DirectoryTree m_tree;
     MultiPaneContainer m_multiPane;
+    DropIndicatorOverlay m_splitOverlay;
     PreviewPane m_preview;
     HWND m_hwndStatusBar = nullptr;
 
@@ -85,6 +129,9 @@ private:
 
     bool m_resizingFilterBar = false;
     RECT m_rcFilterSplitter = { 0 };
+
+    static const UINT WM_SYNC_TREE_SELECTION = WM_APP + 150;
+    std::wstring m_pendingTreePath;
 
     std::vector<std::wstring> m_historyPaths;
 

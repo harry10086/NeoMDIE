@@ -1,4 +1,4 @@
-﻿#include "DirectoryTree.h"
+#include "DirectoryTree.h"
 #include "..\core\Config.h"
 #include "..\core\DropTarget.h"
 #include "..\core\I18n.h"
@@ -101,41 +101,9 @@ HWND DirectoryTree::Create(HWND hwndParent, int id) {
   m_pDropTarget->onFilesDropped = [this](const std::wstring &targetDir,
                                          const std::vector<std::wstring> &files,
                                          bool isMove) {
-    IFileOperation *pfo = nullptr;
-    if (SUCCEEDED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL,
-                                   IID_PPV_ARGS(&pfo)))) {
-      pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR | FOF_RENAMEONCOLLISION);
-      pfo->SetOwnerWindow(m_hwnd);
-
-      IShellItem *psiDest = nullptr;
-      if (SUCCEEDED(SHCreateItemFromParsingName(targetDir.c_str(), nullptr,
-                                                IID_PPV_ARGS(&psiDest)))) {
-        for (const auto &src : files) {
-          if (isMove) {
-            wchar_t sDir[MAX_PATH];
-            StringCchCopyW(sDir, MAX_PATH, src.c_str());
-            PathRemoveFileSpecW(sDir);
-            if (_wcsicmp(sDir, targetDir.c_str()) == 0)
-              continue;
-          }
-          IShellItem *psiSrc = nullptr;
-          if (SUCCEEDED(SHCreateItemFromParsingName(src.c_str(), nullptr,
-                                                    IID_PPV_ARGS(&psiSrc)))) {
-            if (isMove) {
-              pfo->MoveItem(psiSrc, psiDest, nullptr, nullptr);
-            } else {
-              pfo->CopyItem(psiSrc, psiDest, nullptr, nullptr);
-            }
-            psiSrc->Release();
-          }
-        }
-        pfo->PerformOperations();
-        psiDest->Release();
-      }
-      pfo->Release();
+    if (ShellUtils::CopyOrMoveFiles(m_hwnd, targetDir, files, isMove)) {
+      Refresh();
     }
-    SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, targetDir.c_str(), nullptr);
-    Refresh();
   };
 
 RegisterDragDrop(m_hwnd, m_pDropTarget);
@@ -204,6 +172,7 @@ void DirectoryTree::SelectPath(const std::wstring &path) {
     SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(m_hwnd, nullptr, TRUE);
     m_syncing = false;
+    return;
   }
 
   if (normPath.length() >= 2 && normPath[1] == L':') {
@@ -404,6 +373,7 @@ void DirectoryTree::PopulateChildren(HTREEITEM hParent,
 
   if (hFind == INVALID_HANDLE_VALUE) {
     SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
+    return;
   }
 
   std::vector<std::pair<std::wstring, std::wstring>> subdirs;
@@ -626,6 +596,7 @@ LRESULT CALLBACK DirectoryTree::TreeSubclassProc(HWND hwnd, UINT msg,
   }
 
   case WM_RBUTTONUP: {
+    if (GetCapture() == hwnd) ReleaseCapture();
     POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
     POINT ptScreen = pt;
     ClientToScreen(hwnd, &ptScreen);

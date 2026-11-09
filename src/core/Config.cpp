@@ -57,6 +57,7 @@ void Config::Load() {
     previewWidth = GetPrivateProfileIntW(secGeneral, L"PreviewWidth", 320, m_iniPath.c_str());
     viewMode = GetPrivateProfileIntW(secGeneral, L"ViewMode", 0, m_iniPath.c_str());
     showHidden = GetPrivateProfileIntW(secGeneral, L"ShowHidden", 0, m_iniPath.c_str()) != 0;
+    foldersFirst = GetPrivateProfileIntW(secGeneral, L"FoldersFirst", 1, m_iniPath.c_str()) != 0;
     calcFolderSize = GetPrivateProfileIntW(secGeneral, L"CalcFolderSize", 0, m_iniPath.c_str()) != 0;
     gesturesEnabled = GetPrivateProfileIntW(secGeneral, L"GesturesEnabled", 1, m_iniPath.c_str()) != 0;
 
@@ -135,6 +136,8 @@ void Config::Load() {
                 vs.sortAsc = GetPrivateProfileIntW(secTabs, pKey, 1, m_iniPath.c_str()) != 0;
                 StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_ViewMode", i, p);
                 vs.viewMode = GetPrivateProfileIntW(secTabs, pKey, -1, m_iniPath.c_str());
+                StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_FoldersFirst", i, p);
+                vs.foldersFirst = GetPrivateProfileIntW(secTabs, pKey, -1, m_iniPath.c_str());
                 tabInfo.paneViewStates.push_back(vs);
             }
         }
@@ -264,12 +267,86 @@ void Config::Load() {
             { L"向上翻页", L"PageUp", false, false, false },
             { L"向下翻页", L"PageDown", false, false, false },
             { L"全选", L"A", false, true, false },
+            { L"反向选择", L"I", false, true, false },
+            { L"撤销", L"Z", false, true, false },
             { L"复制选中项", L"C", false, true, false },
             { L"剪切选中项", L"X", false, true, false },
             { L"粘贴", L"V", false, true, false },
             { L"新建文件夹", L"N", true, true, false },
             { L"属性", L"Enter", false, false, true }
         };
+    }
+
+    // Column widths
+    const wchar_t* secColumns = L"Columns";
+    static const struct { int id; const wchar_t* key; int defW; } s_colDefs[] = {
+        { 0, L"Col_Name", 300 },
+        { 1, L"Col_DateModified", 160 },
+        { 2, L"Col_Type", 130 },
+        { 3, L"Col_Size", 120 },
+        { 4, L"Col_DateCreated", 160 },
+        { 5, L"Col_Attributes", 100 },
+        { 6, L"Col_Authors", 150 },
+        { 7, L"Col_Title", 180 },
+        { 8, L"Col_Tags", 150 },
+        { 9, L"Col_Path", 300 }
+    };
+    for (const auto& cd : s_colDefs) {
+        int w = GetPrivateProfileIntW(secColumns, cd.key, cd.defW, m_iniPath.c_str());
+        if (w > 20) {
+            columnWidths[cd.id] = w;
+        }
+    }
+
+    // FolderViews (per-folder view mode, sort column/direction, and column widths)
+    folderViewMap.clear();
+    const wchar_t* secFolderViews = L"FolderViews";
+    int fvCount = GetPrivateProfileIntW(secFolderViews, L"Count", 0, m_iniPath.c_str());
+    for (int i = 0; i < fvCount; ++i) {
+        wchar_t kPath[32], kVal[32];
+        StringCchPrintfW(kPath, 32, L"P%d", i);
+        StringCchPrintfW(kVal, 32, L"V%d", i);
+        wchar_t pathBuf[MAX_PATH] = { 0 };
+        GetPrivateProfileStringW(secFolderViews, kPath, L"", pathBuf, MAX_PATH, m_iniPath.c_str());
+        if (pathBuf[0] == L'\0') continue;
+
+        wchar_t valBuf[512] = { 0 };
+        GetPrivateProfileStringW(secFolderViews, kVal, L"", valBuf, 512, m_iniPath.c_str());
+
+        // val format: "sortCol,sortAsc,viewMode,foldersFirst;0:300,1:160,2:130,..."
+        FolderViewSettings fvs;
+        std::wstring sVal(valBuf);
+        size_t semi = sVal.find(L';');
+        std::wstring headerPart = (semi != std::wstring::npos) ? sVal.substr(0, semi) : sVal;
+        int sc = -1, sa = 1, vm = -1, ff = -1;
+        int parsed = swscanf_s(headerPart.c_str(), L"%d,%d,%d,%d", &sc, &sa, &vm, &ff);
+        if (parsed >= 2) {
+            fvs.sortCol = sc;
+            fvs.sortAsc = (sa != 0);
+            fvs.viewMode = vm;
+            if (parsed >= 4) {
+                fvs.foldersFirst = ff;
+            }
+        }
+        if (semi != std::wstring::npos) {
+            std::wstring colsPart = sVal.substr(semi + 1);
+            size_t start = 0;
+            while (start < colsPart.length()) {
+                size_t comma = colsPart.find(L',', start);
+                std::wstring token = (comma != std::wstring::npos) ? colsPart.substr(start, comma - start) : colsPart.substr(start);
+                size_t colon = token.find(L':');
+                if (colon != std::wstring::npos) {
+                    int cId = _wtoi(token.substr(0, colon).c_str());
+                    int cW = _wtoi(token.substr(colon + 1).c_str());
+                    if (cW > 20) {
+                        fvs.columnWidths[cId] = cW;
+                    }
+                }
+                if (comma == std::wstring::npos) break;
+                start = comma + 1;
+            }
+        }
+        folderViewMap[NormalizeFolderKey(pathBuf)] = fvs;
     }
 }
 
@@ -304,6 +381,7 @@ void Config::Save() {
     writeInt(secGeneral, L"PreviewWidth", previewWidth);
     writeInt(secGeneral, L"ViewMode", viewMode);
     writeInt(secGeneral, L"ShowHidden", showHidden ? 1 : 0);
+    writeInt(secGeneral, L"FoldersFirst", foldersFirst ? 1 : 0);
     writeInt(secGeneral, L"CalcFolderSize", calcFolderSize ? 1 : 0);
     writeInt(secGeneral, L"GesturesEnabled", gesturesEnabled ? 1 : 0);
     writeInt(secGeneral, L"SingleInstance", singleInstance ? 1 : 0);
@@ -369,6 +447,8 @@ void Config::Save() {
                     writeInt(secTabs, pKey, vs.sortAsc ? 1 : 0);
                     StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_ViewMode", (int)i, (int)p);
                     writeInt(secTabs, pKey, vs.viewMode);
+                    StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_FoldersFirst", (int)i, (int)p);
+                    writeInt(secTabs, pKey, vs.foldersFirst);
                 }
             }
         }
@@ -414,4 +494,56 @@ void Config::Save() {
         writeInt(secShortcuts, kCtrl, shortcuts[i].ctrl ? 1 : 0);
         writeInt(secShortcuts, kAlt, shortcuts[i].alt ? 1 : 0);
     }
+
+    // Column widths
+    const wchar_t* secColumns = L"Columns";
+    static const struct { int id; const wchar_t* key; int defW; } s_colDefsSave[] = {
+        { 0, L"Col_Name", 300 },
+        { 1, L"Col_DateModified", 160 },
+        { 2, L"Col_Type", 130 },
+        { 3, L"Col_Size", 120 },
+        { 4, L"Col_DateCreated", 160 },
+        { 5, L"Col_Attributes", 100 },
+        { 6, L"Col_Authors", 150 },
+        { 7, L"Col_Title", 180 },
+        { 8, L"Col_Tags", 150 },
+        { 9, L"Col_Path", 300 }
+    };
+    for (const auto& cd : s_colDefsSave) {
+        auto it = columnWidths.find(cd.id);
+        int w = (it != columnWidths.end() && it->second > 20) ? it->second : cd.defW;
+        writeInt(secColumns, cd.key, w);
+    }
+
+    // FolderViews (cap at 200 recent folders to keep INI clean)
+    const wchar_t* secFolderViews = L"FolderViews";
+    WritePrivateProfileSectionW(secFolderViews, L"", m_iniPath.c_str());
+    int fvIdx = 0;
+    for (const auto& kv : folderViewMap) {
+        if (fvIdx >= 200) break;
+        if (kv.first.empty()) continue;
+
+        wchar_t kPath[32], kVal[32];
+        StringCchPrintfW(kPath, 32, L"P%d", fvIdx);
+        StringCchPrintfW(kVal, 32, L"V%d", fvIdx);
+
+        std::wstring vStr;
+        wchar_t head[64];
+        StringCchPrintfW(head, 64, L"%d,%d,%d,%d;", kv.second.sortCol, kv.second.sortAsc ? 1 : 0, kv.second.viewMode, kv.second.foldersFirst);
+        vStr += head;
+
+        bool firstCol = true;
+        for (const auto& cw : kv.second.columnWidths) {
+            if (!firstCol) vStr += L",";
+            firstCol = false;
+            wchar_t cbuf[32];
+            StringCchPrintfW(cbuf, 32, L"%d:%d", cw.first, cw.second);
+            vStr += cbuf;
+        }
+
+        WritePrivateProfileStringW(secFolderViews, kPath, kv.first.c_str(), m_iniPath.c_str());
+        WritePrivateProfileStringW(secFolderViews, kVal, vStr.c_str(), m_iniPath.c_str());
+        fvIdx++;
+    }
+    writeInt(secFolderViews, L"Count", fvIdx);
 }

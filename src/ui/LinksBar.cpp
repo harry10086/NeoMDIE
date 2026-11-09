@@ -363,6 +363,7 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_RBUTTONUP: {
+        if (GetCapture() == hwnd) ReleaseCapture();
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
         POINT ptScreen = { x, y };

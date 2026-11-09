@@ -11,6 +11,7 @@ enum NeoMDIECommand {
     CMD_NEOMDIE_ADD_LINKS    = 0x7107,
     CMD_NEOMDIE_SETTINGS     = 0x7108,
     CMD_NEOMDIE_OPEN_BG_TAB  = 0x7109,
+    CMD_NEOMDIE_OPEN_EXPLORER= 0x710A,
 
     // Background view modes
     CMD_BG_VIEW_DETAILS      = 0x7110,
@@ -28,6 +29,8 @@ enum NeoMDIECommand {
     CMD_BG_SORT_SIZE         = 0x7123,
     CMD_BG_SORT_ASCENDING    = 0x7124,
     CMD_BG_SORT_DESCENDING   = 0x7125,
+    CMD_BG_SORT_FOLDERS_FIRST= 0x7126,
+    CMD_BG_SORT_FILES_FIRST  = 0x7127,
 
     // Background actions
     CMD_BG_REFRESH           = 0x7130,
@@ -87,7 +90,7 @@ namespace ShellUtils {
     bool OpenItem(HWND hwnd, const std::wstring& path);
     bool ShowItemProperties(HWND hwnd, const std::wstring& path);
     bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT ptScreen, std::function<void(int neoCmd, const std::wstring& path)> onCustomCommand = nullptr);
-    bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT ptScreen, int currentViewMode = 0, int currentSortCol = 0, bool sortAsc = true, std::function<void(int neoCmd, const std::wstring& currentDir)> onCustomCommand = nullptr);
+    bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT ptScreen, int currentViewMode = 0, int currentSortCol = 0, bool sortAsc = true, bool foldersFirst = true, std::function<void(int neoCmd, const std::wstring& currentDir)> onCustomCommand = nullptr);
 
     // Clipboard & File Operations
     bool CopyFilesToClipboard(HWND hwnd, const std::vector<std::wstring>& paths, bool isCut);
@@ -97,11 +100,24 @@ namespace ShellUtils {
     bool RenameItem(HWND hwnd, const std::wstring& oldPath, const std::wstring& newName);
     bool CanPasteFromClipboard();
     bool GetDriveSpace(const std::wstring& drivePath, uint64_t& outFreeBytes, uint64_t& outTotalBytes);
+    bool IsPathCut(const std::wstring& path);
+    bool HasCutFiles();
+    void BlendRectWithColor(HDC hdc, const RECT& rc, COLORREF clr, BYTE alpha);
+    bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vector<std::wstring>& srcFiles, bool isMove);
+
+    // Undo Operations
+    bool ExecuteUndo(HWND hwnd);
+    void RecordRename(const std::wstring& oldPath, const std::wstring& newPath);
+    void RecordCreate(const std::wstring& createdPath);
+    void RecordCopy(const std::vector<std::wstring>& createdPaths);
+    void RecordMove(const std::vector<std::pair<std::wstring, std::wstring>>& movedPairs);
+    bool CanUndo();
 
     void LaunchTerminal(const std::wstring& dir);
     void LaunchPowerShell(const std::wstring& dir);
     void LaunchCmd(const std::wstring& dir);
     void LaunchVSCode(const std::wstring& dir);
+    void OpenInExplorer(const std::wstring& path);
 
     void CopyToClipboard(const std::wstring& text);
     std::wstring GetParentPath(const std::wstring& path);

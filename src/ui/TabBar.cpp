@@ -92,40 +92,7 @@ HWND TabBar::Create(HWND hwndParent, int id) {
                                          bool isMove) {
     if (targetDir.empty() || targetDir == L"This PC" || targetDir == L"此电脑")
       return;
-    IFileOperation *pfo = nullptr;
-    if (SUCCEEDED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL,
-                                   IID_PPV_ARGS(&pfo)))) {
-      pfo->SetOperationFlags(FOF_ALLOWUNDO | FOF_NOCONFIRMMKDIR | FOF_RENAMEONCOLLISION);
-      pfo->SetOwnerWindow(m_hwnd);
-
-      IShellItem *psiDest = nullptr;
-      if (SUCCEEDED(SHCreateItemFromParsingName(targetDir.c_str(), nullptr,
-                                                IID_PPV_ARGS(&psiDest)))) {
-        for (const auto &src : files) {
-          if (isMove) {
-            wchar_t sDir[MAX_PATH];
-            StringCchCopyW(sDir, MAX_PATH, src.c_str());
-            PathRemoveFileSpecW(sDir);
-            if (_wcsicmp(sDir, targetDir.c_str()) == 0)
-              continue;
-          }
-          IShellItem *psiSrc = nullptr;
-          if (SUCCEEDED(SHCreateItemFromParsingName(src.c_str(), nullptr,
-                                                    IID_PPV_ARGS(&psiSrc)))) {
-            if (isMove) {
-              pfo->MoveItem(psiSrc, psiDest, nullptr, nullptr);
-            } else {
-              pfo->CopyItem(psiSrc, psiDest, nullptr, nullptr);
-            }
-            psiSrc->Release();
-          }
-        }
-        pfo->PerformOperations();
-        psiDest->Release();
-      }
-      pfo->Release();
-    }
-    SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, targetDir.c_str(), nullptr);
+    ShellUtils::CopyOrMoveFiles(m_hwnd, targetDir, files, isMove);
   };
 
   RegisterDragDrop(m_hwnd, m_pDropTarget);
@@ -150,6 +117,11 @@ static const COLORREF s_tabPalette[] = {
 static size_t s_tabColorIndex = 0;
 
 int TabBar::AddTab(const std::wstring &path, bool activate) {
+  if (path.find(L"645FF040-5081-101B-9F08-00AA002F954E") != std::wstring::npos ||
+      path.find(L"RecycleBinFolder") != std::wstring::npos) {
+      ShellExecuteW(nullptr, L"open", L"explorer.exe", L"::{645FF040-5081-101B-9F08-00AA002F954E}", nullptr, SW_SHOWNORMAL);
+      return -1;
+  }
   TabItem item;
   item.path = path;
   item.title = ShellUtils::GetDisplayName(path);
@@ -966,21 +938,104 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
       }
     }
 
-    if (m_dragging && wParam & MK_LBUTTON) {
-      // Drag reorder
-      if (m_hoverIndex != -1 && m_hoverIndex != m_dragIndex) {
-        std::swap(m_tabs[m_dragIndex], m_tabs[m_hoverIndex]);
-        if (m_activeIndex == m_dragIndex) {
-          m_activeIndex = m_hoverIndex;
-        } else if (m_activeIndex == m_hoverIndex) {
-          m_activeIndex = m_dragIndex;
+    if (m_dragging && (wParam & MK_LBUTTON) && m_dragIndex >= 0) {
+      if (!m_dragStarted) {
+        if (abs(pt.x - m_dragStart.x) >= 4 || abs(pt.y - m_dragStart.y) >= 4) {
+          m_dragStarted = true;
         }
-        m_dragIndex = m_hoverIndex;
-        RecalcLayout();
-        if (onTabOrderChanged) {
-          onTabOrderChanged();
+      }
+
+      if (m_dragStarted) {
+        RECT rcClient;
+        GetClientRect(hwnd, &rcClient);
+        int h = rcClient.bottom - rcClient.top;
+        POINT ptScreen = pt;
+        ClientToScreen(hwnd, &ptScreen);
+
+        bool inTabBarZone = (pt.y >= -25 && pt.y <= h + 18);
+
+        if (inTabBarZone) {
+          // Inside TabBar: Hide split drop overlay
+          if (onTabDragMove) {
+            onTabDragMove(-1, -1, ptScreen);
+          }
+
+          // Horizontal tab reordering
+          int targetIdx = m_dragIndex;
+          for (int i = 0; i < (int)m_tabs.size(); ++i) {
+            int midX = (m_tabs[i].rc.left + m_tabs[i].rc.right) / 2;
+            if (i < m_dragIndex) {
+              if (pt.x < midX) {
+                targetIdx = i;
+                break;
+              }
+            } else if (i > m_dragIndex) {
+              if (pt.x > midX) {
+                targetIdx = i;
+              }
+            }
+          }
+
+          if (targetIdx != m_dragIndex && targetIdx >= 0 && targetIdx < (int)m_tabs.size()) {
+            TabItem item = std::move(m_tabs[m_dragIndex]);
+            m_tabs.erase(m_tabs.begin() + m_dragIndex);
+            m_tabs.insert(m_tabs.begin() + targetIdx, std::move(item));
+
+            if (m_activeIndex == m_dragIndex) {
+              m_activeIndex = targetIdx;
+            } else if (m_dragIndex < m_activeIndex && targetIdx >= m_activeIndex) {
+              m_activeIndex--;
+            } else if (m_dragIndex > m_activeIndex && targetIdx <= m_activeIndex) {
+              m_activeIndex++;
+            }
+
+            m_dragIndex = targetIdx;
+            RecalcLayout();
+            if (onTabOrderChanged) {
+              onTabOrderChanged();
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+          }
+
+          // Track hover over another tab for potential host merge target
+          int curHoverTab = -1;
+          for (int i = 0; i < (int)m_tabs.size(); ++i) {
+            if (pt.x >= m_tabs[i].rc.left && pt.x <= m_tabs[i].rc.right) {
+              curHoverTab = i;
+              break;
+            }
+          }
+
+          if (curHoverTab != -1 && curHoverTab != m_dragIndex) {
+            m_targetHostTab = curHoverTab;
+            if (m_hoverTabCandidate != curHoverTab) {
+              m_hoverTabCandidate = curHoverTab;
+              m_hoverTabTick = GetTickCount();
+            } else if (GetTickCount() - m_hoverTabTick > 450) {
+              if (m_activeIndex != curHoverTab) {
+                SetActiveTab(curHoverTab);
+              }
+            }
+          }
+        } else if (pt.y > h + 18) {
+          // Dragged downward into file view area: Split/Merge mode!
+          int hostTab = m_targetHostTab;
+          if (hostTab < 0 || hostTab >= (int)m_tabs.size() || hostTab == m_dragIndex) {
+            if (m_prevActiveIndex >= 0 && m_prevActiveIndex < (int)m_tabs.size() && m_prevActiveIndex != m_dragIndex) {
+              hostTab = m_prevActiveIndex;
+            } else {
+              hostTab = (m_dragIndex > 0) ? (m_dragIndex - 1) : ((int)m_tabs.size() > 1 ? 1 : 0);
+            }
+          }
+          if (onTabDragMove) {
+            onTabDragMove(m_dragIndex, hostTab, ptScreen);
+          }
+        } else {
+          // Above tab bar or out of bounds
+          if (onTabDragMove) {
+            onTabDragMove(-1, -1, ptScreen);
+          }
         }
-        InvalidateRect(hwnd, nullptr, FALSE);
       }
     }
 
@@ -1005,9 +1060,10 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
     m_hoverNewTab = false;
     m_hoverScrollLeft = false;
     m_hoverScrollRight = false;
-    m_dragging = false;
-    UpdateTooltip(-1);
-    InvalidateRect(hwnd, nullptr, FALSE);
+    if (!m_dragging) {
+      UpdateTooltip(-1);
+      InvalidateRect(hwnd, nullptr, FALSE);
+    }
     return 0;
 
   case WM_MOUSEWHEEL: {
@@ -1059,9 +1115,14 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
             CloseTab((int)i);
             return 0;
           } else {
+            m_prevActiveIndex = m_activeIndex;
             SetActiveTab((int)i);
             m_dragging = true;
+            m_dragStarted = false;
             m_dragIndex = (int)i;
+            m_targetHostTab = -1;
+            m_hoverTabCandidate = -1;
+            m_hoverTabTick = 0;
             m_dragStart = pt;
             SetCapture(hwnd);
             return 0;
@@ -1072,12 +1133,67 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
     return 0;
   }
 
-  case WM_LBUTTONUP:
+  case WM_LBUTTONUP: {
     if (m_dragging) {
+      int dragIdx = m_dragIndex;
+      int hostTab = m_targetHostTab;
+      bool wasStarted = m_dragStarted;
       m_dragging = false;
+      m_dragStarted = false;
+      m_dragIndex = -1;
+      m_targetHostTab = -1;
+      m_hoverTabCandidate = -1;
+      ReleaseCapture();
+
+      POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+      POINT ptScreen = pt;
+      ClientToScreen(hwnd, &ptScreen);
+      RECT rcClient;
+      GetClientRect(hwnd, &rcClient);
+      int h = rcClient.bottom - rcClient.top;
+
+      if (wasStarted && pt.y > h + 18) {
+        if (hostTab < 0 || hostTab >= (int)m_tabs.size() || hostTab == dragIdx) {
+          if (m_prevActiveIndex >= 0 && m_prevActiveIndex < (int)m_tabs.size() && m_prevActiveIndex != dragIdx) {
+            hostTab = m_prevActiveIndex;
+          } else {
+            hostTab = (dragIdx > 0) ? (dragIdx - 1) : ((int)m_tabs.size() > 1 ? 1 : 0);
+          }
+        }
+        if (onTabDragEnd) {
+          onTabDragEnd(dragIdx, hostTab, ptScreen);
+        }
+      } else {
+        if (onTabDragMove) {
+          onTabDragMove(-1, -1, ptScreen);
+        }
+      }
+      InvalidateRect(hwnd, nullptr, FALSE);
+    } else {
+      m_dragging = false;
+      m_dragStarted = false;
+      m_dragIndex = -1;
+      m_targetHostTab = -1;
+      m_hoverTabCandidate = -1;
       ReleaseCapture();
     }
     return 0;
+  }
+  case WM_CAPTURECHANGED: {
+    if (m_dragging) {
+      m_dragging = false;
+      m_dragStarted = false;
+      m_dragIndex = -1;
+      m_targetHostTab = -1;
+      m_hoverTabCandidate = -1;
+      if (onTabDragMove) {
+        POINT ptScreen = {0, 0};
+        GetCursorPos(&ptScreen);
+        onTabDragMove(-1, -1, ptScreen);
+      }
+    }
+    return 0;
+  }
 
   case WM_RBUTTONUP: {
     POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};

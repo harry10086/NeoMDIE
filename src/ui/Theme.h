@@ -24,6 +24,7 @@ public:
     int Scale(int val, HWND hwnd = nullptr) const;
     UINT GetDpi(HWND hwnd = nullptr) const;
     float GetScaleFactor(HWND hwnd = nullptr) const { return (float)GetDpi(hwnd) / 96.0f; }
+    int Unscale(int val, HWND hwnd = nullptr) const { float s = GetScaleFactor(hwnd); return (s > 0.0f) ? (int)((float)val / s + 0.5f) : val; }
 
     // Colors
     COLORREF ClrBackground() const;

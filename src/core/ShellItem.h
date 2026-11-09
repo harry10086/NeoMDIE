@@ -46,4 +46,4 @@ enum class ColumnId {
     Count = 10
 };
 
-bool CompareShellItems(const NeoShellItem& a, const NeoShellItem& b, SortColumn col, bool ascending);
+bool CompareShellItems(const NeoShellItem& a, const NeoShellItem& b, SortColumn col, bool ascending, bool foldersFirst = true);

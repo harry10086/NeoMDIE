@@ -230,6 +230,7 @@ std::wstring GestureEngine::GetActionName(GestureAction action) {
     case GestureAction::ToggleHidden:    return zh ? L"显示/隐藏隐藏文件" : L"Toggle Hidden Files";
     case GestureAction::OpenSettings:    return zh ? L"选项与设置" : L"Options & Settings";
     case GestureAction::InvertSelection: return zh ? L"反向选择" : L"Invert Selection";
+    case GestureAction::Undo:            return zh ? L"撤销" : L"Undo";
     default: return zh ? L"无动作" : L"None";
     }
 }

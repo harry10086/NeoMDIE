@@ -79,6 +79,7 @@ static HWND s_hChkPreview = nullptr;
 // Page 5: View & File List
 static HWND s_hViewModeCombo = nullptr;
 static HWND s_hChkHidden = nullptr;
+static HWND s_hChkFoldersFirst = nullptr;
 static HWND s_hChkCalcSize = nullptr;
 static HWND s_hChkZebraStriping = nullptr;
 static HWND s_hChkGridLines = nullptr;
@@ -173,7 +174,8 @@ static const ActionDef s_allActions[] = {
     { (int)GestureAction::NewMD, L"新建Markdown文档", L"New Markdown Document" },
     { (int)GestureAction::ToggleHidden, L"显示/隐藏隐藏文件", L"Toggle Hidden Files" },
     { (int)GestureAction::OpenSettings, L"选项与设置", L"Options & Settings" },
-    { (int)GestureAction::InvertSelection, L"反向选择", L"Invert Selection" }
+    { (int)GestureAction::InvertSelection, L"反向选择", L"Invert Selection" },
+    { (int)GestureAction::Undo, L"撤销", L"Undo" }
 };
 
 struct GestPatternDef {
@@ -302,6 +304,8 @@ static void ResetDefaultShortcuts() {
         { zh ? L"向上翻页" : L"Page Up", L"PageUp", false, false, false, L"PageUp" },
         { zh ? L"向下翻页" : L"Page Down", L"PageDown", false, false, false, L"PageDown" },
         { zh ? L"全选" : L"Select All", L"A", false, true, false, L"Ctrl + A" },
+        { zh ? L"反向选择" : L"Invert Selection", L"I", false, true, false, L"Ctrl + I" },
+        { zh ? L"撤销" : L"Undo", L"Z", false, true, false, L"Ctrl + Z" },
         { zh ? L"复制选中项" : L"Copy", L"C", false, true, false, L"Ctrl + C" },
         { zh ? L"剪切选中项" : L"Cut", L"X", false, true, false, L"Ctrl + X" },
         { zh ? L"粘贴" : L"Paste", L"V", false, true, false, L"Ctrl + V" },
@@ -870,6 +874,10 @@ void SettingsDialog::CreateControls(HWND hwnd) {
                           y4, 341, cfg.showHidden);
   y4 += lineH + spacing;
 
+  s_hChkFoldersFirst = createChk(5, zh ? L"文件夹排在前面（取消则文件排在前面）" : L"Show folders first (uncheck for files first)",
+                                y4, 345, cfg.foldersFirst);
+  y4 += lineH + spacing;
+
   s_hChkCalcSize = createChk(5, zh ? L"后台自动计算文件夹真实大小" : L"Calculate folder sizes in background",
                             y4, 342, cfg.calcFolderSize);
   y4 += lineH + spacing;
@@ -1243,6 +1251,7 @@ void SettingsDialog::SaveSettings(HWND hwnd) {
   // Page 5: View & File List
   cfg.viewMode = (int)SendMessageW(s_hViewModeCombo, CB_GETCURSEL, 0, 0);
   cfg.showHidden = (SendMessageW(s_hChkHidden, BM_GETCHECK, 0, 0) == BST_CHECKED);
+  cfg.foldersFirst = (SendMessageW(s_hChkFoldersFirst, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.calcFolderSize = (SendMessageW(s_hChkCalcSize, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.showGridLines = (SendMessageW(s_hChkGridLines, BM_GETCHECK, 0, 0) == BST_CHECKED);
 

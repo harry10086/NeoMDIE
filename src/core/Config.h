@@ -89,6 +89,13 @@ inline ActionTrigger GetCurrentTrigger(bool isMiddle = false, bool isDouble = fa
     return ActionTrigger::LeftClick;
 }
 
+struct FolderViewSettings {
+    int sortCol = -1;      // -1: default / not set
+    bool sortAsc = true;
+    int viewMode = -1;     // -1: default / not set
+    int foldersFirst = -1; // -1: not set / use global, 0: files first, 1: folders first
+    std::unordered_map<int, int> columnWidths; // colId -> width in px
+};
 
 class Config {
 public:
@@ -99,6 +106,16 @@ public:
 
     std::wstring GetConfigFilePath() const { return m_iniPath; }
     std::wstring GetIniPath() const { return m_iniPath; }
+
+    static std::wstring NormalizeFolderKey(const std::wstring& path) {
+        if (path.empty()) return L"";
+        std::wstring k = path;
+        for (auto& ch : k) ch = towlower(ch);
+        while (k.length() > 3 && (k.back() == L'\\' || k.back() == L'/')) {
+            k.pop_back();
+        }
+        return k;
+    }
 
     WindowPlacementConfig window;
     int themeMode = -1; // -1: auto, 0: light, 1: dark
@@ -113,11 +130,84 @@ public:
     int previewWidth = 320;
     int viewMode = 0; // 0: Details, 1: Large Icons, 2: Small Icons, 3: List, 4: Tiles
     bool showHidden = false;
+    bool foldersFirst = true;
     bool calcFolderSize = false;
     bool zebraStriping = false;
     bool showGridLines = false;
     bool singleInstance = true;
     bool gesturesEnabled = true;
+
+    // Per-folder settings and global fallback column widths
+    std::unordered_map<int, int> columnWidths;
+    std::unordered_map<std::wstring, FolderViewSettings> folderViewMap;
+
+    int GetColumnWidth(int colId, int defaultWidth) const {
+        auto it = columnWidths.find(colId);
+        if (it != columnWidths.end() && it->second > 20) {
+            return it->second;
+        }
+        return defaultWidth;
+    }
+    void SetColumnWidth(int colId, int width) {
+        if (width > 20) {
+            columnWidths[colId] = width;
+        }
+    }
+
+    bool HasFolderView(const std::wstring& path) const {
+        std::wstring key = NormalizeFolderKey(path);
+        return folderViewMap.find(key) != folderViewMap.end();
+    }
+
+    FolderViewSettings GetFolderView(const std::wstring& path) const {
+        std::wstring key = NormalizeFolderKey(path);
+        auto it = folderViewMap.find(key);
+        if (it != folderViewMap.end()) {
+            return it->second;
+        }
+        FolderViewSettings def;
+        def.viewMode = viewMode;
+        return def;
+    }
+
+    int GetFolderColumnWidth(const std::wstring& path, int colId, int defaultWidth) const {
+        std::wstring key = NormalizeFolderKey(path);
+        auto it = folderViewMap.find(key);
+        if (it != folderViewMap.end()) {
+            auto cit = it->second.columnWidths.find(colId);
+            if (cit != it->second.columnWidths.end() && cit->second > 20) {
+                return cit->second;
+            }
+        }
+        return GetColumnWidth(colId, defaultWidth);
+    }
+
+    void SetFolderColumnWidth(const std::wstring& path, int colId, int width) {
+        if (path.empty() || width <= 20) return;
+        std::wstring key = NormalizeFolderKey(path);
+        folderViewMap[key].columnWidths[colId] = width;
+        SetColumnWidth(colId, width);
+    }
+
+    void SetFolderSort(const std::wstring& path, int sortCol, bool sortAsc) {
+        if (path.empty()) return;
+        std::wstring key = NormalizeFolderKey(path);
+        folderViewMap[key].sortCol = sortCol;
+        folderViewMap[key].sortAsc = sortAsc;
+    }
+
+    void SetFolderViewMode(const std::wstring& path, int mode) {
+        if (path.empty() || mode < 0) return;
+        std::wstring key = NormalizeFolderKey(path);
+        folderViewMap[key].viewMode = mode;
+    }
+
+    void SetFolderFoldersFirst(const std::wstring& path, bool first) {
+        if (path.empty()) return;
+        std::wstring key = NormalizeFolderKey(path);
+        folderViewMap[key].foldersFirst = first ? 1 : 0;
+    }
+
     std::vector<GestureEntry> gestures;
     std::vector<ShortcutItemConfig> shortcuts;
 

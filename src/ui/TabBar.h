@@ -74,7 +74,10 @@ public:
   std::function<void(int index)> onTabClosed;
   std::function<void()> onTabOrderChanged;
   std::function<void()> onNewTabRequested;
+  int GetPrevActiveIndex() const { return m_prevActiveIndex; }
   std::function<void(const std::wstring &path)> onOpenTerminalRequested;
+  std::function<void(int dragIndex, int hostTabIndex, POINT ptScreen)> onTabDragMove;
+  std::function<void(int dragIndex, int hostTabIndex, POINT ptScreen)> onTabDragEnd;
 
 private:
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam,
@@ -89,6 +92,7 @@ private:
   std::vector<TabItem> m_tabs;
   std::vector<std::wstring> m_closedHistory;
   int m_activeIndex = -1;
+  int m_prevActiveIndex = -1;
   int m_hoverIndex = -1;
   bool m_hoverClose = false;
   bool m_hoverNewTab = false;
@@ -96,6 +100,8 @@ private:
 
   bool m_dragging = false;
   int m_dragIndex = -1;
+  bool m_dragStarted = false;
+  int m_targetHostTab = -1;
   class DropTarget *m_pDropTarget = nullptr;
   DWORD m_hoverTabTick = 0;
   int m_hoverTabCandidate = -1;

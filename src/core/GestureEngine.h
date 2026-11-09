@@ -40,7 +40,8 @@ enum class GestureAction {
     NewMD = 35,
     ToggleHidden = 36,
     OpenSettings = 37,
-    InvertSelection = 38
+    InvertSelection = 38,
+    Undo = 39
 };
 
 class GestureEngine {

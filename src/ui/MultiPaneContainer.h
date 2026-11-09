@@ -29,6 +29,7 @@ public:
   int GetPaneCount() const;
 
   void CycleActivePane();
+  void SwapPanes(int idxA, int idxB);
   void ClosePane(int index);
   void ToggleMaximizePane(int index);
   void MinimizePane(int index);
@@ -39,11 +40,14 @@ public:
   void LayoutChildren();
   void SetShowHidden(bool show);
   void SetCalcFolderSize(bool calc);
+  void ReSortAllPanes();
 
   std::function<void(int activeIndex, const std::wstring &path)> onActivePaneChanged;
   std::function<void(PaneLayout newLayout)> onLayoutChanged;
   std::function<void(GestureAction action)> onGestureAction;
   std::function<void(int neoCmd, const std::wstring &path)> onCustomCommand;
+  std::function<void(int paneIdx, POINT ptScreen)> onPaneDragMove;
+  std::function<void(int paneIdx, POINT ptScreen)> onPaneDragEnd;
 
 private:
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -66,4 +70,8 @@ private:
 
   bool m_draggingSplitH = false;
   bool m_draggingSplitV = false;
+
+  bool m_draggingPane = false;
+  int m_dragPaneIdx = -1;
+  POINT m_dragPaneStart = {0, 0};
 };

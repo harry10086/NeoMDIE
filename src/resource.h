@@ -63,6 +63,8 @@
 #define ID_VIEW_SORT_SIZE               40045
 #define ID_VIEW_SORT_ASC                40046
 #define ID_VIEW_SORT_DESC               40047
+#define ID_VIEW_SORT_FOLDERS_FIRST      40170
+#define ID_VIEW_SORT_FILES_FIRST        40171
 #define ID_VIEW_TOGGLE_LINKS            40048
 
 #define ID_VIEW_LOCK_TOOLBARS           40099

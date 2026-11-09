@@ -1,4 +1,5 @@
 #include "ShellItem.h"
+#include "Config.h"
 
 bool NeoShellItem::MatchesFilter(const std::wstring& query) const {
     if (query.empty()) return true;
@@ -22,10 +23,9 @@ bool NeoShellItem::MatchesFilter(const std::wstring& query) const {
     return lowerName.find(lowerQuery) != std::wstring::npos;
 }
 
-bool CompareShellItems(const NeoShellItem& a, const NeoShellItem& b, SortColumn col, bool ascending) {
-    // Folders always come first
+bool CompareShellItems(const NeoShellItem& a, const NeoShellItem& b, SortColumn col, bool ascending, bool foldersFirst) {
     if (a.isFolder != b.isFolder) {
-        return a.isFolder;
+        return foldersFirst ? a.isFolder : b.isFolder;
     }
 
     int result = 0;

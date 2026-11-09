@@ -33,6 +33,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     while (!folderArg.empty() && (folderArg.back() == L'"' || folderArg.back() == L' ')) folderArg.pop_back();
     while (!folderArg.empty() && folderArg.front() == L'"') folderArg.erase(folderArg.begin());
     if (folderArg.length() == 2 && folderArg[1] == L':') folderArg += L"\\";
+    if (folderArg.find(L"645FF040-5081-101B-9F08-00AA002F954E") != std::wstring::npos ||
+        folderArg.find(L"RecycleBinFolder") != std::wstring::npos) {
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", L"::{645FF040-5081-101B-9F08-00AA002F954E}", nullptr, SW_SHOWNORMAL);
+        OleUninitialize();
+        return 0;
+    }
     if (folderArg.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
         folderArg = L"This PC";
     }
