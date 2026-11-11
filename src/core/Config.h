@@ -119,6 +119,8 @@ public:
 
     WindowPlacementConfig window;
     int themeMode = -1; // -1: auto, 0: light, 1: dark
+    int accentColorMode = 0; // 0: Neo Blue, 1: Emerald/Teal, 2: Purple, 3: Orange, 4: Red, 5: Slate, 6: Custom
+    COLORREF customAccentColor = RGB(0, 120, 212);
     int language = -1;  // -1: auto, 0: Chinese, 1: English
     bool showTree = true;
     int treeWidth = 280;
@@ -130,6 +132,10 @@ public:
     int previewWidth = 320;
     int viewMode = 0; // 0: Details, 1: Large Icons, 2: Small Icons, 3: List, 4: Tiles
     bool showHidden = false;
+    bool hideDotFiles = true;  // 默认隐藏 . 开头的点文件/点文件夹
+    bool showItemCheckBoxes = false; // 项目复选框 (Item check boxes)
+    int listDensity = 1;       // 间距调整: 0: 紧凑, 1: 适中 (默认), 2: 宽松
+    int listScale = 1;         // 放大调整: 0: 偏小 (9pt/90%), 1: 标准 (10pt/100%, 默认), 2: 放大 (12pt/125%)
     bool foldersFirst = true;
     bool calcFolderSize = false;
     bool zebraStriping = false;
@@ -229,6 +235,7 @@ public:
     bool restoreTabsOnStartup = true;
     bool minimizeToTray = false;
     bool closeToTray = false;
+    bool showMenuBar = false;
     bool showToolbarStandard = true;
     bool showToolbarAddress = true;
     bool showToolbarLinks = true;
@@ -243,6 +250,13 @@ public:
     TargetActionConfig actionTree;
     TargetActionConfig actionLinks;
     TargetActionConfig actionAddress;
+
+    // Quick Access (快速访问)
+    std::vector<std::wstring> quickAccessFolders;
+    void InitDefaultQuickAccess();
+    bool AddQuickAccess(const std::wstring& path);
+    bool RemoveQuickAccess(const std::wstring& path);
+    void ResetQuickAccess();
 
 private:
     Config();

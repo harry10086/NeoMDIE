@@ -56,7 +56,7 @@ HWND FilterBar::Create(HWND hwndParent, int id) {
 void FilterBar::UpdateLanguage() {
     if (m_hwndEdit) {
         bool isZh = I18n::Get().IsChinese();
-        SendMessageW(m_hwndEdit, EM_SETCUEBANNER, TRUE, (LPARAM)(isZh ? L"🔍 搜索过滤..." : L"🔍 Search & Filter..."));
+        SendMessageW(m_hwndEdit, EM_SETCUEBANNER, TRUE, (LPARAM)(isZh ? L"搜索过滤..." : L"Search & Filter..."));
     }
 }
 
@@ -86,16 +86,34 @@ std::wstring FilterBar::GetText() const {
 void FilterBar::UpdateLayout(int x, int y, int width, int height) {
     if (m_hwnd) {
         MoveWindow(m_hwnd, x, y, width, height, TRUE);
-        int optW = Theme::Get().Scale(26, m_hwnd);
-        int editW = width - optW - Theme::Get().Scale(10, m_hwnd);
-        int editH = height - Theme::Get().Scale(8, m_hwnd);
+        int optW = Theme::Get().Scale(24, m_hwnd);
+        int padLeft = Theme::Get().Scale(28, m_hwnd);
+        int editW = width - optW - padLeft - Theme::Get().Scale(6, m_hwnd);
+
+        int fontH = Theme::Get().Scale(16, m_hwnd);
         if (m_hwndEdit) {
-            MoveWindow(m_hwndEdit, Theme::Get().Scale(6, m_hwnd), Theme::Get().Scale(4, m_hwnd),
-                       editW, editH, TRUE);
+            HDC hdc = GetDC(m_hwndEdit);
+            HFONT hFont = (HFONT)SendMessageW(m_hwndEdit, WM_GETFONT, 0, 0);
+            if (!hFont) hFont = Theme::Get().GetUIFont(m_hwnd);
+            HGDIOBJ oldFont = SelectObject(hdc, hFont);
+            TEXTMETRIC tm;
+            if (GetTextMetrics(hdc, &tm)) {
+                fontH = tm.tmHeight;
+            }
+            SelectObject(hdc, oldFont);
+            ReleaseDC(m_hwndEdit, hdc);
+        }
+
+        int editH = fontH;
+        int editY = (height - editH) / 2;
+        if (m_hwndEdit) {
+            MoveWindow(m_hwndEdit, padLeft, editY, editW, editH, TRUE);
         }
         if (m_hwndOptBtn) {
+            int optH = height - Theme::Get().Scale(6, m_hwnd);
+            int optY = (height - optH) / 2;
             MoveWindow(m_hwndOptBtn, width - optW - Theme::Get().Scale(4, m_hwnd),
-                       Theme::Get().Scale(3, m_hwnd), optW, height - Theme::Get().Scale(6, m_hwnd), TRUE);
+                       optY, optW, optH, TRUE);
         }
         InvalidateRect(m_hwnd, nullptr, TRUE);
     }
@@ -131,6 +149,14 @@ void FilterBar::ShowOptionsMenu() {
 LRESULT CALLBACK FilterBar::EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     FilterBar* pThis = (FilterBar*)dwRefData;
     switch (msg) {
+    case WM_SETFOCUS:
+        pThis->m_isFocused = true;
+        InvalidateRect(pThis->m_hwnd, nullptr, TRUE);
+        break;
+    case WM_KILLFOCUS:
+        pThis->m_isFocused = false;
+        InvalidateRect(pThis->m_hwnd, nullptr, TRUE);
+        break;
     case WM_KEYUP: {
         if (wParam == VK_ESCAPE) {
             pThis->Clear();
@@ -176,8 +202,21 @@ LRESULT CALLBACK FilterBar::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         DRAWITEMSTRUCT* pdis = (DRAWITEMSTRUCT*)lParam;
         if (pdis && pdis->CtlID == 102) {
             bool isDown = (pdis->itemState & ODS_SELECTED);
-            HBRUSH hbg = isDown ? Theme::Get().BrushSelected() : Theme::Get().BrushSurface();
-            FillRect(pdis->hDC, &pdis->rcItem, hbg);
+            COLORREF boxBg = Theme::Get().IsDarkMode() ? RGB(32, 33, 36) : RGB(241, 243, 244);
+            HBRUSH hClearBg = CreateSolidBrush(boxBg);
+            FillRect(pdis->hDC, &pdis->rcItem, hClearBg);
+            DeleteObject(hClearBg);
+
+            if (isDown) {
+                HBRUSH hbrDown = Theme::Get().BrushSelected();
+                HPEN hPen = Theme::Get().PenBorder();
+                HGDIOBJ oldBrush = SelectObject(pdis->hDC, hbrDown);
+                HGDIOBJ oldPen = SelectObject(pdis->hDC, hPen);
+                int rad = Theme::Get().Scale(6, hwnd);
+                RoundRect(pdis->hDC, pdis->rcItem.left, pdis->rcItem.top, pdis->rcItem.right, pdis->rcItem.bottom, rad, rad);
+                SelectObject(pdis->hDC, oldBrush);
+                SelectObject(pdis->hDC, oldPen);
+            }
 
             SetBkMode(pdis->hDC, TRANSPARENT);
             SetTextColor(pdis->hDC, Theme::Get().ClrTextPrimary());
@@ -196,24 +235,48 @@ LRESULT CALLBACK FilterBar::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
-        HBRUSH hbr = Theme::Get().BrushSurface();
-        FillRect(hdc, &rc, hbr);
+        FillRect(hdc, &rc, Theme::Get().BrushSurface());
 
-        HPEN hPen = Theme::Get().PenBorder();
+        int rad = Theme::Get().Scale(10, hwnd);
+        RECT rcBox = { 0, 0, rc.right - 1, rc.bottom - 1 };
+        COLORREF boxBg = Theme::Get().IsDarkMode() ? RGB(32, 33, 36) : RGB(241, 243, 244);
+        HBRUSH hbrBox = CreateSolidBrush(boxBg);
+        HPEN hPen = pThis->m_isFocused ? CreatePen(PS_SOLID, 2, Theme::Get().ClrAccent()) : Theme::Get().PenBorder();
+
+        HGDIOBJ oldBrush = SelectObject(hdc, hbrBox);
         HGDIOBJ oldPen = SelectObject(hdc, hPen);
-        SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        Rectangle(hdc, 0, 0, rc.right, rc.bottom);
+        RoundRect(hdc, rcBox.left, rcBox.top, rcBox.right, rcBox.bottom, rad, rad);
+        SelectObject(hdc, oldBrush);
         SelectObject(hdc, oldPen);
+        DeleteObject(hbrBox);
+        if (pThis->m_isFocused) DeleteObject(hPen);
+
+        // Draw crisp modern Search magnifying glass icon (Segoe Fluent / MDL2: 0xE721)
+        int iconX = Theme::Get().Scale(8, hwnd);
+        int iconW = Theme::Get().Scale(16, hwnd);
+        RECT rcIcon = { iconX, 0, iconX + iconW, rc.bottom };
+        HFONT hIconFont = Theme::Get().GetIconFont(12, hwnd);
+        HGDIOBJ oldIconFont = SelectObject(hdc, hIconFont);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, pThis->m_isFocused ? Theme::Get().ClrAccent() : Theme::Get().ClrTextSecondary());
+        wchar_t searchGlyph[2] = { (wchar_t)0xE721, 0 };
+        DrawTextW(hdc, searchGlyph, 1, &rcIcon, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, oldIconFont);
+        DeleteObject(hIconFont);
 
         EndPaint(hwnd, &ps);
         return 0;
     }
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORSTATIC: {
-        HDC hdc = (HDC)wParam;
-        SetTextColor(hdc, Theme::Get().ClrTextPrimary());
-        SetBkColor(hdc, Theme::Get().ClrSurface());
-        return (INT_PTR)Theme::Get().BrushSurface();
+        HDC hdcEdit = (HDC)wParam;
+        COLORREF boxBg = Theme::Get().IsDarkMode() ? RGB(32, 33, 36) : RGB(241, 243, 244);
+        SetTextColor(hdcEdit, Theme::Get().ClrTextPrimary());
+        SetBkColor(hdcEdit, boxBg);
+        static HBRUSH s_hbrSearchEdit = nullptr;
+        if (s_hbrSearchEdit) DeleteObject(s_hbrSearchEdit);
+        s_hbrSearchEdit = CreateSolidBrush(boxBg);
+        return (INT_PTR)s_hbrSearchEdit;
     }
     case WM_ERASEBKGND: {
         HDC hdc = (HDC)wParam;

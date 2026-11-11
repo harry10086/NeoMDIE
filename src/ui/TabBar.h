@@ -64,6 +64,9 @@ public:
 
   void SetTabColor(int index, COLORREF color);
   COLORREF GetTabColor(int index) const;
+  void ApplyTheme() { if (m_hwnd) InvalidateRect(m_hwnd, nullptr, TRUE); }
+  void SetLeftOffset(int offset) { m_leftOffset = offset; }
+  int GetLeftOffset() const { return m_leftOffset; }
 
   void UpdateLayout(int width, int height);
   void EnsureTabVisible(int index);
@@ -88,7 +91,13 @@ private:
   void RecalcLayout();
   void ShowTabContextMenu(int index, POINT ptScreen);
 
+  HWND m_hwndParent = nullptr;
   HWND m_hwnd = nullptr;
+  int m_leftOffset = 0;
+  RECT m_rcMinBtn = {0};
+  RECT m_rcMaxBtn = {0};
+  RECT m_rcCloseBtn = {0};
+  int m_hoverCaptionBtn = 0;
   std::vector<TabItem> m_tabs;
   std::vector<std::wstring> m_closedHistory;
   int m_activeIndex = -1;

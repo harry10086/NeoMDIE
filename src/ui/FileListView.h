@@ -53,9 +53,16 @@ public:
                               // List, 4: Tiles
   int GetViewMode() const { return m_viewMode; }
   void SetShowHidden(bool show);
+  void SetHideDotFiles(bool hide);
+  void ApplyDensity(int density);
+  void ApplyScale(int scale);
+  void ApplyViewMetrics();
+  int GetDesiredRowHeight() const;
   void SetCalcFolderSize(bool calc);
   void UpdateColumnsLanguage();
   void UpdateHeaderSortArrow();
+  void UpdateHeaderCheckBox();
+  void ApplyItemCheckBoxes();
   void ShowColumnHeaderMenu(POINT ptScreen);
   void RebuildColumns();
   void SaveColumnWidths();
@@ -100,6 +107,7 @@ public:
   std::function<void(const std::wstring &newPath)> onPathChanged;
   std::function<void(const std::wstring &selectedFile)> onSelectionChanged;
   std::function<void(int count, uint64_t totalSize)> onStatusUpdated;
+  std::function<void(const std::wstring &statusText)> onStatusText;
   std::function<void(GestureAction action)> onGestureAction;
   std::function<void(int neoCmd, const std::wstring &path)> onCustomCommand;
 
@@ -143,6 +151,9 @@ private:
   bool m_sortAsc = true;
   bool m_foldersFirst = true;
   bool m_showHidden = false;
+  bool m_hideDotFiles = true;
+  HFONT m_hFontText = nullptr;
+  HFONT m_hFontRowMetric = nullptr;
   bool m_calcFolderSize = false;
 
   int m_dropHighlightItem = -1;
@@ -158,8 +169,25 @@ private:
   std::atomic<bool> m_searchCancelled{false};
   std::thread m_searchThread;
 
+  struct AsyncNavResult {
+    int generation = 0;
+    std::wstring path;
+    bool success = false;
+    std::vector<NeoShellItem> items;
+  };
+
+  std::atomic<int> m_navGeneration{0};
+  bool m_isNavLoading = false;
+
+  std::atomic<int> m_iconNavGeneration{0};
+  std::thread m_iconThread;
+  void StartCustomIconLoader();
+  void CancelCustomIconLoader();
+
   static const UINT WM_NOTIFY_DIR_CHANGED = WM_APP + 101;
   static const UINT WM_NOTIFY_FOLDER_SIZE = WM_APP + 102;
   static const UINT WM_SEARCH_BATCH = WM_APP + 103;
   static const UINT WM_SEARCH_COMPLETE = WM_APP + 104;
+  static const UINT WM_ASYNC_NAV_COMPLETE = WM_APP + 105;
+  static const UINT WM_REFRESH_ICONS = WM_APP + 106;
 };

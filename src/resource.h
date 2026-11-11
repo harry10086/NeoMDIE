@@ -65,6 +65,15 @@
 #define ID_VIEW_SORT_DESC               40047
 #define ID_VIEW_SORT_FOLDERS_FIRST      40170
 #define ID_VIEW_SORT_FILES_FIRST        40171
+#define ID_VIEW_HIDE_DOTFILES           40172
+#define ID_VIEW_DENSITY_COMPACT         40173
+#define ID_VIEW_DENSITY_COMFORTABLE     40174
+#define ID_VIEW_DENSITY_SPACIOUS        40175
+#define ID_VIEW_SCALE_SMALL             40177
+#define ID_VIEW_SCALE_MEDIUM            40178
+#define ID_VIEW_SCALE_LARGE             40179
+#define ID_VIEW_ITEM_CHECKBOXES         40180
+#define ID_VIEW_TOGGLE_MENUBAR          40176
 #define ID_VIEW_TOGGLE_LINKS            40048
 
 #define ID_VIEW_LOCK_TOOLBARS           40099

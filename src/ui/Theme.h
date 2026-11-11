@@ -42,7 +42,10 @@ public:
     HBRUSH BrushHover() const { return m_hbrHover; }
     HBRUSH BrushSelected() const { return m_hbrSelected; }
     HBRUSH BrushBorder() const { return m_hbrBorder; }
+    HBRUSH BrushAccent() const { return m_hbrAccent; }
     HPEN   PenBorder() const { return m_hpenBorder; }
+
+    void RecreateGdiObjects();
 
     HFONT GetUIFont(HWND hwnd = nullptr);
     HFONT GetUIFontBold(HWND hwnd = nullptr);
@@ -53,7 +56,6 @@ private:
     ~Theme();
 
     void DetectSystemDarkMode();
-    void RecreateGdiObjects();
 
     bool m_isDark = false;
     bool m_autoMode = true;
@@ -63,6 +65,7 @@ private:
     HBRUSH m_hbrHover = nullptr;
     HBRUSH m_hbrSelected = nullptr;
     HBRUSH m_hbrBorder = nullptr;
+    HBRUSH m_hbrAccent = nullptr;
     HPEN   m_hpenBorder = nullptr;
 
     HFONT  m_fontUI = nullptr;

@@ -41,7 +41,14 @@ enum class GestureAction {
     ToggleHidden = 36,
     OpenSettings = 37,
     InvertSelection = 38,
-    Undo = 39
+    Undo = 39,
+    ToggleCheckBoxes = 40,
+    ToggleDotFiles = 41,
+    ToggleCalcFolderSize = 42,
+    FocusAddress = 43,
+    FocusFilter = 44,
+    ToggleDarkMode = 45,
+    ToggleMenuBar = 46
 };
 
 class GestureEngine {

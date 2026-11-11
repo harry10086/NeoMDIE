@@ -1,4 +1,5 @@
 #include "Theme.h"
+#include "..\core\Config.h"
 
 Theme& Theme::Get() {
     static Theme instance;
@@ -24,6 +25,7 @@ Theme::~Theme() {
     if (m_hbrHover) DeleteObject(m_hbrHover);
     if (m_hbrSelected) DeleteObject(m_hbrSelected);
     if (m_hbrBorder) DeleteObject(m_hbrBorder);
+    if (m_hbrAccent) DeleteObject(m_hbrAccent);
     if (m_hpenBorder) DeleteObject(m_hpenBorder);
     if (m_fontUI) DeleteObject(m_fontUI);
     if (m_fontUIBold) DeleteObject(m_fontUIBold);
@@ -140,7 +142,24 @@ COLORREF Theme::ClrTextSecondary() const {
 }
 
 COLORREF Theme::ClrAccent() const {
-    return m_isDark ? RGB(96, 205, 255) : RGB(0, 120, 212);
+    int mode = Config::Get().accentColorMode;
+    switch (mode) {
+    case 1: // Emerald Teal
+        return m_isDark ? RGB(80, 227, 194) : RGB(16, 137, 62);
+    case 2: // Fluent Purple
+        return m_isDark ? RGB(180, 140, 255) : RGB(112, 60, 216);
+    case 3: // Sunset Orange
+        return m_isDark ? RGB(255, 155, 80) : RGB(232, 90, 20);
+    case 4: // Crimson Red
+        return m_isDark ? RGB(255, 110, 120) : RGB(216, 40, 60);
+    case 5: // Monochrome Slate
+        return m_isDark ? RGB(190, 195, 205) : RGB(70, 75, 85);
+    case 6: // Custom
+        return Config::Get().customAccentColor;
+    case 0: // Default Neo Blue
+    default:
+        return m_isDark ? RGB(96, 205, 255) : RGB(0, 120, 212);
+    }
 }
 
 void Theme::RecreateGdiObjects() {
@@ -149,6 +168,7 @@ void Theme::RecreateGdiObjects() {
     if (m_hbrHover) DeleteObject(m_hbrHover);
     if (m_hbrSelected) DeleteObject(m_hbrSelected);
     if (m_hbrBorder) DeleteObject(m_hbrBorder);
+    if (m_hbrAccent) DeleteObject(m_hbrAccent);
     if (m_hpenBorder) DeleteObject(m_hpenBorder);
 
     m_hbrBg = CreateSolidBrush(ClrBackground());
@@ -156,6 +176,7 @@ void Theme::RecreateGdiObjects() {
     m_hbrHover = CreateSolidBrush(ClrHover());
     m_hbrSelected = CreateSolidBrush(ClrSelected());
     m_hbrBorder = CreateSolidBrush(ClrBorder());
+    m_hbrAccent = CreateSolidBrush(ClrAccent());
     m_hpenBorder = CreatePen(PS_SOLID, 1, ClrBorder());
 }
 

@@ -39,6 +39,10 @@ public:
   void ApplyTheme();
   void LayoutChildren();
   void SetShowHidden(bool show);
+  void SetHideDotFiles(bool hide);
+  void ApplyDensity(int density);
+  void ApplyScale(int scale);
+  void ApplyItemCheckBoxes();
   void SetCalcFolderSize(bool calc);
   void ReSortAllPanes();
 

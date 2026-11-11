@@ -12,6 +12,45 @@ static std::unordered_map<HWND, bool> s_btnHoverMap;
 
 #define WM_TRAY_NOTIFY (WM_USER + 201)
 
+// Undocumented User32 / UxTheme messages and structures for native menu bar dark mode
+#define WM_UAHDRAWMENU         0x0091
+#define WM_UAHDRAWMENUITEM     0x0092
+#define WM_UAHMEASUREMENUITEM  0x0094
+
+typedef union tagUAHMENUITEMMETRICS {
+    struct { DWORD cx; DWORD cy; } rgsizeBar[2];
+    struct { DWORD cx; DWORD cy; } rgsizePopup[4];
+} UAHMENUITEMMETRICS;
+
+typedef struct tagUAHMENUPOPUPMETRICS {
+    DWORD rgcx[4];
+    DWORD fUpdateMaxWidths : 2;
+} UAHMENUPOPUPMETRICS;
+
+typedef struct tagUAHMENU {
+    HMENU hmenu;
+    HDC hdc;
+    DWORD dwFlags;
+} UAHMENU;
+
+typedef struct tagUAHMENUITEM {
+    int iPosition;
+    UAHMENUITEMMETRICS umim;
+    UAHMENUPOPUPMETRICS umpm;
+} UAHMENUITEM;
+
+typedef struct tagUAHDRAWMENUITEM {
+    DRAWITEMSTRUCT dis;
+    UAHMENU um;
+    UAHMENUITEM umi;
+} UAHDRAWMENUITEM;
+
+typedef struct tagUAHMEASUREMENUITEM {
+    MEASUREITEMSTRUCT mis;
+    UAHMENU um;
+    UAHMENUITEM umi;
+} UAHMEASUREMENUITEM;
+
 void MainWindow::AddTrayIcon() {
     if (m_hasTrayIcon) return;
     NOTIFYICONDATAW nid = { sizeof(nid) };
@@ -89,6 +128,8 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
     if (!m_hwnd) return nullptr;
 
     Theme::Get().ApplyToWindow(m_hwnd);
+    MARGINS margins = cfg.showMenuBar ? MARGINS{ 0, 0, 0, 0 } : MARGINS{ 0, 0, 1, 0 };
+    DwmExtendFrameIntoClientArea(m_hwnd, &margins);
     CreateControls();
 
     // Initialize scripts before BuildMenu so they are listed in Tools menu
@@ -164,6 +205,10 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
     m_currentTabIndex = m_tabBar.GetActiveIndex();
     std::wstring activePath = m_tabBar.GetTabPath(m_tabBar.GetActiveIndex());
     UpdateWindowTitle(activePath);
+    FileListView* startupActivePane = m_multiPane.GetActivePane();
+    if (startupActivePane) {
+        startupActivePane->NotifyStatus();
+    }
 
     if (cfg.window.maximized) {
         ShowWindow(m_hwnd, SW_MAXIMIZE);
@@ -215,6 +260,9 @@ void MainWindow::OnSettingsApplied() {
     }
     ApplyTheme();
     BuildMenu();
+    MARGINS margins = cfg.showMenuBar ? MARGINS{ 0, 0, 0, 0 } : MARGINS{ 0, 0, 1, 0 };
+    DwmExtendFrameIntoClientArea(m_hwnd, &margins);
+    SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
     DrawMenuBar(m_hwnd);
 
     m_treeVisible = cfg.showTree;
@@ -234,7 +282,19 @@ void MainWindow::OnSettingsApplied() {
 
     for (int i = 0; i < 4; ++i) {
         m_multiPane.GetPane(i).SetCalcFolderSize(cfg.calcFolderSize);
+        m_multiPane.GetPane(i).SetHideDotFiles(cfg.hideDotFiles);
+        m_multiPane.GetPane(i).ApplyDensity(cfg.listDensity);
+        m_multiPane.GetPane(i).ApplyScale(cfg.listScale);
+        m_multiPane.GetPane(i).ApplyItemCheckBoxes();
     }
+    m_tree.ApplyViewMetrics();
+    m_tree.Refresh();
+
+    Theme::Get().RecreateGdiObjects();
+    m_tabBar.ApplyTheme();
+    m_multiPane.ApplyTheme();
+    m_tree.ApplyTheme();
+    InvalidateRect(m_hwnd, nullptr, TRUE);
 
     RebuildAccelerators();
     if (ShellUtils::IsExplorerReplaced()) {
@@ -440,6 +500,28 @@ void MainWindow::BuildMenu() {
 
     AppendMenuW(hViewMenu, MF_STRING | (Config::Get().showHidden ? MF_CHECKED : MF_UNCHECKED),
                 ID_VIEW_SHOW_HIDDEN, isZh ? L"显示隐藏文件(&H)" : L"Show Hidden Files(&H)");
+    AppendMenuW(hViewMenu, MF_STRING | (Config::Get().hideDotFiles ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_HIDE_DOTFILES, isZh ? L"隐藏点文件(.开头文件夹)(&F)\tCtrl+H" : L"Hide Dotfiles(.xxx)(&F)\tCtrl+H");
+    AppendMenuW(hViewMenu, MF_STRING | (Config::Get().showItemCheckBoxes ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_ITEM_CHECKBOXES, isZh ? L"项目复选框(&X)" : L"Item check boxes(&X)");
+
+    HMENU hDensitySubmenu = CreatePopupMenu();
+    AppendMenuW(hDensitySubmenu, MF_STRING | (Config::Get().listDensity == 0 ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_DENSITY_COMPACT, isZh ? L"紧凑 (Compact)" : L"Compact");
+    AppendMenuW(hDensitySubmenu, MF_STRING | (Config::Get().listDensity == 1 ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_DENSITY_COMFORTABLE, isZh ? L"适中 (Normal)" : L"Normal");
+    AppendMenuW(hDensitySubmenu, MF_STRING | (Config::Get().listDensity == 2 ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_DENSITY_SPACIOUS, isZh ? L"宽松 (Relaxed)" : L"Relaxed");
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hDensitySubmenu, isZh ? L"间距调整(&D)" : L"Spacing Density(&D)");
+
+    HMENU hScaleSubmenu = CreatePopupMenu();
+    AppendMenuW(hScaleSubmenu, MF_STRING | (Config::Get().listScale == 0 ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_SCALE_SMALL, isZh ? L"偏小 (90% / 9pt)" : L"Small (90% / 9pt)");
+    AppendMenuW(hScaleSubmenu, MF_STRING | (Config::Get().listScale == 1 ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_SCALE_MEDIUM, isZh ? L"标准 (100% / 10pt)" : L"Standard (100% / 10pt)");
+    AppendMenuW(hScaleSubmenu, MF_STRING | (Config::Get().listScale == 2 ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_SCALE_LARGE, isZh ? L"放大 (125% / 12pt)" : L"Large (125% / 12pt)");
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hScaleSubmenu, isZh ? L"放大调整(&Z)" : L"Scale & Zoom(&Z)");
     AppendMenuW(hViewMenu, MF_STRING | (Config::Get().calcFolderSize ? MF_CHECKED : MF_UNCHECKED),
                 ID_VIEW_CALC_FOLDER_SIZE, isZh ? L"计算文件夹大小(&C)" : L"Calculate Folder Sizes(&C)");
         // 滚动 (X)
@@ -454,6 +536,8 @@ void MainWindow::BuildMenu() {
     AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hViewMenu, MF_STRING | (Theme::Get().IsDarkMode() ? MF_CHECKED : MF_UNCHECKED),
                 ID_VIEW_DARK_MODE, isZh ? L"深色主题模式(&D)" : L"Dark Theme Mode(&D)");
+    AppendMenuW(hViewMenu, MF_STRING | (Config::Get().showMenuBar ? MF_CHECKED : MF_UNCHECKED),
+                ID_VIEW_TOGGLE_MENUBAR, isZh ? L"显示传统明文菜单栏(&M)" : L"Show Classic Menu Bar(&M)");
     AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hViewMenu, isZh ? L"查看(&V)" : L"View(&V)");
 
     // =========================================================================
@@ -552,8 +636,13 @@ void MainWindow::BuildMenu() {
     AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_ABOUT, isZh ? L"关于 NeoMDIE(&A)..." : L"About NeoMDIE(&A)...");
     AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hHelpMenu, isZh ? L"帮助(&H)" : L"Help(&H)");
 
-    SetMenu(m_hwnd, hMenuBar);
-    if (hOldMenu) {
+    SetMenu(m_hwnd, Config::Get().showMenuBar ? hMenuBar : nullptr);
+    DrawMenuBar(m_hwnd);
+    if (m_hMenuBar && m_hMenuBar != hMenuBar) {
+        DestroyMenu(m_hMenuBar);
+    }
+    m_hMenuBar = hMenuBar;
+    if (hOldMenu && hOldMenu != m_hMenuBar) {
         DestroyMenu(hOldMenu);
     }
 }
@@ -594,6 +683,7 @@ void MainWindow::CreateControls() {
     m_hwndBtnTree    = createBtn(L"\uE8A7", IDC_BTN_TREE);
     m_hwndBtnSplit   = createBtn(L"\uE740", IDC_BTN_SPLIT);
     m_hwndBtnPreview = createBtn(L"\uE896", IDC_BTN_PREVIEW);
+    m_hwndBtnMenu    = createBtn(L"\uE700", IDC_BTN_MENU);
 
     // Tooltips
     m_hwndTooltip = CreateWindowExW(
@@ -621,6 +711,7 @@ void MainWindow::CreateControls() {
     addTip(m_hwndBtnTree, isZh ? L"文件夹目录树 (F8)" : L"Directory Tree (F8)");
     addTip(m_hwndBtnSplit, isZh ? L"多栏布局 (F4)" : L"Split View (F4)");
     addTip(m_hwndBtnPreview, isZh ? L"快速预览 (Alt+P)" : L"Preview Pane (Alt+P)");
+    addTip(m_hwndBtnMenu, isZh ? L"主菜单 (≡ / Alt+M)" : L"Main Menu (≡ / Alt+M)");
 
     // 3. Breadcrumb & FilterBar
     m_breadcrumb.Create(m_hwnd, 102);
@@ -756,9 +847,6 @@ void MainWindow::CreateControls() {
         UpdateNavButtons();
         AddToHistory(activePath);
         UpdateWindowTitle(activePath);
-        if (activeView) {
-            activeView->NotifyStatus();
-        }
         LayoutAll();
 
         // Restore view states for all panes after layout and sizing are complete
@@ -774,6 +862,10 @@ void MainWindow::CreateControls() {
 
         m_isSwitchingTab = false;
         BuildMenu();
+
+        if (activeView) {
+            activeView->NotifyStatus();
+        }
 
         SetFocus(m_multiPane.GetPane(safeActivePane).GetHwnd());
         if (m_previewVisible && activeView) {
@@ -938,6 +1030,13 @@ void MainWindow::CreateControls() {
         case GestureAction::OpenSettings: OnCommand(ID_TOOLS_SETTINGS); break;
         case GestureAction::InvertSelection: OnCommand(ID_EDIT_INVERT_SELECTION); break;
         case GestureAction::Undo:            OnCommand(ID_EDIT_UNDO); break;
+        case GestureAction::ToggleCheckBoxes:    OnCommand(ID_VIEW_ITEM_CHECKBOXES); break;
+        case GestureAction::ToggleDotFiles:      OnCommand(ID_VIEW_HIDE_DOTFILES); break;
+        case GestureAction::ToggleCalcFolderSize: OnCommand(ID_VIEW_CALC_FOLDER_SIZE); break;
+        case GestureAction::FocusAddress:        OnCommand(ID_VIEW_ADDRESS_FOCUS); break;
+        case GestureAction::FocusFilter:         OnCommand(ID_VIEW_FILTER_FOCUS); break;
+        case GestureAction::ToggleDarkMode:      OnCommand(ID_VIEW_DARK_MODE); break;
+        case GestureAction::ToggleMenuBar:       OnCommand(ID_VIEW_TOGGLE_MENUBAR); break;
         default: {
             int intAct = static_cast<int>(act);
             if (intAct >= ID_SCRIPT_COMMAND_START && intAct <= ID_SCRIPT_COMMAND_END) {
@@ -956,16 +1055,13 @@ void MainWindow::CreateControls() {
         } else if (cmd == CMD_NEOMDIE_OPEN_SPLIT) {
             int count = m_multiPane.GetPaneCount();
             if (count == 1) {
-                SetLayout(PaneLayout::DualVertical);
-                m_multiPane.GetPane(1).NavigateTo(path);
+                SetLayout(PaneLayout::DualVertical, path);
                 m_multiPane.SetActivePane(1);
             } else if (count == 2) {
-                SetLayout(PaneLayout::ThreeLeft);
-                m_multiPane.GetPane(2).NavigateTo(path);
+                SetLayout(PaneLayout::ThreeLeft, path);
                 m_multiPane.SetActivePane(2);
             } else if (count == 3) {
-                SetLayout(PaneLayout::Quad);
-                m_multiPane.GetPane(3).NavigateTo(path);
+                SetLayout(PaneLayout::Quad, path);
                 m_multiPane.SetActivePane(3);
             } else {
                 auto* active = m_multiPane.GetActivePane();
@@ -973,10 +1069,23 @@ void MainWindow::CreateControls() {
             }
         } else if (cmd == CMD_NEOMDIE_ADD_LINKS) {
             m_linksBar.AddLink(L"", path);
+        } else if (cmd == CMD_NEOMDIE_PIN_QUICKACCESS) {
+            if (Config::Get().AddQuickAccess(path)) {
+                m_tree.RefreshQuickAccess();
+            }
+        } else if (cmd == CMD_NEOMDIE_UNPIN_QUICKACCESS) {
+            if (Config::Get().RemoveQuickAccess(path)) {
+                m_tree.RefreshQuickAccess();
+            }
+        } else if (cmd == CMD_NEOMDIE_RESET_QUICKACCESS) {
+            Config::Get().ResetQuickAccess();
+            m_tree.RefreshQuickAccess();
         } else if (cmd == CMD_NEOMDIE_SETTINGS) {
             OnCommand(ID_TOOLS_SETTINGS);
         } else if (cmd == CMD_NEOMDIE_OPEN_EXPLORER) {
             ShellUtils::OpenInExplorer(path);
+        } else if (cmd == CMD_BG_VIEW_ITEM_CHECKBOXES) {
+            OnCommand(ID_VIEW_ITEM_CHECKBOXES);
         }
     };
 
@@ -1031,6 +1140,12 @@ void MainWindow::CreateControls() {
             }
         };
 
+        view.onStatusText = [this, paneIdx](const std::wstring& text) {
+            if (m_multiPane.GetActiveIndex() == paneIdx && m_hwndStatusBar) {
+                SendMessageW(m_hwndStatusBar, SB_SETTEXTW, 0, (LPARAM)text.c_str());
+            }
+        };
+
         view.onCustomCommand = [this](int cmd, const std::wstring& path) {
             if (m_multiPane.onCustomCommand) {
                 m_multiPane.onCustomCommand(cmd, path);
@@ -1070,6 +1185,7 @@ void MainWindow::CreateControls() {
         FileListView* activeView = m_multiPane.GetActivePane();
         if (activeView) {
             m_filterBar.SetText(activeView->GetFilterQuery());
+            activeView->NotifyStatus();
             auto sel = activeView->GetSelectedPaths();
             if (m_previewVisible && !sel.empty()) {
                 m_preview.SetFile(sel[0]);
@@ -1091,10 +1207,25 @@ void MainWindow::LayoutAll() {
     int linksH = m_linksVisible ? Theme::Get().Scale(28, m_hwnd) : 0;
     int statusH = Theme::Get().Scale(24, m_hwnd);
 
-    // 1. TabBar
-    m_tabBar.UpdateLayout(totalW, tabH);
-
     Config& cfg = Config::Get();
+
+    // 1. Menu Button & TabBar
+    int menuBtnW = Theme::Get().Scale(34, m_hwnd);
+    int menuBtnH = Theme::Get().Scale(28, m_hwnd);
+    int menuX = Theme::Get().Scale(6, m_hwnd);
+    int menuY = (tabH - menuBtnH) / 2 + Theme::Get().Scale(1, m_hwnd);
+    MoveWindow(m_hwndBtnMenu, menuX, menuY, menuBtnW, menuBtnH, TRUE);
+
+    if (cfg.showMenuBar) {
+        ShowWindow(m_hwndBtnMenu, SW_HIDE);
+        m_tabBar.SetLeftOffset(Theme::Get().Scale(6, m_hwnd));
+    } else {
+        SetWindowPos(m_hwndBtnMenu, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        ShowWindow(m_hwndBtnMenu, SW_SHOW);
+        int leftOffset = menuX + menuBtnW + Theme::Get().Scale(8, m_hwnd);
+        m_tabBar.SetLeftOffset(leftOffset);
+    }
+    m_tabBar.UpdateLayout(totalW, tabH);
     m_linksVisible = cfg.showToolbarLinks;
 
     bool showTB = cfg.showToolbarStandard || cfg.showToolbarAddress || cfg.showToolbarSearch;
@@ -1118,6 +1249,8 @@ void MainWindow::LayoutAll() {
     ShowWindow(m_hwndBtnUp, swStd);
     ShowWindow(m_hwndBtnRefresh, swStd);
     ShowWindow(m_hwndBtnTree, swStd);
+    ShowWindow(m_hwndBtnSplit, swStd);
+    ShowWindow(m_hwndBtnPreview, swStd);
 
     if (cfg.showToolbarStandard && showTB) {
         MoveWindow(m_hwndBtnBack, curX, barY, btnW, btnH, TRUE);
@@ -1130,22 +1263,26 @@ void MainWindow::LayoutAll() {
         curX += btnW + spacing * 2;
 
         MoveWindow(m_hwndBtnTree, curX, barY, btnW, btnH, TRUE);
+        curX += btnW + spacing;
+        MoveWindow(m_hwndBtnSplit, curX, barY, btnW, btnH, TRUE);
+        curX += btnW + spacing;
+        MoveWindow(m_hwndBtnPreview, curX, barY, btnW, btnH, TRUE);
         curX += btnW + spacing * 2;
     }
 
-    int rightBtnsW = btnW * 2 + spacing * 3;
+    int rightMargin = Theme::Get().Scale(8, m_hwnd);
     int filterW = Theme::Get().Scale(cfg.filterBarWidth, m_hwnd);
     int splitBarToolW = (cfg.showToolbarAddress && cfg.showToolbarSearch && !cfg.lockToolbars && showTB) ? Theme::Get().Scale(5, m_hwnd) : 0;
-    int breadcrumbW = totalW - curX - filterW - rightBtnsW - splitBarToolW - Theme::Get().Scale(16, m_hwnd);
+    int breadcrumbW = totalW - curX - filterW - splitBarToolW - rightMargin;
     if (breadcrumbW < Theme::Get().Scale(120, m_hwnd)) {
         breadcrumbW = Theme::Get().Scale(120, m_hwnd);
-        filterW = totalW - curX - breadcrumbW - rightBtnsW - splitBarToolW - Theme::Get().Scale(16, m_hwnd);
+        filterW = totalW - curX - breadcrumbW - splitBarToolW - rightMargin;
         if (filterW < Theme::Get().Scale(100, m_hwnd)) filterW = Theme::Get().Scale(100, m_hwnd);
     }
 
     if (!cfg.showToolbarAddress) {
         ShowWindow(m_breadcrumb.GetHwnd(), SW_HIDE);
-        filterW = totalW - curX - rightBtnsW - Theme::Get().Scale(16, m_hwnd);
+        filterW = totalW - curX - rightMargin;
         if (filterW < Theme::Get().Scale(100, m_hwnd)) filterW = Theme::Get().Scale(100, m_hwnd);
     } else {
         ShowWindow(m_breadcrumb.GetHwnd(), showTB ? SW_SHOW : SW_HIDE);
@@ -1153,7 +1290,7 @@ void MainWindow::LayoutAll() {
 
     if (!cfg.showToolbarSearch) {
         ShowWindow(m_filterBar.GetHwnd(), SW_HIDE);
-        breadcrumbW = totalW - curX - rightBtnsW - Theme::Get().Scale(16, m_hwnd);
+        breadcrumbW = totalW - curX - rightMargin;
         if (breadcrumbW < Theme::Get().Scale(120, m_hwnd)) breadcrumbW = Theme::Get().Scale(120, m_hwnd);
     } else {
         ShowWindow(m_filterBar.GetHwnd(), showTB ? SW_SHOW : SW_HIDE);
@@ -1177,7 +1314,7 @@ void MainWindow::LayoutAll() {
 
         if (cfg.showToolbarSearch && showTB) {
             m_filterBar.UpdateLayout(curX, barY, filterW, btnH);
-            curX += filterW + spacing * 2;
+            curX += filterW;
         }
     } else {
         if (cfg.showToolbarSearch && showTB) {
@@ -1197,17 +1334,8 @@ void MainWindow::LayoutAll() {
 
         if (cfg.showToolbarAddress && showTB) {
             m_breadcrumb.UpdateLayout(curX, barY, breadcrumbW, btnH);
-            curX += breadcrumbW + spacing * 2;
+            curX += breadcrumbW;
         }
-    }
-
-    int swRight = showTB ? SW_SHOW : SW_HIDE;
-    ShowWindow(m_hwndBtnSplit, swRight);
-    ShowWindow(m_hwndBtnPreview, swRight);
-    if (showTB) {
-        MoveWindow(m_hwndBtnSplit, curX, barY, btnW, btnH, TRUE);
-        curX += btnW + spacing;
-        MoveWindow(m_hwndBtnPreview, curX, barY, btnW, btnH, TRUE);
     }
 
     // Links Bar
@@ -1360,7 +1488,7 @@ void MainWindow::UpdateLanguageUI() {
     LayoutAll();
 }
 
-void MainWindow::SetLayout(PaneLayout layout) {
+void MainWindow::SetLayout(PaneLayout layout, const std::wstring& targetNewPath) {
     int prevCount = m_multiPane.GetPaneCount();
     m_multiPane.SetLayout(layout);
     int newCount = m_multiPane.GetPaneCount();
@@ -1377,7 +1505,8 @@ void MainWindow::SetLayout(PaneLayout layout) {
 
         for (int p = 0; p < newCount; ++p) {
             if (m_multiPane.GetPane(p).GetCurrentPath().empty()) {
-                m_multiPane.GetPane(p).NavigateTo(initPath, false);
+                std::wstring pPath = (!targetNewPath.empty() && p == newCount - 1) ? targetNewPath : initPath;
+                m_multiPane.GetPane(p).NavigateTo(pPath, false);
             }
             tab.panePaths[p] = m_multiPane.GetPane(p).GetCurrentPath();
         }
@@ -1385,6 +1514,7 @@ void MainWindow::SetLayout(PaneLayout layout) {
     }
     BuildMenu();
     LayoutAll();
+    UpdateWindow(m_hwnd);
     if (m_hwndBtnSplit) {
         InvalidateRect(m_hwndBtnSplit, nullptr, TRUE);
         UpdateWindow(m_hwndBtnSplit);
@@ -2078,7 +2208,7 @@ void MainWindow::ShowToolbarContextMenu(POINT ptScreen) {
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING | (m_linksVisible ? MF_CHECKED : MF_UNCHECKED),
-                1001, isZh ? L"显示链接栏 / 收藏夹(&K)" : L"Show Favorites / Links Bar(&K)");
+                1001, isZh ? L"显示链接栏(&K)" : L"Show Links Bar(&K)");
     AppendMenuW(hMenu, MF_STRING | (m_treeVisible ? MF_CHECKED : MF_UNCHECKED),
                 ID_VIEW_TREE_TOGGLE, isZh ? L"显示文件夹目录树(&T)\tF8" : L"Show Directory Tree(&T)\tF8");
     AppendMenuW(hMenu, MF_STRING | (m_previewVisible ? MF_CHECKED : MF_UNCHECKED),
@@ -2222,6 +2352,49 @@ void MainWindow::OnCommand(UINT cmdId) {
     case ID_VIEW_PREVIEW_TOGGLE:
         TogglePreview();
         break;
+
+    case IDC_BTN_MENU: {
+        RECT rcBtn;
+        GetWindowRect(m_hwndBtnMenu, &rcBtn);
+        HMENU hPopup = CreatePopupMenu();
+        bool isZh = I18n::Get().IsChinese();
+
+        if (m_hMenuBar) {
+            int count = GetMenuItemCount(m_hMenuBar);
+            for (int i = 0; i < count; ++i) {
+                wchar_t menuText[128] = { 0 };
+                GetMenuStringW(m_hMenuBar, i, menuText, 128, MF_BYPOSITION);
+                HMENU hSub = GetSubMenu(m_hMenuBar, i);
+                if (hSub) {
+                    AppendMenuW(hPopup, MF_POPUP, (UINT_PTR)hSub, menuText);
+                }
+            }
+        }
+        AppendMenuW(hPopup, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hPopup, MF_STRING | (Config::Get().showMenuBar ? MF_CHECKED : MF_UNCHECKED),
+                    ID_VIEW_TOGGLE_MENUBAR, isZh ? L"显示传统明文菜单栏(&M)" : L"Show Classic Menu Bar(&M)");
+
+        TrackPopupMenu(hPopup, TPM_LEFTALIGN | TPM_TOPALIGN, rcBtn.left, rcBtn.bottom, 0, m_hwnd, nullptr);
+
+        int count = GetMenuItemCount(hPopup);
+        for (int i = count - 1; i >= 0; --i) {
+            RemoveMenu(hPopup, i, MF_BYPOSITION);
+        }
+        DestroyMenu(hPopup);
+        break;
+    }
+
+    case ID_VIEW_TOGGLE_MENUBAR: {
+        Config::Get().showMenuBar = !Config::Get().showMenuBar;
+        Config::Get().Save();
+        BuildMenu();
+        MARGINS margins = Config::Get().showMenuBar ? MARGINS{ 0, 0, 0, 0 } : MARGINS{ 0, 0, 1, 0 };
+        DwmExtendFrameIntoClientArea(m_hwnd, &margins);
+        SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        DrawMenuBar(m_hwnd);
+        LayoutAll();
+        break;
+    }
 
     case ID_LANG_ZH:
         I18n::Get().SetLanguage(Language::Chinese);
@@ -2367,6 +2540,45 @@ void MainWindow::OnCommand(UINT cmdId) {
         Config::Get().showHidden = !Config::Get().showHidden;
         Config::Get().Save();
         m_multiPane.SetShowHidden(Config::Get().showHidden);
+        BuildMenu();
+        break;
+    }
+    case ID_VIEW_HIDE_DOTFILES: {
+        Config::Get().hideDotFiles = !Config::Get().hideDotFiles;
+        Config::Get().Save();
+        m_multiPane.SetHideDotFiles(Config::Get().hideDotFiles);
+        m_tree.Refresh();
+        BuildMenu();
+        break;
+    }
+    case ID_VIEW_ITEM_CHECKBOXES: {
+        Config::Get().showItemCheckBoxes = !Config::Get().showItemCheckBoxes;
+        Config::Get().Save();
+        m_multiPane.ApplyItemCheckBoxes();
+        BuildMenu();
+        break;
+    }
+    case ID_VIEW_DENSITY_COMPACT:
+    case ID_VIEW_DENSITY_COMFORTABLE:
+    case ID_VIEW_DENSITY_SPACIOUS: {
+        int d = (cmdId == ID_VIEW_DENSITY_COMPACT) ? 0 :
+                (cmdId == ID_VIEW_DENSITY_COMFORTABLE) ? 1 : 2;
+        Config::Get().listDensity = d;
+        Config::Get().Save();
+        m_multiPane.ApplyDensity(d);
+        m_tree.ApplyViewMetrics();
+        BuildMenu();
+        break;
+    }
+    case ID_VIEW_SCALE_SMALL:
+    case ID_VIEW_SCALE_MEDIUM:
+    case ID_VIEW_SCALE_LARGE: {
+        int s = (cmdId == ID_VIEW_SCALE_SMALL) ? 0 :
+                (cmdId == ID_VIEW_SCALE_MEDIUM) ? 1 : 2;
+        Config::Get().listScale = s;
+        Config::Get().Save();
+        m_multiPane.ApplyScale(s);
+        m_tree.ApplyViewMetrics();
         BuildMenu();
         break;
     }
@@ -2783,21 +2995,17 @@ void MainWindow::OnCommand(UINT cmdId) {
     case ID_HELP_ABOUT: {
         bool isZh = I18n::Get().IsChinese();
         std::wstring aboutText = isZh ?
-            L"NeoMDIE - 现代化纯原生 Win32 多标签/多栏文件管理器\n"
-            L"版本: v1.0.2 (x64 Release)\n\n"
+            L"NeoMDIE - 现代化多标签多栏文件管理器\n"
+            L"版本: v1.1.0 (x64 Release)\n\n"
             L"作者: Harry (https://mianao.info)\n"
             L"开源项目仓库: https://github.com/harry10086/NeoMDIE\n"
-            L"致敬经典: MDIE (Tabbed File Manager for Windows)\n\n"
-            L"技术特色:\n"
-            L"• 纯 C++17 / Native Win32 API / Windows Shell COM 引擎\n"
-            L"• 静态编译 (/MT)，零额外运行时依赖，轻量疾速 (<1MB)\n"
-            L"• 支持多栏分栏、鼠标手势、多标签彩色标记与即时搜索过滤\n\n"
+            L"致敬经典: MDIE(Multiple Document Interface Explorer)\n\n"
             L"基于 GNU General Public License v3 (GPLv3) 开源协议发布。" :
             L"NeoMDIE - Modern Native Win32 Tabbed & Multi-Pane File Manager\n"
-            L"Version: v1.0.2 (x64 Release)\n\n"
+            L"Version: v1.1.0 (x64 Release)\n\n"
             L"Author: Harry (https://mianao.info)\n"
             L"Repository: https://github.com/harry10086/NeoMDIE\n"
-            L"Inspired by: MDIE (Tabbed File Manager for Windows)\n\n"
+            L"Inspired by: MDIE(Multiple Document Interface Explorer)\n\n"
             L"Pure C++17 / Native Win32 / Shell COM. Zero dependencies.\n"
             L"Licensed under the GNU General Public License v3 (GPLv3).";
         MessageBoxW(m_hwnd, aboutText.c_str(), isZh ? L"关于 NeoMDIE" : L"About NeoMDIE", MB_OK | MB_ICONINFORMATION);
@@ -2848,28 +3056,48 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
     else if (btnId == IDC_BTN_SPLIT && (m_multiPane.GetLayout() != PaneLayout::Single)) isActiveToggle = true;
     else if (btnId == IDC_BTN_PREVIEW && m_previewVisible) isActiveToggle = true;
 
-    // Background surface fill
-    FillRect(hdc, &rc, Theme::Get().BrushSurface());
+    // Background surface fill: TabBar background for menu button, toolbar surface for others
+    HBRUSH hbrBg = (btnId == IDC_BTN_MENU) ? Theme::Get().BrushBackground() : Theme::Get().BrushSurface();
+    FillRect(hdc, &rc, hbrBg);
 
     // Rounded rectangle on hover / selected / active
+    int rad = Theme::Get().Scale(8, pdis->hwndItem);
     RECT rcBtn = { rc.left + 2, rc.top + 2, rc.right - 2, rc.bottom - 2 };
-    if (isSelected) {
-        HBRUSH hbrPressed = Theme::Get().BrushSelected();
-        HPEN hPen = Theme::Get().PenBorder();
-        HGDIOBJ oldBrush = SelectObject(hdc, hbrPressed);
-        HGDIOBJ oldPen = SelectObject(hdc, hPen);
-        RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, 6, 6);
-        SelectObject(hdc, oldPen);
-        SelectObject(hdc, oldBrush);
-    } else if (isHot || isActiveToggle) {
-        HBRUSH hbrHover = isActiveToggle ? Theme::Get().BrushSelected() : Theme::Get().BrushHover();
-        HPEN hPen = isActiveToggle ? CreatePen(PS_SOLID, 1, Theme::Get().ClrAccent()) : Theme::Get().PenBorder();
-        HGDIOBJ oldBrush = SelectObject(hdc, hbrHover);
-        HGDIOBJ oldPen = SelectObject(hdc, hPen);
-        RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, 6, 6);
-        SelectObject(hdc, oldPen);
-        SelectObject(hdc, oldBrush);
-        if (isActiveToggle) DeleteObject(hPen);
+    if (btnId == IDC_BTN_MENU) {
+        if (isSelected) {
+            HBRUSH hbrPressed = Theme::Get().BrushSelected();
+            HGDIOBJ oldBrush = SelectObject(hdc, hbrPressed);
+            HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(NULL_PEN));
+            RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, rad, rad);
+            SelectObject(hdc, oldPen);
+            SelectObject(hdc, oldBrush);
+        } else if (isHot) {
+            HBRUSH hbrHover = Theme::Get().BrushHover();
+            HGDIOBJ oldBrush = SelectObject(hdc, hbrHover);
+            HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(NULL_PEN));
+            RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, rad, rad);
+            SelectObject(hdc, oldPen);
+            SelectObject(hdc, oldBrush);
+        }
+    } else {
+        if (isSelected) {
+            HBRUSH hbrPressed = Theme::Get().BrushSelected();
+            HPEN hPen = Theme::Get().PenBorder();
+            HGDIOBJ oldBrush = SelectObject(hdc, hbrPressed);
+            HGDIOBJ oldPen = SelectObject(hdc, hPen);
+            RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, rad, rad);
+            SelectObject(hdc, oldPen);
+            SelectObject(hdc, oldBrush);
+        } else if (isHot || isActiveToggle) {
+            HBRUSH hbrHover = isActiveToggle ? Theme::Get().BrushSelected() : Theme::Get().BrushHover();
+            HPEN hPen = isActiveToggle ? CreatePen(PS_SOLID, 1, Theme::Get().ClrAccent()) : Theme::Get().PenBorder();
+            HGDIOBJ oldBrush = SelectObject(hdc, hbrHover);
+            HGDIOBJ oldPen = SelectObject(hdc, hPen);
+            RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, rad, rad);
+            SelectObject(hdc, oldPen);
+            SelectObject(hdc, oldBrush);
+            if (isActiveToggle) DeleteObject(hPen);
+        }
     }
 
     // Windows 11 Fluent Icons glyph
@@ -2882,13 +3110,14 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
     case IDC_BTN_TREE:    glyph[0] = 0xE8A9; break; // Navigation / Tree
     case IDC_BTN_SPLIT:   glyph[0] = 0xE784; break; // Split View
     case IDC_BTN_PREVIEW: glyph[0] = 0xE8FF; break; // Preview Pane
+    case IDC_BTN_MENU:    glyph[0] = 0xE700; break; // Hamburger Menu (≡)
     default: return;
     }
 
     COLORREF iconColor = Theme::Get().ClrTextPrimary();
     if (isDisabled) {
         iconColor = Theme::Get().ClrTextSecondary();
-    } else if (isActiveToggle || isHot) {
+    } else if (btnId != IDC_BTN_MENU && (isActiveToggle || isHot)) {
         iconColor = Theme::Get().ClrAccent();
     }
 
@@ -2899,7 +3128,11 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
     HFONT hIconFont = Theme::Get().GetIconFont(iconPixelHeight, m_hwnd);
     HGDIOBJ oldFont = SelectObject(hdc, hIconFont);
 
-    DrawTextW(hdc, glyph, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    RECT rcGlyph = rc;
+    if (btnId == IDC_BTN_MENU) {
+        rcGlyph.top += Theme::Get().Scale(2, m_hwnd);
+    }
+    DrawTextW(hdc, glyph, 1, &rcGlyph, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     SelectObject(hdc, oldFont);
     DeleteObject(hIconFont);
@@ -2946,69 +3179,132 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
         return FALSE;
     }
+    case WM_NCCALCSIZE: {
+        if (wParam == TRUE && !Config::Get().showMenuBar) {
+            if (IsZoomed(hwnd)) {
+                NCCALCSIZE_PARAMS* pParams = (NCCALCSIZE_PARAMS*)lParam;
+                int borderX = GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+                int borderY = GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+                pParams->rgrc[0].left += borderX;
+                pParams->rgrc[0].top += borderY;
+                pParams->rgrc[0].right -= borderX;
+                pParams->rgrc[0].bottom -= borderY;
+            }
+            return 0;
+        }
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+    case WM_NCHITTEST: {
+        if (!Config::Get().showMenuBar && !IsZoomed(hwnd)) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            RECT rcWindow;
+            GetWindowRect(hwnd, &rcWindow);
+            int border = GetSystemMetrics(SM_CXPADDEDBORDER) + GetSystemMetrics(SM_CXSIZEFRAME);
+            if (pt.y < rcWindow.top + border) {
+                if (pt.x < rcWindow.left + border * 2) return HTTOPLEFT;
+                if (pt.x > rcWindow.right - border * 2) return HTTOPRIGHT;
+                return HTTOP;
+            }
+            if (pt.y > rcWindow.bottom - border) {
+                if (pt.x < rcWindow.left + border * 2) return HTBOTTOMLEFT;
+                if (pt.x > rcWindow.right - border * 2) return HTBOTTOMRIGHT;
+                return HTBOTTOM;
+            }
+            if (pt.x < rcWindow.left + border) return HTLEFT;
+            if (pt.x > rcWindow.right - border) return HTRIGHT;
+        }
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
     case WM_NCPAINT:
     case WM_NCACTIVATE: {
         LRESULT res = DefWindowProcW(hwnd, msg, wParam, lParam);
-        if (Theme::Get().IsDarkMode()) {
+        if (Theme::Get().IsDarkMode() && Config::Get().showMenuBar) {
             MENUBARINFO mbi = { sizeof(mbi) };
             if (GetMenuBarInfo(hwnd, OBJID_MENU, 0, &mbi)) {
-                RECT rcWindow;
+                RECT rcClient = { 0 };
+                GetClientRect(hwnd, &rcClient);
+                MapWindowPoints(hwnd, nullptr, (POINT*)&rcClient, 2);
+
+                RECT rcWindow = { 0 };
                 GetWindowRect(hwnd, &rcWindow);
-                RECT rcBar = mbi.rcBar;
-                OffsetRect(&rcBar, -rcWindow.left, -rcWindow.top);
+
+                OffsetRect(&rcClient, -rcWindow.left, -rcWindow.top);
+
+                // 1-pixel separator line right above client area to cover legacy light border
+                RECT rcSepLine = rcClient;
+                rcSepLine.bottom = rcSepLine.top;
+                rcSepLine.top--;
+
                 HDC hdc = GetWindowDC(hwnd);
                 if (hdc) {
-                    RECT rcLine = { 0, rcBar.bottom - 1, rcWindow.right - rcWindow.left, rcBar.bottom + 2 };
-                    FillRect(hdc, &rcLine, Theme::Get().BrushBackground());
+                    FillRect(hdc, &rcSepLine, Theme::Get().BrushBackground());
                     ReleaseDC(hwnd, hdc);
                 }
             }
         }
         return res;
     }
-    case 0x0091: { // WM_UAHDRAWMENU (Dark mode menu bar background)
+    case WM_UAHDRAWMENU: { // 0x0091: Dark mode menu bar background
         if (Theme::Get().IsDarkMode()) {
-            struct UAHMENU { HMENU hmenu; HDC hdc; DWORD dwFlags; };
-            UAHMENU* pUah = (UAHMENU*)lParam;
+            UAHMENU* pUDM = (UAHMENU*)lParam;
             MENUBARINFO mbi = { sizeof(mbi) };
             if (GetMenuBarInfo(hwnd, OBJID_MENU, 0, &mbi)) {
                 RECT rcWindow;
                 GetWindowRect(hwnd, &rcWindow);
                 RECT rcBar = mbi.rcBar;
                 OffsetRect(&rcBar, -rcWindow.left, -rcWindow.top);
-                rcBar.bottom += 2;
-                FillRect(pUah->hdc, &rcBar, Theme::Get().BrushSurface());
-                return TRUE;
+                RECT rcFill = rcBar;
+                rcFill.left = 0;
+                rcFill.right = rcWindow.right - rcWindow.left;
+                FillRect(pUDM->hdc, &rcFill, Theme::Get().BrushBackground());
+                return 0;
             }
         }
         break;
     }
-    case 0x0092: { // WM_UAHDRAWMENUITEM (Dark mode menu bar items)
+    case WM_UAHDRAWMENUITEM: { // 0x0092: Dark mode menu bar items
         if (Theme::Get().IsDarkMode()) {
-            struct UAHMENU { HMENU hmenu; HDC hdc; DWORD dwFlags; };
-            struct UAHMENUITEM { int iPosition; };
-            struct UAHDRAWMENUITEM {
-                DRAWITEMSTRUCT dis;
-                UAHMENU um;
-                UAHMENUITEM umi;
-            };
-            UAHDRAWMENUITEM* pItem = (UAHDRAWMENUITEM*)lParam;
-            HDC hdc = pItem->dis.hDC ? pItem->dis.hDC : pItem->um.hdc;
-            RECT rc = pItem->dis.rcItem;
-            bool isHot = (pItem->dis.itemState & (ODS_SELECTED | ODS_HOTLIGHT)) != 0;
-            HBRUSH hbr = isHot ? Theme::Get().BrushSelected() : Theme::Get().BrushSurface();
-            FillRect(hdc, &rc, hbr);
+            UAHDRAWMENUITEM* pUDMI = (UAHDRAWMENUITEM*)lParam;
+            HDC hdc = pUDMI->um.hdc;
+            RECT rc = pUDMI->dis.rcItem;
 
-            HMENU hMenu = GetMenu(hwnd);
-            wchar_t text[128] = { 0 };
-            GetMenuStringW(hMenu, pItem->umi.iPosition, text, 128, MF_BYPOSITION);
+            bool isHot = (pUDMI->dis.itemState & (ODS_HOTLIGHT | ODS_SELECTED)) != 0;
+            bool isSelected = (pUDMI->dis.itemState & ODS_SELECTED) != 0;
+            bool isDisabled = (pUDMI->dis.itemState & (ODS_GRAYED | ODS_DISABLED)) != 0;
+
+            HBRUSH hbrItem = isSelected ? Theme::Get().BrushSelected() :
+                             (isHot ? Theme::Get().BrushHover() : Theme::Get().BrushBackground());
+            FillRect(hdc, &rc, hbrItem);
+
+            wchar_t menuString[256] = { 0 };
+            MENUITEMINFO mii = { sizeof(mii), MIIM_STRING };
+            mii.dwTypeData = menuString;
+            mii.cch = 255;
+            GetMenuItemInfoW(pUDMI->um.hmenu, pUDMI->umi.iPosition, TRUE, &mii);
+
+            DWORD dwFlags = DT_CENTER | DT_SINGLELINE | DT_VCENTER;
+            if (pUDMI->dis.itemState & ODS_NOACCEL) {
+                dwFlags |= DT_HIDEPREFIX;
+            }
+
+            COLORREF textColor = isDisabled ? Theme::Get().ClrTextSecondary() :
+                                 (isSelected ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary());
             SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, isHot ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary());
+            SetTextColor(hdc, textColor);
             HFONT hFont = Theme::Get().GetUIFont(hwnd);
             HGDIOBJ oldFont = SelectObject(hdc, hFont);
-            DrawTextW(hdc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            DrawTextW(hdc, menuString, -1, &rc, dwFlags);
             SelectObject(hdc, oldFont);
-            return TRUE;
+            return 0;
+        }
+        break;
+    }
+    case WM_UAHMEASUREMENUITEM: { // 0x0094
+        if (Theme::Get().IsDarkMode()) {
+            UAHMEASUREMENUITEM* pMmi = (UAHMEASUREMENUITEM*)lParam;
+            LRESULT lr = DefWindowProcW(hwnd, msg, wParam, lParam);
+            pMmi->mis.itemWidth = (pMmi->mis.itemWidth * 5) / 4;
+            return lr;
         }
         break;
     }
@@ -3155,16 +3451,16 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             RECT rcClient;
             GetClientRect(hwnd, &rcClient);
             int totalW = rcClient.right - rcClient.left;
-            int btnW = Theme::Get().Scale(36, hwnd);
-            int spacing = Theme::Get().Scale(3, hwnd);
-            int rightBtnsW = btnW * 2 + spacing * 3;
-            int filterStartX = Theme::Get().Scale(6, hwnd) + (btnW + spacing) * 5 + btnW + spacing * 2;
+            int rightMargin = Theme::Get().Scale(8, hwnd);
 
             int newFilterW = 0;
             if (Config::Get().searchBarFirst) {
+                int btnW = Theme::Get().Scale(36, hwnd);
+                int spacing = Theme::Get().Scale(3, hwnd);
+                int filterStartX = Theme::Get().Scale(6, hwnd) + (btnW + spacing) * 7 + spacing;
                 newFilterW = pt.x - filterStartX;
             } else {
-                newFilterW = (totalW - rightBtnsW - Theme::Get().Scale(16, hwnd)) - pt.x;
+                newFilterW = (totalW - rightMargin) - pt.x;
             }
             int unscaled = (int)(newFilterW / Theme::Get().GetScaleFactor(hwnd));
             if (unscaled < 80) unscaled = 80;
@@ -3184,11 +3480,13 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         if (m_resizingTree) {
             m_resizingTree = false;
             ReleaseCapture();
+            SetCursor(LoadCursorW(nullptr, IDC_ARROW));
             return 0;
         }
         if (m_resizingPreview) {
             m_resizingPreview = false;
             ReleaseCapture();
+            SetCursor(LoadCursorW(nullptr, IDC_ARROW));
             Config::Get().previewWidth = m_previewWidth;
             Config::Get().Save();
             return 0;
@@ -3196,6 +3494,7 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         if (m_resizingFilterBar) {
             m_resizingFilterBar = false;
             ReleaseCapture();
+            SetCursor(LoadCursorW(nullptr, IDC_ARROW));
             Config::Get().Save();
             return 0;
         }
@@ -3536,8 +3835,13 @@ void MainWindow::RebuildAccelerators() {
         if (name == L"粘贴" || name == L"Paste") return ID_EDIT_PASTE;
         if (name == L"新建文件夹" || name == L"New Folder") return ID_FILE_NEW_FOLDER;
         if (name == L"属性" || name == L"Properties") return ID_FILE_PROPERTIES;
-        if (name == L"新建Markdown文档" || name == L"New Markdown Document") return ID_FILE_NEW_MD;
+        if (name == L"新建Markdown文档" || name == L"新建Markdown文件" || name == L"新建markdown文件" || name == L"New Markdown Document" || name == L"New Markdown File") return ID_FILE_NEW_MD;
         if (name == L"显示/隐藏隐藏文件" || name == L"Toggle Hidden Files") return ID_VIEW_SHOW_HIDDEN;
+        if (name == L"隐藏/显示点文件" || name == L"Toggle Dotfiles" || name == L"隐藏点文件") return ID_VIEW_HIDE_DOTFILES;
+        if (name == L"显示/隐藏项目复选框" || name == L"项目复选框" || name == L"Toggle Item Checkboxes") return ID_VIEW_ITEM_CHECKBOXES;
+        if (name == L"计算文件夹大小" || name == L"自动计算文件夹大小" || name == L"Calculate Folder Size") return ID_VIEW_CALC_FOLDER_SIZE;
+        if (name == L"切换深色/浅色模式" || name == L"切换主题模式" || name == L"Toggle Dark Mode") return ID_VIEW_DARK_MODE;
+        if (name == L"显示/隐藏传统菜单栏" || name == L"显示传统明文菜单栏" || name == L"菜单栏" || name == L"Toggle Menu Bar") return ID_VIEW_TOGGLE_MENUBAR;
         if (name == L"选项与设置" || name == L"Options & Settings") return ID_TOOLS_SETTINGS;
         if (name == L"反向选择" || name == L"Invert Selection") return ID_EDIT_INVERT_SELECTION;
         if (name == L"撤销" || name == L"Undo") return ID_EDIT_UNDO;
@@ -3630,6 +3934,12 @@ void MainWindow::RebuildAccelerators() {
     }
     if (!hasCommand(ID_EDIT_UNDO)) {
         accels.push_back({ FVIRTKEY | FCONTROL, (WORD)'Z', (WORD)ID_EDIT_UNDO });
+    }
+    if (!hasCommand(ID_VIEW_HIDE_DOTFILES)) {
+        accels.push_back({ FVIRTKEY | FCONTROL, (WORD)'H', (WORD)ID_VIEW_HIDE_DOTFILES });
+    }
+    if (!hasCommand(IDC_BTN_MENU)) {
+        accels.push_back({ FVIRTKEY | FALT, (WORD)'M', (WORD)IDC_BTN_MENU });
     }
 
     if (!accels.empty()) {

@@ -93,8 +93,10 @@ void BreadcrumbBar::UpdateLayout(int x, int y, int width, int height) {
     if (m_hwnd) {
         MoveWindow(m_hwnd, x, y, width, height, TRUE);
         if (m_editMode && m_hwndEdit) {
-            MoveWindow(m_hwndEdit, Theme::Get().Scale(6, m_hwnd), Theme::Get().Scale(4, m_hwnd),
-                       width - Theme::Get().Scale(12, m_hwnd), height - Theme::Get().Scale(8, m_hwnd), TRUE);
+            int padX = Theme::Get().Scale(10, m_hwnd);
+            int padY = Theme::Get().Scale(4, m_hwnd);
+            MoveWindow(m_hwndEdit, padX, padY,
+                       width - padX * 2, height - padY * 2, TRUE);
         }
     }
 }
@@ -106,13 +108,15 @@ void BreadcrumbBar::SwitchToEditMode() {
 
     RECT rc;
     GetClientRect(m_hwnd, &rc);
-    MoveWindow(m_hwndEdit, Theme::Get().Scale(6, m_hwnd), Theme::Get().Scale(4, m_hwnd),
-               rc.right - Theme::Get().Scale(12, m_hwnd), rc.bottom - Theme::Get().Scale(8, m_hwnd), TRUE);
+    int padX = Theme::Get().Scale(10, m_hwnd);
+    int padY = Theme::Get().Scale(4, m_hwnd);
+    MoveWindow(m_hwndEdit, padX, padY,
+               rc.right - padX * 2, rc.bottom - padY * 2, TRUE);
 
     ShowWindow(m_hwndEdit, SW_SHOW);
     SetFocus(m_hwndEdit);
     SendMessageW(m_hwndEdit, EM_SETSEL, 0, -1); // Select all
-    InvalidateRect(m_hwnd, nullptr, FALSE);
+    InvalidateRect(m_hwnd, nullptr, TRUE);
 }
 
 void BreadcrumbBar::CommitEdit() {
@@ -144,21 +148,29 @@ void BreadcrumbBar::Draw(HDC hdc) {
     HBITMAP hbm = CreateCompatibleBitmap(hdc, w, h);
     HGDIOBJ oldBm = SelectObject(hdcMem, hbm);
 
-    // Surface background & border
-    HBRUSH hbrBg = Theme::Get().BrushSurface();
-    FillRect(hdcMem, &rcClient, hbrBg);
+    // 1. Fill background with parent toolbar surface
+    FillRect(hdcMem, &rcClient, Theme::Get().BrushSurface());
 
-    HPEN hPen = Theme::Get().PenBorder();
+    // 2. Draw modern rounded omnibox container
+    int rad = Theme::Get().Scale(10, m_hwnd);
+    RECT rcBox = { 0, 0, w - 1, h - 1 };
+    COLORREF boxBg = Theme::Get().IsDarkMode() ? RGB(32, 33, 36) : RGB(241, 243, 244);
+    HBRUSH hbrBox = CreateSolidBrush(boxBg);
+    HPEN hPen = m_editMode ? CreatePen(PS_SOLID, 2, Theme::Get().ClrAccent()) : Theme::Get().PenBorder();
+    HGDIOBJ oldBrush = SelectObject(hdcMem, hbrBox);
     HGDIOBJ oldPen = SelectObject(hdcMem, hPen);
-    SelectObject(hdcMem, GetStockObject(NULL_BRUSH));
-    Rectangle(hdcMem, 0, 0, w, h);
+    RoundRect(hdcMem, rcBox.left, rcBox.top, rcBox.right, rcBox.bottom, rad, rad);
+    SelectObject(hdcMem, oldBrush);
+    SelectObject(hdcMem, oldPen);
+    DeleteObject(hbrBox);
+    if (m_editMode) DeleteObject(hPen);
 
     if (!m_editMode) {
         HFONT hFont = Theme::Get().GetUIFont(m_hwnd);
         HGDIOBJ oldFont = SelectObject(hdcMem, hFont);
         SetBkMode(hdcMem, TRANSPARENT);
 
-        int curX = Theme::Get().Scale(8, m_hwnd);
+        int curX = Theme::Get().Scale(10, m_hwnd);
         int arrowWidth = Theme::Get().Scale(14, m_hwnd);
 
         for (size_t i = 0; i < m_segments.size(); ++i) {
@@ -166,14 +178,21 @@ void BreadcrumbBar::Draw(HDC hdc) {
             GetTextExtentPoint32W(hdcMem, m_segments[i].name.c_str(), (int)m_segments[i].name.length(), &textSize);
 
             m_segments[i].rc.left = curX;
-            m_segments[i].rc.top = Theme::Get().Scale(2, m_hwnd);
+            m_segments[i].rc.top = Theme::Get().Scale(3, m_hwnd);
             m_segments[i].rc.right = curX + textSize.cx + Theme::Get().Scale(8, m_hwnd);
-            m_segments[i].rc.bottom = h - Theme::Get().Scale(2, m_hwnd);
+            m_segments[i].rc.bottom = h - Theme::Get().Scale(3, m_hwnd);
 
-            // Hover background for segment
+            // Hover background for segment (rounded pill)
             if ((int)i == m_hoverSegment) {
                 HBRUSH hbrHover = Theme::Get().BrushHover();
-                FillRect(hdcMem, &m_segments[i].rc, hbrHover);
+                HPEN hNullPen = CreatePen(PS_NULL, 0, 0);
+                HGDIOBJ oldHoverB = SelectObject(hdcMem, hbrHover);
+                HGDIOBJ oldHoverP = SelectObject(hdcMem, hNullPen);
+                int segRad = Theme::Get().Scale(6, m_hwnd);
+                RoundRect(hdcMem, m_segments[i].rc.left, m_segments[i].rc.top, m_segments[i].rc.right, m_segments[i].rc.bottom, segRad, segRad);
+                SelectObject(hdcMem, oldHoverB);
+                SelectObject(hdcMem, oldHoverP);
+                DeleteObject(hNullPen);
             }
 
             // Draw segment text
@@ -195,7 +214,6 @@ void BreadcrumbBar::Draw(HDC hdc) {
         SelectObject(hdcMem, oldFont);
     }
 
-    SelectObject(hdcMem, oldPen);
     BitBlt(hdc, 0, 0, w, h, hdcMem, 0, 0, SRCCOPY);
 
     SelectObject(hdcMem, oldBm);
@@ -218,6 +236,16 @@ LRESULT BreadcrumbBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         GetClientRect(hwnd, &rc);
         FillRect(hdc, &rc, Theme::Get().BrushSurface());
         return 1;
+    }
+    case WM_CTLCOLOREDIT: {
+        HDC hdcEdit = (HDC)wParam;
+        COLORREF boxBg = Theme::Get().IsDarkMode() ? RGB(32, 33, 36) : RGB(241, 243, 244);
+        SetBkColor(hdcEdit, boxBg);
+        SetTextColor(hdcEdit, Theme::Get().ClrTextPrimary());
+        static HBRUSH s_hbrEdit = nullptr;
+        if (s_hbrEdit) DeleteObject(s_hbrEdit);
+        s_hbrEdit = CreateSolidBrush(boxBg);
+        return (LRESULT)s_hbrEdit;
     }
 
     case WM_MOUSEMOVE: {

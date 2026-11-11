@@ -4,6 +4,7 @@
 #include "..\resource.h"
 #include <set>
 #include <unordered_set>
+#include <mutex>
 #pragma comment(lib, "msimg32.lib")
 
 #ifndef FOFX_ADDUNDORECORD
@@ -456,8 +457,41 @@ HIMAGELIST GetSystemImageList(bool large) {
 }
 
 static int s_defaultFolderIcon = -1;
+static std::mutex s_iconCacheMutex;
 static std::unordered_map<std::wstring, int> s_extIconCache;
+static std::unordered_map<std::wstring, int> s_customPathIconCache;
 static std::unordered_map<std::wstring, std::wstring> s_extTypeCache;
+
+int GetCustomPathIcon(const std::wstring& path) {
+    std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+    auto it = s_customPathIconCache.find(path);
+    if (it != s_customPathIconCache.end()) {
+        return it->second;
+    }
+    return -1;
+}
+
+static int ExtractCustomIcon(const std::wstring& filePath, int iconIndex = 0) {
+    if (filePath.empty() || !PathFileExistsW(filePath.c_str())) return -1;
+
+    HICON hLarge = nullptr;
+    HICON hSmall = nullptr;
+    UINT count = ExtractIconExW(filePath.c_str(), iconIndex, &hLarge, &hSmall, 1);
+    int resultIcon = -1;
+    if (count > 0 && (hSmall || hLarge)) {
+        std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+        if (hSmall && s_himlSmall) {
+            resultIcon = ImageList_ReplaceIcon(s_himlSmall, -1, hSmall);
+        }
+        if (hLarge && s_himlLarge) {
+            int largeIdx = ImageList_ReplaceIcon(s_himlLarge, -1, hLarge);
+            if (resultIcon < 0) resultIcon = largeIdx;
+        }
+    }
+    if (hSmall) DestroyIcon(hSmall);
+    if (hLarge) DestroyIcon(hLarge);
+    return resultIcon;
+}
 
 static int GetShortcutIconIndex(const std::wstring& lnkPath) {
     SHFILEINFOW sfiGeneric = { 0 };
@@ -481,20 +515,16 @@ static int GetShortcutIconIndex(const std::wstring& lnkPath) {
         int iconIdx = 0;
         if (SUCCEEDED(psl->GetIconLocation(iconPath, MAX_PATH, &iconIdx)) && iconPath[0]) {
             if (PathFileExistsW(iconPath)) {
-                SHFILEINFOW sfi = { 0 };
-                if (SHGetFileInfoW(iconPath, 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0 && sfi.iIcon >= 0) {
-                    resultIcon = sfi.iIcon;
-                }
+                int extracted = ExtractCustomIcon(iconPath, iconIdx);
+                if (extracted >= 0) resultIcon = extracted;
             }
         } else {
             wchar_t targetPath[MAX_PATH] = { 0 };
             WIN32_FIND_DATAW wfd = { 0 };
             if (SUCCEEDED(psl->GetPath(targetPath, MAX_PATH, &wfd, SLGP_UNCPRIORITY)) && targetPath[0]) {
                 if (PathFileExistsW(targetPath)) {
-                    SHFILEINFOW sfi = { 0 };
-                    if (SHGetFileInfoW(targetPath, 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0 && sfi.iIcon >= 0) {
-                        resultIcon = sfi.iIcon;
-                    }
+                    int extracted = ExtractCustomIcon(targetPath, 0);
+                    if (extracted >= 0) resultIcon = extracted;
                 }
             }
         }
@@ -504,14 +534,79 @@ static int GetShortcutIconIndex(const std::wstring& lnkPath) {
     return resultIcon;
 }
 
-int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder) {
+static std::unordered_map<wchar_t, int> s_driveIconCache;
+
+int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder, bool fastOnly) {
     if (isFolder) {
-        if (path.length() <= 3) {
+        if (path.length() <= 3 && path.length() >= 2 && path[1] == L':') {
+            wchar_t driveLetter = (wchar_t)towupper(path[0]);
+            {
+                std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+                auto it = s_driveIconCache.find(driveLetter);
+                if (it != s_driveIconCache.end()) {
+                    return it->second;
+                }
+            }
             SHFILEINFOW sfi = { 0 };
-            if (SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0 && sfi.iIcon >= 0) {
-                return sfi.iIcon;
+            UINT driveType = GetDriveTypeW(path.c_str());
+            if (driveType == DRIVE_REMOTE || driveType == DRIVE_CDROM || driveType == DRIVE_REMOVABLE) {
+                if (SHGetFileInfoW(path.c_str(), FILE_ATTRIBUTE_DIRECTORY, &sfi, sizeof(sfi),
+                                   SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES) != 0 && sfi.iIcon >= 0) {
+                    std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+                    s_driveIconCache[driveLetter] = sfi.iIcon;
+                    return sfi.iIcon;
+                }
+            } else {
+                if (SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0 && sfi.iIcon >= 0) {
+                    std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+                    s_driveIconCache[driveLetter] = sfi.iIcon;
+                    return sfi.iIcon;
+                }
             }
         }
+
+        // Check special known folder icon cache (Desktop, Downloads, Documents, Pictures, Music, Videos)
+        static std::unordered_map<std::wstring, int> s_specialFolderIcons;
+        static bool s_specialInited = false;
+        if (!s_specialInited) {
+            s_specialInited = true;
+            auto cacheFolder = [](int csidl) {
+                wchar_t buf[MAX_PATH];
+                if (SHGetFolderPathW(nullptr, csidl, nullptr, 0, buf) == S_OK) {
+                    std::wstring norm = Util::NormalizePath(buf);
+                    std::transform(norm.begin(), norm.end(), norm.begin(), ::towlower);
+                    SHFILEINFOW sfi = { 0 };
+                    if (SHGetFileInfoW(buf, 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0 && sfi.iIcon >= 0) {
+                        s_specialFolderIcons[norm] = sfi.iIcon;
+                    }
+                }
+            };
+            cacheFolder(CSIDL_DESKTOPDIRECTORY);
+            cacheFolder(CSIDL_MYDOCUMENTS);
+            cacheFolder(CSIDL_MYPICTURES);
+            cacheFolder(CSIDL_MYMUSIC);
+            cacheFolder(CSIDL_MYVIDEO);
+            wchar_t userProfile[MAX_PATH];
+            if (GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH) > 0) {
+                std::wstring dl = Util::NormalizePath(std::wstring(userProfile) + L"\\Downloads");
+                std::wstring dlLower = dl;
+                std::transform(dlLower.begin(), dlLower.end(), dlLower.begin(), ::towlower);
+                SHFILEINFOW sfi = { 0 };
+                if (SHGetFileInfoW(dl.c_str(), 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0 && sfi.iIcon >= 0) {
+                    s_specialFolderIcons[dlLower] = sfi.iIcon;
+                }
+            }
+        }
+        if (!path.empty()) {
+            std::wstring norm = Util::NormalizePath(path);
+            std::wstring lower = norm;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
+            auto itS = s_specialFolderIcons.find(lower);
+            if (itS != s_specialFolderIcons.end()) {
+                return itS->second;
+            }
+        }
+
         if (s_defaultFolderIcon >= 0) {
             return s_defaultFolderIcon;
         }
@@ -526,27 +621,59 @@ int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder) {
     std::wstring ext = pExt ? pExt : L"";
     std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
 
-    // Fast cache lookup for all extensions
-    auto it = s_extIconCache.find(ext);
-    if (it != s_extIconCache.end()) {
-        return it->second;
-    }
+    bool isNetwork = (path.length() >= 2 && path[0] == L'\\' && path[1] == L'\\');
+    bool isCustomFile = !isNetwork && (ext == L".exe" || ext == L".ico" || ext == L".lnk" || ext == L".cur" || ext == L".scr");
 
-    bool isCustomFile = (ext == L".exe" || ext == L".ico" || ext == L".lnk" || ext == L".cur" || ext == L".scr");
-
-    SHFILEINFOW sfi = { 0 };
-    DWORD flags = SHGFI_SYSICONINDEX | SHGFI_SMALLICON;
-    if (ext == L".lnk" && !path.empty() && PathFileExistsW(path.c_str())) {
-        int scIcon = GetShortcutIconIndex(path);
-        if (scIcon >= 0) return scIcon;
-    } else if (isCustomFile && !path.empty() && PathFileExistsW(path.c_str())) {
-        if (SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof(sfi), flags) != 0 && sfi.iIcon >= 0) {
-            return sfi.iIcon;
+    if (isCustomFile) {
+        {
+            std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+            auto itC = s_customPathIconCache.find(path);
+            if (itC != s_customPathIconCache.end()) {
+                return itC->second;
+            }
+        }
+        if (fastOnly) {
+            // Return cached extension icon instantly without blocking on disk PE parsing
+            std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+            auto itE = s_extIconCache.find(ext);
+            if (itE != s_extIconCache.end()) {
+                return itE->second;
+            }
+            SHFILEINFOW sfiGen = { 0 };
+            SHGetFileInfoW((L"dummy" + ext).c_str(), attr ? attr : FILE_ATTRIBUTE_NORMAL,
+                           &sfiGen, sizeof(sfiGen), SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
+            s_extIconCache[ext] = sfiGen.iIcon;
+            return sfiGen.iIcon;
+        }
+    } else {
+        std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+        auto it = s_extIconCache.find(ext);
+        if (it != s_extIconCache.end()) {
+            return it->second;
         }
     }
 
+    if (ext == L".lnk" && !path.empty() && !isNetwork && PathFileExistsW(path.c_str())) {
+        int scIcon = GetShortcutIconIndex(path);
+        if (scIcon >= 0) {
+            std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+            s_customPathIconCache[path] = scIcon;
+            return scIcon;
+        }
+    } else if (isCustomFile && !path.empty() && !isNetwork && PathFileExistsW(path.c_str())) {
+        int extracted = ExtractCustomIcon(path, 0);
+        if (extracted >= 0) {
+            std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+            s_customPathIconCache[path] = extracted;
+            return extracted;
+        }
+    }
+
+    SHFILEINFOW sfi = { 0 };
+    DWORD flags = SHGFI_SYSICONINDEX | SHGFI_SMALLICON;
     SHGetFileInfoW((L"dummy" + ext).c_str(), attr ? attr : FILE_ATTRIBUTE_NORMAL,
                    &sfi, sizeof(sfi), flags | SHGFI_USEFILEATTRIBUTES);
+    std::lock_guard<std::mutex> lock(s_iconCacheMutex);
     s_extIconCache[ext] = sfi.iIcon;
     return sfi.iIcon;
 }
@@ -596,8 +723,8 @@ void EnumerateDrives(std::vector<NeoShellItem>& outDrives) {
         wchar_t volName[MAX_PATH] = { 0 };
         wchar_t fsName[MAX_PATH] = { 0 };
 
-        // Only query volume information for local fixed or ready removable drives to prevent network/optical drive hangs
-        if (driveType == DRIVE_FIXED || driveType == DRIVE_RAMDISK || driveType == DRIVE_REMOVABLE) {
+        // Only query volume information for local fixed or ramdisk drives to prevent network/optical/empty removable drive hangs
+        if (driveType == DRIVE_FIXED || driveType == DRIVE_RAMDISK) {
             GetVolumeInformationW(pDrive, volName, MAX_PATH, nullptr, nullptr, nullptr, fsName, MAX_PATH);
 
             ULARGE_INTEGER freeBytes, totalBytes, totalFree;
@@ -622,7 +749,7 @@ void EnumerateDrives(std::vector<NeoShellItem>& outDrives) {
     SetErrorMode(oldErrMode);
 }
 
-bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems) {
+bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems, bool hideDotFiles) {
     outItems.clear();
 
     // Check if it's "This PC" / My Computer
@@ -653,6 +780,10 @@ bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<N
             continue;
         }
 
+        if (hideDotFiles && fd.cFileName[0] == L'.' && !showHidden) {
+            continue;
+        }
+
         NeoShellItem item;
         item.name = fd.cFileName;
         item.fullPath = Util::CombinePath(path, fd.cFileName);
@@ -669,7 +800,7 @@ bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<N
             item.size = 0;
             item.isSizeCalculated = false;
             item.typeName = I18n::Get().T(StringId::Folder);
-            item.iconIndex = GetItemIconIndex(item.fullPath, fd.dwFileAttributes, true);
+            item.iconIndex = GetItemIconIndex(item.fullPath, fd.dwFileAttributes, true, true);
             folders.push_back(item);
         } else {
             ULARGE_INTEGER uli;
@@ -678,7 +809,7 @@ bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<N
             item.size = uli.QuadPart;
             item.isSizeCalculated = true;
             item.typeName = GetItemTypeName(item.fullPath, fd.dwFileAttributes);
-            item.iconIndex = GetItemIconIndex(item.fullPath, fd.dwFileAttributes, false);
+            item.iconIndex = GetItemIconIndex(item.fullPath, fd.dwFileAttributes, false, true);
             files.push_back(item);
         }
     } while (FindNextFileW(hFind, &fd));
@@ -778,6 +909,75 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
 
     bool shown = false;
     std::wstring firstPath = Util::NormalizePath(paths[0]);
+
+    bool isNetwork = (firstPath.length() >= 2 && firstPath[0] == L'\\' && firstPath[1] == L'\\');
+    if (!isNetwork && firstPath.length() >= 2 && firstPath[1] == L':') {
+        wchar_t dRoot[4] = { firstPath[0], L':', L'\\', L'\0' };
+        if (GetDriveTypeW(dRoot) == DRIVE_REMOTE) {
+            isNetwork = true;
+        }
+    }
+
+    if (isNetwork) {
+        HMENU hMenu = CreatePopupMenu();
+        bool isDir = PathIsDirectoryW(firstPath.c_str()) != FALSE;
+        bool isZh = I18n::Get().IsChinese();
+
+        if (isDir) {
+            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, isZh ? L"在新标签页中打开(&T)" : L"Open in New Tab(&T)");
+            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_BG_TAB, isZh ? L"在后台新标签页中打开(&B)" : L"Open in Background Tab(&B)");
+            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_SPLIT, isZh ? L"在新栏中打开(&S)" : L"Open in New Pane(&S)");
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_PIN_QUICKACCESS, isZh ? L"固定到快速访问(&P)" : L"Pin to Quick Access(&P)");
+        }
+        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_EXPLORER, isZh ? L"在资源管理器中打开(&E)" : L"Open in File Explorer(&E)");
+        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, isZh ? L"复制完整路径(&A)" : L"Copy Full Path(&A)");
+        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, isZh ? L"添加到链接栏(&L)" : L"Add to Links Bar(&L)");
+        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_TERMINAL, isZh ? L"打开命令CMD(&C)" : L"Open CMD(&C)");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hMenu, MF_STRING, 50001, isZh ? L"剪切(&T)\tCtrl+X" : L"Cut(&T)\tCtrl+X");
+        AppendMenuW(hMenu, MF_STRING, 50002, isZh ? L"复制(&C)\tCtrl+C" : L"Copy(&C)\tCtrl+C");
+        AppendMenuW(hMenu, MF_STRING, 50003, isZh ? L"删除(&D)\tDel" : L"Delete(&D)\tDel");
+        AppendMenuW(hMenu, MF_STRING, 50004, isZh ? L"重命名(&M)\tF2" : L"Rename(&M)\tF2");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hMenu, MF_STRING, 50005, isZh ? L"显示系统完整右键菜单(&S)..." : L"Show System Context Menu(&S)...");
+        AppendMenuW(hMenu, MF_STRING, 50006, isZh ? L"属性(&P)" : L"Properties(&P)");
+
+        if (GetCapture()) ReleaseCapture();
+        int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, ptScreen.x, ptScreen.y, 0, hwnd, nullptr);
+        DestroyMenu(hMenu);
+
+        if (cmd == 0) return true;
+        if (cmd == CMD_NEOMDIE_OPEN_NEW_TAB || cmd == CMD_NEOMDIE_OPEN_BG_TAB ||
+            cmd == CMD_NEOMDIE_OPEN_SPLIT || cmd == CMD_NEOMDIE_OPEN_EXPLORER ||
+            cmd == CMD_NEOMDIE_COPY_PATH || cmd == CMD_NEOMDIE_ADD_LINKS ||
+            cmd == CMD_NEOMDIE_PIN_QUICKACCESS || cmd == CMD_NEOMDIE_UNPIN_QUICKACCESS ||
+            cmd == CMD_NEOMDIE_TERMINAL) {
+            if (onCustomCommand) onCustomCommand(cmd, firstPath);
+            return true;
+        }
+        if (cmd == 50001) {
+            CopyFilesToClipboard(hwnd, paths, true);
+            return true;
+        }
+        if (cmd == 50002) {
+            CopyFilesToClipboard(hwnd, paths, false);
+            return true;
+        }
+        if (cmd == 50003) {
+            DeleteFiles(hwnd, paths, false);
+            return true;
+        }
+        if (cmd == 50004) {
+            PostMessageW(hwnd, WM_COMMAND, MAKEWPARAM(40017, 0), 0);
+            return true;
+        }
+        if (cmd == 50006) {
+            ShowItemProperties(hwnd, firstPath);
+            return true;
+        }
+    }
+
     PIDLIST_ABSOLUTE pidlFirst = nullptr;
     if (firstPath == L"This PC" || firstPath == L"此电脑" || firstPath == L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") {
         SHParseDisplayName(L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", nullptr, &pidlFirst, 0, nullptr);
@@ -827,6 +1027,8 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
                     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, isZh ? L"在新标签页中打开(&T)" : L"Open in New Tab(&T)");
                     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_BG_TAB, isZh ? L"在后台新标签页中打开(&B)" : L"Open in Background Tab(&B)");
                     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_SPLIT, isZh ? L"在新栏中打开(&S)" : L"Open in New Pane(&S)");
+                    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_PIN_QUICKACCESS, isZh ? L"固定到快速访问(&P)" : L"Pin to Quick Access(&P)");
                 }
                 AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_EXPLORER, isZh ? L"在资源管理器中打开(&E)" : L"Open in File Explorer(&E)");
                 AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, isZh ? L"复制完整路径(&A)" : L"Copy Full Path(&A)");
@@ -837,15 +1039,72 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
                 int topItemsCount = GetMenuItemCount(hMenu);
                 if (GetCapture()) ReleaseCapture();
                 SetCursor(LoadCursorW(nullptr, IDC_ARROW));
-                SafeQueryContextMenu(pContextMenu, hMenu, topItemsCount, 1, 0x6FFF, CMF_NORMAL | CMF_EXPLORE);
+
+                // Safe threaded QueryContextMenu with 800ms timeout to prevent buggy 3rd-party shell extensions (e.g. YunShellExt) from hanging UI
+                struct QueryContextTask {
+                    IContextMenu* pContextMenu;
+                    HMENU hMenu;
+                    UINT indexMenu;
+                    UINT idCmdFirst;
+                    UINT idCmdLast;
+                    UINT uFlags;
+                    HRESULT hr;
+                };
+
+                QueryContextTask qTask = {
+                    pContextMenu, hMenu, (UINT)topItemsCount, 1, 0x6FFF, CMF_NORMAL | CMF_EXPLORE, E_FAIL
+                };
+
+                HANDLE hQueryThread = CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
+                    auto* t = (QueryContextTask*)lpParam;
+                    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+                    __try {
+                        t->hr = t->pContextMenu->QueryContextMenu(t->hMenu, t->indexMenu, t->idCmdFirst, t->idCmdLast, t->uFlags);
+                    } __except (EXCEPTION_EXECUTE_HANDLER) {
+                        t->hr = E_FAIL;
+                    }
+                    CoUninitialize();
+                    return 0;
+                }, &qTask, 0, nullptr);
+
+                bool timedOut = false;
+                if (hQueryThread) {
+                    DWORD dwStart = GetTickCount();
+                    while (true) {
+                        DWORD elapsed = GetTickCount() - dwStart;
+                        if (elapsed >= 800) {
+                            timedOut = true;
+                            break;
+                        }
+                        DWORD dwWait = MsgWaitForMultipleObjects(1, &hQueryThread, FALSE, 800 - elapsed, QS_ALLINPUT);
+                        if (dwWait == WAIT_OBJECT_0) {
+                            break;
+                        } else if (dwWait == WAIT_OBJECT_0 + 1) {
+                            MSG qmsg;
+                            while (PeekMessageW(&qmsg, nullptr, 0, 0, PM_REMOVE)) {
+                                TranslateMessage(&qmsg);
+                                DispatchMessageW(&qmsg);
+                            }
+                        } else {
+                            timedOut = true;
+                            break;
+                        }
+                    }
+                    CloseHandle(hQueryThread);
+                }
+
                 SetCursor(LoadCursorW(nullptr, IDC_ARROW));
 
-                SetWindowSubclass(hwnd, ContextMenuSubclassProc, 9999, 0);
+                if (!timedOut) {
+                    SetWindowSubclass(hwnd, ContextMenuSubclassProc, 9999, 0);
+                }
 
                 int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                          ptScreen.x, ptScreen.y, 0, hwnd, nullptr);
 
-                RemoveWindowSubclass(hwnd, ContextMenuSubclassProc, 9999);
+                if (!timedOut) {
+                    RemoveWindowSubclass(hwnd, ContextMenuSubclassProc, 9999);
+                }
 
                 if (g_pContextMenu3) { g_pContextMenu3->Release(); g_pContextMenu3 = nullptr; }
                 if (g_pContextMenu2) { g_pContextMenu2->Release(); g_pContextMenu2 = nullptr; }
@@ -928,6 +1187,7 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, isZh ? L"新建标签页(&T)\tCtrl+T" : L"New Tab(&T)\tCtrl+T");
     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_EXPLORER, isZh ? L"在资源管理器中打开(&E)" : L"Open in File Explorer(&E)");
     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, isZh ? L"复制当前路径(&A)" : L"Copy Current Path(&A)");
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_PIN_QUICKACCESS, isZh ? L"固定当前文件夹到快速访问(&P)" : L"Pin Current Folder to Quick Access(&P)");
     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, isZh ? L"添加到链接栏(&L)" : L"Add to Links Bar(&L)");
     AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_CMD, isZh ? L"打开命令CMD(&C)" : L"Open CMD(&C)");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
@@ -949,6 +1209,9 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     else if (currentViewMode == 3) checkViewCmd = CMD_BG_VIEW_LIST;
     else if (currentViewMode == 4) checkViewCmd = CMD_BG_VIEW_TILES;
     CheckMenuRadioItem(hSubView, CMD_BG_VIEW_DETAILS, CMD_BG_VIEW_TILES, checkViewCmd, MF_BYCOMMAND);
+    AppendMenuW(hSubView, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hSubView, MF_STRING | (Config::Get().showItemCheckBoxes ? MF_CHECKED : MF_UNCHECKED),
+                CMD_BG_VIEW_ITEM_CHECKBOXES, isZh ? L"项目复选框(&X)" : L"Item check boxes(&X)");
     AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSubView, isZh ? L"查看(&V)" : L"View(&V)");
 
     // 2. Sort by submenu
@@ -1830,9 +2093,65 @@ std::wstring GetDisplayName(const std::wstring& path) {
     if (path.empty() || path == L"此电脑" || path == L"This PC" || path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
         return I18n::Get().T(StringId::ThisPC);
     }
-    wchar_t buf[MAX_PATH];
-    StringCchCopyW(buf, MAX_PATH, path.c_str());
-    return PathFindFileNameW(buf);
+    std::wstring p = path;
+    while (p.length() > 3 && (p.back() == L'\\' || p.back() == L'/')) {
+        p.pop_back();
+    }
+    // Drive root like "C:\" -> query shell for drive display name (e.g. "本地磁盘 (C:)")
+    if (p.length() <= 3 && p.length() >= 2 && p[1] == L':') {
+        SHFILEINFOW sfi = { 0 };
+        std::wstring root = p;
+        if (root.back() != L'\\') root += L'\\';
+        if (SHGetFileInfoW(root.c_str(), 0, &sfi, sizeof(sfi), SHGFI_DISPLAYNAME) && sfi.szDisplayName[0]) {
+            return sfi.szDisplayName;
+        }
+    }
+    // Check known personal folders
+    static std::unordered_map<std::wstring, std::wstring> s_knownFolderNames;
+    static bool s_knownInited = false;
+    if (!s_knownInited) {
+        s_knownInited = true;
+        auto addKnown = [](int csidl) {
+            wchar_t buf[MAX_PATH];
+            if (SHGetFolderPathW(nullptr, csidl, nullptr, 0, buf) == S_OK) {
+                std::wstring norm = Util::NormalizePath(buf);
+                std::transform(norm.begin(), norm.end(), norm.begin(), ::towlower);
+                SHFILEINFOW sfi = { 0 };
+                if (SHGetFileInfoW(buf, 0, &sfi, sizeof(sfi), SHGFI_DISPLAYNAME) && sfi.szDisplayName[0]) {
+                    s_knownFolderNames[norm] = sfi.szDisplayName;
+                }
+            }
+        };
+        addKnown(CSIDL_DESKTOPDIRECTORY);
+        addKnown(CSIDL_MYDOCUMENTS);
+        addKnown(CSIDL_MYPICTURES);
+        addKnown(CSIDL_MYMUSIC);
+        addKnown(CSIDL_MYVIDEO);
+        wchar_t userProfile[MAX_PATH];
+        if (GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH) > 0) {
+            std::wstring dl = Util::NormalizePath(std::wstring(userProfile) + L"\\Downloads");
+            std::wstring dlLower = dl;
+            std::transform(dlLower.begin(), dlLower.end(), dlLower.begin(), ::towlower);
+            SHFILEINFOW sfi = { 0 };
+            if (SHGetFileInfoW(dl.c_str(), 0, &sfi, sizeof(sfi), SHGFI_DISPLAYNAME) && sfi.szDisplayName[0]) {
+                s_knownFolderNames[dlLower] = sfi.szDisplayName;
+            }
+        }
+    }
+
+    std::wstring normP = Util::NormalizePath(p);
+    std::wstring lowerP = normP;
+    std::transform(lowerP.begin(), lowerP.end(), lowerP.begin(), ::towlower);
+    auto itK = s_knownFolderNames.find(lowerP);
+    if (itK != s_knownFolderNames.end()) {
+        return itK->second;
+    }
+
+    const wchar_t* fn = PathFindFileNameW(normP.c_str());
+    if (fn && *fn) {
+        return fn;
+    }
+    return normP;
 }
 
 bool CreateShortcut(const std::wstring& shortcutPath, const std::wstring& targetPath, const std::wstring& args, const std::wstring& desc) {
@@ -2281,7 +2600,7 @@ void CheckForUpdates(HWND hwndParent) {
         std::wstring wTagName = Util::Utf8ToWide(tagName);
         std::wstring wHtmlUrl = Util::Utf8ToWide(htmlUrl);
 
-        const std::wstring currentVer = L"v1.0.2";
+        const std::wstring currentVer = L"v1.1.0";
         if (!wTagName.empty() && wTagName != currentVer) {
             std::wstring msg = isZh
                 ? (L"发现 NeoMDIE 新版本: " + wTagName + L" (当前版本: " + currentVer + L")\n\n下载路径与发布页面:\n" + wHtmlUrl + L"\n\n是否立即前往 GitHub 下载更新？")
@@ -2299,18 +2618,52 @@ void CheckForUpdates(HWND hwndParent) {
     }).detach();
 }
 
+struct DriveSpaceCacheEntry {
+    uint64_t freeBytes = 0;
+    uint64_t totalBytes = 0;
+    DWORD lastTick = 0;
+    bool success = false;
+};
+static std::unordered_map<wchar_t, DriveSpaceCacheEntry> s_driveSpaceCache;
+static std::mutex s_driveSpaceMutex;
+
 bool GetDriveSpace(const std::wstring& drivePath, uint64_t& outFreeBytes, uint64_t& outTotalBytes) {
-    ULARGE_INTEGER freeBytesAvailable = { 0 };
-    ULARGE_INTEGER totalNumberOfBytes = { 0 };
-    ULARGE_INTEGER totalNumberOfFreeBytes = { 0 };
-    std::wstring root = drivePath;
-    if (root.length() >= 2 && root[1] == L':') {
-        root = root.substr(0, 2) + L"\\";
-    }
-    if (GetDiskFreeSpaceExW(root.c_str(), &freeBytesAvailable, &totalNumberOfBytes, &totalNumberOfFreeBytes)) {
-        outFreeBytes = freeBytesAvailable.QuadPart;
-        outTotalBytes = totalNumberOfBytes.QuadPart;
-        return true;
+    if (drivePath.length() >= 2 && drivePath[1] == L':') {
+        wchar_t letter = (wchar_t)towupper(drivePath[0]);
+        DWORD now = GetTickCount();
+        {
+            std::lock_guard<std::mutex> lock(s_driveSpaceMutex);
+            auto it = s_driveSpaceCache.find(letter);
+            if (it != s_driveSpaceCache.end() && (now - it->second.lastTick < 5000)) {
+                if (it->second.success) {
+                    outFreeBytes = it->second.freeBytes;
+                    outTotalBytes = it->second.totalBytes;
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        std::wstring root = drivePath.substr(0, 2) + L"\\";
+        ULARGE_INTEGER freeBytesAvailable = { 0 };
+        ULARGE_INTEGER totalNumberOfBytes = { 0 };
+        ULARGE_INTEGER totalNumberOfFreeBytes = { 0 };
+        bool ok = (GetDiskFreeSpaceExW(root.c_str(), &freeBytesAvailable, &totalNumberOfBytes, &totalNumberOfFreeBytes) != 0);
+
+        {
+            std::lock_guard<std::mutex> lock(s_driveSpaceMutex);
+            DriveSpaceCacheEntry entry;
+            entry.lastTick = now;
+            entry.success = ok;
+            if (ok) {
+                entry.freeBytes = freeBytesAvailable.QuadPart;
+                entry.totalBytes = totalNumberOfBytes.QuadPart;
+                outFreeBytes = entry.freeBytes;
+                outTotalBytes = entry.totalBytes;
+            }
+            s_driveSpaceCache[letter] = entry;
+        }
+        return ok;
     }
     return false;
 }

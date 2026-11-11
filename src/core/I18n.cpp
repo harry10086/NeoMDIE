@@ -126,7 +126,7 @@ const wchar_t* I18n::T(StringId id) const {
 
     case StringId::MenuFavorites:      return zh ? L"收藏(&A)" : L"Favorites(&A)";
     case StringId::MenuAddFavorites:   return zh ? L"添加当前位置到收藏夹(&A)..." : L"Add Current Location to Favorites(&A)...";
-    case StringId::MenuManageFavorites:return zh ? L"整理收藏夹 / 链接栏(&O)..." : L"Organize Favorites / Links(&O)...";
+    case StringId::MenuManageFavorites:return zh ? L"整理链接栏(&O)..." : L"Organize Links(&O)...";
 
     case StringId::MenuGo:             return zh ? L"转到(&G)" : L"Go(&G)";
     case StringId::MenuBack:           return zh ? L"后退(&B)\tAlt+Left" : L"Back(&B)\tAlt+Left";

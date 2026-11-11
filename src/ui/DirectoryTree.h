@@ -17,8 +17,10 @@ public:
 
     void Populate();
     void Refresh();
+    void RefreshQuickAccess();
     void SelectPath(const std::wstring& path);
     void ApplyTheme();
+    void ApplyViewMetrics();
 
     void UpdateLayout(int x, int y, int width, int height);
 
@@ -48,4 +50,5 @@ private:
     class DropTarget* m_pDropTarget = nullptr;
     void StartDragDrop(HTREEITEM hItem);
     std::vector<TreeNodeData*> m_nodeDataList;
+    HFONT m_hFontDensity = nullptr;
 };

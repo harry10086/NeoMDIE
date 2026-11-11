@@ -6,6 +6,7 @@
 #include "..\core\ScriptEngine.h"
 #include "Theme.h"
 #include <commctrl.h>
+#include <commdlg.h>
 #include <windowsx.h>
 #include <vector>
 #include <string>
@@ -79,10 +80,14 @@ static HWND s_hChkPreview = nullptr;
 // Page 5: View & File List
 static HWND s_hViewModeCombo = nullptr;
 static HWND s_hChkHidden = nullptr;
+static HWND s_hChkHideDotFiles = nullptr;
+static HWND s_hDensityCombo = nullptr;
+static HWND s_hScaleCombo = nullptr;
 static HWND s_hChkFoldersFirst = nullptr;
 static HWND s_hChkCalcSize = nullptr;
 static HWND s_hChkZebraStriping = nullptr;
 static HWND s_hChkGridLines = nullptr;
+static HWND s_hChkItemCheckBoxes = nullptr;
 
 // Page 6: Search & Filter
 static HWND s_hChkSearchSubfolders = nullptr;
@@ -124,6 +129,10 @@ static std::vector<GestureEntry> s_tempGestures;
 
 // Page 9: Appearance & Toolbars
 static HWND s_hThemeCombo = nullptr;
+static HWND s_hAccentCombo = nullptr;
+static HWND s_hBtnCustomAccent = nullptr;
+static COLORREF s_tempCustomAccent = RGB(0, 120, 212);
+static HWND s_hChkMenuBar = nullptr;
 static HWND s_hChkTBStandard = nullptr;
 static HWND s_hChkTBAddress = nullptr;
 static HWND s_hChkTBSearch = nullptr;
@@ -175,7 +184,14 @@ static const ActionDef s_allActions[] = {
     { (int)GestureAction::ToggleHidden, L"显示/隐藏隐藏文件", L"Toggle Hidden Files" },
     { (int)GestureAction::OpenSettings, L"选项与设置", L"Options & Settings" },
     { (int)GestureAction::InvertSelection, L"反向选择", L"Invert Selection" },
-    { (int)GestureAction::Undo, L"撤销", L"Undo" }
+    { (int)GestureAction::Undo, L"撤销", L"Undo" },
+    { (int)GestureAction::ToggleCheckBoxes, L"显示/隐藏项目复选框", L"Toggle Item Checkboxes" },
+    { (int)GestureAction::ToggleDotFiles, L"隐藏/显示点文件", L"Toggle Dotfiles" },
+    { (int)GestureAction::ToggleCalcFolderSize, L"计算文件夹大小", L"Calculate Folder Size" },
+    { (int)GestureAction::FocusAddress, L"聚焦到地址栏", L"Focus Address Bar" },
+    { (int)GestureAction::FocusFilter, L"聚焦到搜索过滤栏", L"Focus Filter Bar" },
+    { (int)GestureAction::ToggleDarkMode, L"切换深色/浅色模式", L"Toggle Dark Mode" },
+    { (int)GestureAction::ToggleMenuBar, L"显示/隐藏传统菜单栏", L"Toggle Menu Bar" }
 };
 
 struct GestPatternDef {
@@ -192,7 +208,7 @@ static const GestPatternDef s_allPatterns[] = {
     { "UD", L"↕ (上下)", L"↕ (Up-Down)" },
     { "DU", L"↓↑ (下上)", L"↓↑ (Down-Up)" },
     { "LR", L"↔ (左右)", L"↔ (Left-Right)" },
-    { "RL", L"←→ (右左)", L"←→ (Right-Left)" },
+    { "RL", L"→← (右左)", L"→← (Right-Left)" },
     { "UL", L"↖ (上左)", L"↖ (Up-Left)" },
     { "UR", L"↗ (上右)", L"↗ (Up-Right)" },
     { "DL", L"↙ (下左)", L"↙ (Down-Left)" },
@@ -310,6 +326,7 @@ static void ResetDefaultShortcuts() {
         { zh ? L"剪切选中项" : L"Cut", L"X", false, true, false, L"Ctrl + X" },
         { zh ? L"粘贴" : L"Paste", L"V", false, true, false, L"Ctrl + V" },
         { zh ? L"新建文件夹" : L"New Folder", L"N", true, true, false, L"Ctrl + Shift + N" },
+        { zh ? L"新建Markdown文档" : L"New Markdown Document", L"M", true, true, true, L"Ctrl + Shift + Alt + M" },
         { zh ? L"属性" : L"Properties", L"Enter", false, false, true, L"Alt + Enter" }
     };
 }
@@ -334,6 +351,17 @@ static void InitDefaultShortcuts() {
             sc.alt = item.alt;
             sc.keyText = FormatShortcutKey(sc);
             s_tempShortcuts.push_back(sc);
+        }
+        bool hasNewMD = false;
+        for (const auto& sc : s_tempShortcuts) {
+            if (sc.name == L"新建Markdown文档" || sc.name == L"新建Markdown文件" || sc.name == L"新建markdown文件" || sc.name == L"New Markdown Document") {
+                hasNewMD = true;
+                break;
+            }
+        }
+        if (!hasNewMD) {
+            bool zh = I18n::Get().IsChinese();
+            s_tempShortcuts.push_back({ zh ? L"新建Markdown文档" : L"New Markdown Document", L"M", true, true, true, L"Ctrl + Shift + Alt + M" });
         }
     } else {
         ResetDefaultShortcuts();
@@ -617,7 +645,7 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   // 1. Left Vertical Navigation Listbox with LBS_HASSTRINGS
   s_hCategoryList = CreateWindowExW(
       0, L"LISTBOX", L"",
-      WS_CHILD | WS_VISIBLE | WS_TABSTOP | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | WS_BORDER,
+      WS_CHILD | WS_VISIBLE | WS_TABSTOP | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
       Theme::Get().Scale(14, hwnd), Theme::Get().Scale(14, hwnd),
       navW, navH,
       hwnd, (HMENU)201, hInst, nullptr);
@@ -874,6 +902,30 @@ void SettingsDialog::CreateControls(HWND hwnd) {
                           y4, 341, cfg.showHidden);
   y4 += lineH + spacing;
 
+  s_hChkHideDotFiles = createChk(5, zh ? L"过滤/隐藏点文件与配置目录 (.git, .vscode 等)" : L"Hide dotfiles and config folders (.git, .vscode, etc.)",
+                                y4, 346, cfg.hideDotFiles);
+  y4 += lineH + spacing;
+
+  createLabel(5, zh ? L"列表显示间距 / 行高 (Spacing):" : L"List Spacing / Row Height:", marginX, y4, contentW, lineH, true);
+  y4 += lineH + spacing;
+
+  s_hDensityCombo = createCombo(5, marginX, y4, 340, 240);
+  SendMessageW(s_hDensityCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"紧凑 (Compact)" : L"Compact"));
+  SendMessageW(s_hDensityCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"适中 (Normal, 默认)" : L"Normal (Default)"));
+  SendMessageW(s_hDensityCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"宽松 (Relaxed)" : L"Relaxed"));
+  SendMessageW(s_hDensityCombo, CB_SETCURSEL, std::clamp(cfg.listDensity, 0, 2), 0);
+  y4 += lineH + spacing * 2;
+
+  createLabel(5, zh ? L"文件列表放大调整 (Scale & Zoom):" : L"File List Scale & Zoom:", marginX, y4, contentW, lineH, true);
+  y4 += lineH + spacing;
+
+  s_hScaleCombo = createCombo(5, marginX, y4, 340, 240);
+  SendMessageW(s_hScaleCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"偏小 (Small - 90% / 9pt)" : L"Small (90% / 9pt)"));
+  SendMessageW(s_hScaleCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"标准 (Standard - 100% / 10pt, 默认)" : L"Standard (100% / 10pt, Default)"));
+  SendMessageW(s_hScaleCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"放大 (Large - 125% / 12pt)" : L"Large (125% / 12pt)"));
+  SendMessageW(s_hScaleCombo, CB_SETCURSEL, std::clamp(cfg.listScale, 0, 2), 0);
+  y4 += lineH + spacing * 2;
+
   s_hChkFoldersFirst = createChk(5, zh ? L"文件夹排在前面（取消则文件排在前面）" : L"Show folders first (uncheck for files first)",
                                 y4, 345, cfg.foldersFirst);
   y4 += lineH + spacing;
@@ -884,6 +936,10 @@ void SettingsDialog::CreateControls(HWND hwnd) {
 
   s_hChkGridLines = createChk(5, zh ? L"显示行间网格线" : L"Show grid lines between rows",
                               y4, 344, cfg.showGridLines);
+  y4 += lineH + spacing;
+
+  s_hChkItemCheckBoxes = createChk(5, zh ? L"使用项目复选框选择项目 (Item check boxes)" : L"Use check boxes to select items",
+                                   y4, 347, cfg.showItemCheckBoxes);
 
   // ----------------------------------------------------
   // Page 6: 搜索与过滤 (Search & Filter)
@@ -1164,7 +1220,33 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   SendMessageW(s_hThemeCombo, CB_SETCURSEL, thSel, 0);
   y7 += lineH + spacing * 2;
 
+  createLabel(9, zh ? L"主题强调配色 (Accent Color):" : L"Theme Accent Color:", marginX, y7, contentW, lineH, true);
+  y7 += lineH + spacing;
+
+  s_tempCustomAccent = cfg.customAccentColor;
+  s_hAccentCombo = createCombo(9, marginX, y7, 280, 240);
+  SendMessageW(s_hAccentCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"经典蓝 (Default Blue)" : L"Default Blue"));
+  SendMessageW(s_hAccentCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"极客青绿 (Emerald Teal)" : L"Emerald Teal"));
+  SendMessageW(s_hAccentCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"优雅紫 (Fluent Purple)" : L"Fluent Purple"));
+  SendMessageW(s_hAccentCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"活力橙 (Sunset Orange)" : L"Sunset Orange"));
+  SendMessageW(s_hAccentCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"赤霞红 (Crimson Red)" : L"Crimson Red"));
+  SendMessageW(s_hAccentCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"极简中性灰 (Monochrome Slate)" : L"Monochrome Slate"));
+  SendMessageW(s_hAccentCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"自定义颜色 (Custom Color...)" : L"Custom Color..."));
+  SendMessageW(s_hAccentCombo, CB_SETCURSEL, std::clamp(cfg.accentColorMode, 0, 6), 0);
+
+  s_hBtnCustomAccent = CreateWindowExW(0, L"BUTTON", zh ? L"选色...(&P)" : L"Pick...(&P)",
+                                      WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP,
+                                      marginX + Theme::Get().Scale(290, hwnd), y7, Theme::Get().Scale(80, hwnd), lineH,
+                                      hwnd, (HMENU)376, hInst, nullptr);
+  SendMessageW(s_hBtnCustomAccent, WM_SETFONT, (WPARAM)hFont, TRUE);
+  addCtrl(9, s_hBtnCustomAccent);
+  y7 += lineH + spacing * 2;
+
   createLabel(9, zh ? L"工具栏与界面元素可见性:" : L"Toolbars & Interface Elements:", marginX, y7, contentW, lineH, true);
+  y7 += lineH + spacing;
+
+  s_hChkMenuBar = createChk(9, zh ? L"显示传统明文菜单栏 (取消则合并为 ≡ 汉堡菜单，节省整行空间)" : L"Show classic menu bar (uncheck for ≡ hamburger menu to save space)",
+                            y7, 370, cfg.showMenuBar);
   y7 += lineH + spacing;
 
   s_hChkTBStandard = createChk(9, zh ? L"显示标准按钮工具栏 (前进、后退、刷新、新建)" : L"Show standard navigation buttons",
@@ -1251,9 +1333,13 @@ void SettingsDialog::SaveSettings(HWND hwnd) {
   // Page 5: View & File List
   cfg.viewMode = (int)SendMessageW(s_hViewModeCombo, CB_GETCURSEL, 0, 0);
   cfg.showHidden = (SendMessageW(s_hChkHidden, BM_GETCHECK, 0, 0) == BST_CHECKED);
+  cfg.hideDotFiles = (SendMessageW(s_hChkHideDotFiles, BM_GETCHECK, 0, 0) == BST_CHECKED);
+  cfg.listDensity = (int)SendMessageW(s_hDensityCombo, CB_GETCURSEL, 0, 0);
+  cfg.listScale = (int)SendMessageW(s_hScaleCombo, CB_GETCURSEL, 0, 0);
   cfg.foldersFirst = (SendMessageW(s_hChkFoldersFirst, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.calcFolderSize = (SendMessageW(s_hChkCalcSize, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.showGridLines = (SendMessageW(s_hChkGridLines, BM_GETCHECK, 0, 0) == BST_CHECKED);
+  cfg.showItemCheckBoxes = (SendMessageW(s_hChkItemCheckBoxes, BM_GETCHECK, 0, 0) == BST_CHECKED);
 
   // Page 6: Search & Filter
   cfg.searchSubfoldersDefault = (SendMessageW(s_hChkSearchSubfolders, BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -1280,6 +1366,10 @@ void SettingsDialog::SaveSettings(HWND hwnd) {
   else if (themeSel == 1) cfg.themeMode = 0;
   else if (themeSel == 2) cfg.themeMode = 1;
 
+  cfg.accentColorMode = (int)SendMessageW(s_hAccentCombo, CB_GETCURSEL, 0, 0);
+  cfg.customAccentColor = s_tempCustomAccent;
+
+  cfg.showMenuBar = (SendMessageW(s_hChkMenuBar, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.showToolbarStandard = (SendMessageW(s_hChkTBStandard, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.showToolbarAddress = (SendMessageW(s_hChkTBAddress, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.showToolbarSearch = (SendMessageW(s_hChkTBSearch, BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -1308,23 +1398,31 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     if (pdis && pdis->CtlType == ODT_BUTTON) {
       bool isDown = (pdis->itemState & ODS_SELECTED) != 0;
       bool isDark = Theme::Get().IsDarkMode();
-      HBRUSH hBg = isDark ? (isDown ? Theme::Get().BrushSelected() : Theme::Get().BrushSurface())
-                          : (isDown ? Theme::Get().BrushSelected() : CreateSolidBrush(RGB(240, 242, 245)));
-      FillRect(pdis->hDC, &pdis->rcItem, hBg);
 
-      HPEN hPen = CreatePen(PS_SOLID, 1, isDark ? Theme::Get().ClrBorder() : RGB(180, 185, 195));
+      // Clear background with dialog surface/background
+      FillRect(pdis->hDC, &pdis->rcItem, Theme::Get().BrushBackground());
+
+      COLORREF bgClr = isDark ? (isDown ? RGB(0, 90, 158) : RGB(45, 45, 48))
+                              : (isDown ? RGB(218, 228, 246) : RGB(245, 246, 248));
+      COLORREF borderClr = isDark ? (isDown ? RGB(0, 120, 215) : RGB(65, 65, 68))
+                                  : (isDown ? RGB(0, 120, 215) : RGB(210, 214, 220));
+
+      HBRUSH hBg = CreateSolidBrush(bgClr);
+      HPEN hPen = CreatePen(PS_SOLID, 1, borderClr);
+      HGDIOBJ oldBrush = SelectObject(pdis->hDC, hBg);
       HGDIOBJ oldPen = SelectObject(pdis->hDC, hPen);
-      SelectObject(pdis->hDC, GetStockObject(NULL_BRUSH));
-      RoundRect(pdis->hDC, pdis->rcItem.left, pdis->rcItem.top, pdis->rcItem.right, pdis->rcItem.bottom, 4, 4);
+      int rad = Theme::Get().Scale(8, hwnd);
+      RoundRect(pdis->hDC, pdis->rcItem.left, pdis->rcItem.top, pdis->rcItem.right, pdis->rcItem.bottom, rad, rad);
+      SelectObject(pdis->hDC, oldBrush);
       SelectObject(pdis->hDC, oldPen);
+      DeleteObject(hBg);
       DeleteObject(hPen);
-      if (!isDark) DeleteObject(hBg);
 
       wchar_t btnText[128] = { 0 };
       GetWindowTextW(pdis->hwndItem, btnText, 128);
       SetBkMode(pdis->hDC, TRANSPARENT);
       SetTextColor(pdis->hDC, isDark ? (isDown ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary())
-                                     : (isDown ? RGB(255, 255, 255) : RGB(20, 20, 20)));
+                                     : (isDown ? Theme::Get().ClrAccent() : RGB(30, 30, 30)));
       HFONT hFont = Theme::Get().GetUIFont(hwnd);
       HGDIOBJ oldFont = SelectObject(pdis->hDC, hFont);
       DrawTextW(pdis->hDC, btnText, -1, &pdis->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1333,16 +1431,33 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     }
     if (pdis && pdis->CtlID == 201) {
       bool isSelected = (pdis->itemState & ODS_SELECTED);
-      bool isDark = Theme::Get().IsDarkMode();
 
-      COLORREF bgClr = isSelected ? (isDark ? RGB(0, 90, 158) : RGB(0, 120, 215))
-                                  : Theme::Get().ClrSurface();
+      // Fill entire item background with category sidebar background (Surface)
+      FillRect(pdis->hDC, &pdis->rcItem, Theme::Get().BrushSurface());
+
+      RECT rcPill = pdis->rcItem;
+      int marginH = Theme::Get().Scale(8, hwnd);
+      int marginV = Theme::Get().Scale(2, hwnd);
+      rcPill.left += marginH;
+      rcPill.right -= marginH;
+      rcPill.top += marginV;
+      rcPill.bottom -= marginV;
+
+      if (isSelected) {
+        COLORREF accentClr = Theme::Get().ClrAccent();
+        HBRUSH hbg = CreateSolidBrush(accentClr);
+        HPEN hPen = CreatePen(PS_SOLID, 1, accentClr);
+        HGDIOBJ oldBrush = SelectObject(pdis->hDC, hbg);
+        HGDIOBJ oldPen = SelectObject(pdis->hDC, hPen);
+        int rad = Theme::Get().Scale(8, hwnd);
+        RoundRect(pdis->hDC, rcPill.left, rcPill.top, rcPill.right, rcPill.bottom, rad, rad);
+        SelectObject(pdis->hDC, oldBrush);
+        SelectObject(pdis->hDC, oldPen);
+        DeleteObject(hbg);
+        DeleteObject(hPen);
+      }
+
       COLORREF textColor = isSelected ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary();
-
-      HBRUSH hbg = CreateSolidBrush(bgClr);
-      FillRect(pdis->hDC, &pdis->rcItem, hbg);
-      DeleteObject(hbg);
-
       SetTextColor(pdis->hDC, textColor);
       SetBkMode(pdis->hDC, TRANSPARENT);
 
@@ -1355,8 +1470,8 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         title = zh ? navTitlesZh[pdis->itemID] : navTitlesEn[pdis->itemID];
       }
 
-      RECT rcText = pdis->rcItem;
-      rcText.left += Theme::Get().Scale(16, hwnd);
+      RECT rcText = rcPill;
+      rcText.left += Theme::Get().Scale(12, hwnd);
       DrawTextW(pdis->hDC, title, -1, &rcText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
       SelectObject(pdis->hDC, oldFont);
@@ -1606,16 +1721,30 @@ LRESULT CALLBACK SettingsDialog::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
           { "R", (int)GestureAction::NavForward, L"前进" },
           { "U", (int)GestureAction::NavUp, L"向上一级" },
           { "D", (int)GestureAction::Refresh, L"刷新" },
-          { "UD", (int)GestureAction::NewTab, L"新建标签页" },
+          { "RL", (int)GestureAction::NewTab, L"新建标签页" },
           { "DR", (int)GestureAction::CloseTab, L"关闭当前标签页" },
           { "UL", (int)GestureAction::ToggleTree, L"显示/隐藏侧边栏目录树" },
           { "UR", (int)GestureAction::TogglePreview, L"显示/隐藏快速预览窗格" },
-          { "RU", (int)GestureAction::ScrollTop, L"滚动到列表顶部" },
-          { "RD", (int)GestureAction::ScrollBottom, L"滚动到列表底部" },
+          { "DU", (int)GestureAction::ScrollTop, L"滚动到列表顶部" },
+          { "UD", (int)GestureAction::ScrollBottom, L"滚动到列表底部" },
           { "LU", (int)GestureAction::PageUp, L"向上翻页" },
           { "LD", (int)GestureAction::PageDown, L"向下翻页" }
       };
       PopulateGestureList(s_hGestureList);
+      return 0;
+    }
+
+    if (id == 376) {
+      static COLORREF customCustColors[16] = {0};
+      CHOOSECOLORW cc = {sizeof(cc)};
+      cc.hwndOwner = hwnd;
+      cc.lpCustColors = customCustColors;
+      cc.rgbResult = s_tempCustomAccent;
+      cc.Flags = CC_FULLOPEN | CC_RGBINIT;
+      if (ChooseColorW(&cc)) {
+        s_tempCustomAccent = cc.rgbResult;
+        SendMessageW(s_hAccentCombo, CB_SETCURSEL, 6, 0); // Select "Custom"
+      }
       return 0;
     }
 

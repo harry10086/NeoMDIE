@@ -33,7 +33,7 @@ private:
     void TogglePreview();
     void ToggleTree();
     void ToggleLinksBar();
-    void SetLayout(PaneLayout layout);
+    void SetLayout(PaneLayout layout, const std::wstring& targetNewPath = L"");
     void ShowLayoutMenu(POINT ptScreen);
     void ShowToolbarContextMenu(POINT ptScreen);
     void AddToHistory(const std::wstring& path);
@@ -102,7 +102,9 @@ private:
     HWND m_hwndBtnTree = nullptr;
     HWND m_hwndBtnSplit = nullptr;
     HWND m_hwndBtnPreview = nullptr;
+    HWND m_hwndBtnMenu = nullptr;
     HWND m_hwndTooltip = nullptr;
+    HMENU m_hMenuBar = nullptr;
 
     TabBar m_tabBar;
     int m_currentTabIndex = -1;
@@ -143,4 +145,5 @@ private:
     static const UINT IDC_BTN_SPLIT = 2006;
     static const UINT IDC_BTN_PREVIEW = 2007;
     static const UINT IDC_BTN_NEWTAB = 2008;
+    static const UINT IDC_BTN_MENU = 2009;
 };

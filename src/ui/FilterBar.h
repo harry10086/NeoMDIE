@@ -35,4 +35,5 @@ private:
     bool m_searchSubfolders = false;
     bool m_matchCase = false;
     bool m_suppressNotify = false;
+    bool m_isFocused = false;
 };

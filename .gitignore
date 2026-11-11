@@ -76,3 +76,4 @@ tools/*.exe
 restore_nov2/
 *.exe.old
 release_pkg/
+*.png

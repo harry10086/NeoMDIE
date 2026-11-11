@@ -46,6 +46,11 @@ void Config::Load() {
 
     // General
     themeMode = GetPrivateProfileIntW(secGeneral, L"ThemeMode", -1, m_iniPath.c_str());
+    accentColorMode = GetPrivateProfileIntW(secGeneral, L"AccentColorMode", 0, m_iniPath.c_str());
+    int clrR = GetPrivateProfileIntW(secGeneral, L"CustomAccentR", 0, m_iniPath.c_str());
+    int clrG = GetPrivateProfileIntW(secGeneral, L"CustomAccentG", 120, m_iniPath.c_str());
+    int clrB = GetPrivateProfileIntW(secGeneral, L"CustomAccentB", 212, m_iniPath.c_str());
+    customAccentColor = RGB(clrR, clrG, clrB);
     language = GetPrivateProfileIntW(secGeneral, L"Language", -1, m_iniPath.c_str());
     showTree = GetPrivateProfileIntW(secGeneral, L"ShowTree", 1, m_iniPath.c_str()) != 0;
     treeWidth = GetPrivateProfileIntW(secGeneral, L"TreeWidth", 240, m_iniPath.c_str());
@@ -57,6 +62,10 @@ void Config::Load() {
     previewWidth = GetPrivateProfileIntW(secGeneral, L"PreviewWidth", 320, m_iniPath.c_str());
     viewMode = GetPrivateProfileIntW(secGeneral, L"ViewMode", 0, m_iniPath.c_str());
     showHidden = GetPrivateProfileIntW(secGeneral, L"ShowHidden", 0, m_iniPath.c_str()) != 0;
+    hideDotFiles = GetPrivateProfileIntW(secGeneral, L"HideDotFiles", 1, m_iniPath.c_str()) != 0;
+    showItemCheckBoxes = GetPrivateProfileIntW(secGeneral, L"ShowItemCheckBoxes", 0, m_iniPath.c_str()) != 0;
+    listDensity = GetPrivateProfileIntW(secGeneral, L"ListDensity", 1, m_iniPath.c_str());
+    listScale = GetPrivateProfileIntW(secGeneral, L"ListScale", 1, m_iniPath.c_str());
     foldersFirst = GetPrivateProfileIntW(secGeneral, L"FoldersFirst", 1, m_iniPath.c_str()) != 0;
     calcFolderSize = GetPrivateProfileIntW(secGeneral, L"CalcFolderSize", 0, m_iniPath.c_str()) != 0;
     gesturesEnabled = GetPrivateProfileIntW(secGeneral, L"GesturesEnabled", 1, m_iniPath.c_str()) != 0;
@@ -67,6 +76,7 @@ void Config::Load() {
     restoreTabsOnStartup = GetPrivateProfileIntW(secGeneral, L"RestoreTabs", 1, m_iniPath.c_str()) != 0;
     minimizeToTray = GetPrivateProfileIntW(secGeneral, L"MinimizeToTray", 0, m_iniPath.c_str()) != 0;
     closeToTray = GetPrivateProfileIntW(secGeneral, L"CloseToTray", 0, m_iniPath.c_str()) != 0;
+    showMenuBar = GetPrivateProfileIntW(secGeneral, L"ShowMenuBar", 0, m_iniPath.c_str()) != 0;
     showToolbarStandard = GetPrivateProfileIntW(secGeneral, L"ShowToolbarStandard", 1, m_iniPath.c_str()) != 0;
     showToolbarAddress = GetPrivateProfileIntW(secGeneral, L"ShowToolbarAddress", 1, m_iniPath.c_str()) != 0;
     showToolbarLinks = GetPrivateProfileIntW(secGeneral, L"ShowToolbarLinks", 1, m_iniPath.c_str()) != 0;
@@ -90,6 +100,26 @@ void Config::Load() {
     loadAction(L"ActionTree", actionTree);
     loadAction(L"ActionLinks", actionLinks);
     loadAction(L"ActionAddress", actionAddress);
+
+    // Quick Access
+    const wchar_t* secQA = L"QuickAccess";
+    int qaCount = GetPrivateProfileIntW(secQA, L"Count", -1, m_iniPath.c_str());
+    if (qaCount == -1) {
+        InitDefaultQuickAccess();
+    } else {
+        quickAccessFolders.clear();
+        for (int i = 0; i < qaCount; ++i) {
+            wchar_t k[32], val[MAX_PATH];
+            StringCchPrintfW(k, 32, L"Folder%d", i);
+            GetPrivateProfileStringW(secQA, k, L"", val, MAX_PATH, m_iniPath.c_str());
+            if (val[0] != L'\0' && PathFileExistsW(val)) {
+                quickAccessFolders.push_back(Util::NormalizePath(val));
+            }
+        }
+        if (quickAccessFolders.empty()) {
+            InitDefaultQuickAccess();
+        }
+    }
 
     // Tabs
     sessionTabs.clear();
@@ -186,8 +216,9 @@ void Config::Load() {
                 if (nameStr == L"滚动到列表首端") nameStr = L"滚动到列表顶部";
                 else if (nameStr == L"滚动到列表末端") nameStr = L"滚动到列表底部";
                 std::string codeStr = Util::WideToUtf8(vCode);
-                if (codeStr == "LDR" && vAct == (int)GestureAction::ScrollTop) codeStr = "RU";
-                else if (codeStr == "RDL" && vAct == (int)GestureAction::ScrollBottom) codeStr = "RD";
+                if (codeStr == "UD" && vAct == (int)GestureAction::NewTab) codeStr = "RL";
+                else if ((codeStr == "RU" || codeStr == "LDR") && vAct == (int)GestureAction::ScrollTop) codeStr = "DU";
+                else if ((codeStr == "RD" || codeStr == "RDL") && vAct == (int)GestureAction::ScrollBottom) codeStr = "UD";
                 else if (codeStr == "LUR" && vAct == (int)GestureAction::PageUp) codeStr = "LU";
                 else if (codeStr == "RUL" && vAct == (int)GestureAction::PageDown) codeStr = "LD";
                 gestures.push_back({ codeStr, vAct, nameStr });
@@ -204,12 +235,12 @@ void Config::Load() {
             { "R", (int)GestureAction::NavForward, L"前进" },
             { "U", (int)GestureAction::NavUp, L"向上一级" },
             { "D", (int)GestureAction::Refresh, L"刷新" },
-            { "UD", (int)GestureAction::NewTab, L"新建标签页" },
+            { "RL", (int)GestureAction::NewTab, L"新建标签页" },
             { "DR", (int)GestureAction::CloseTab, L"关闭当前标签页" },
             { "UL", (int)GestureAction::ToggleTree, L"显示/隐藏侧边栏目录树" },
             { "UR", (int)GestureAction::TogglePreview, L"显示/隐藏快速预览窗格" },
-            { "RU", (int)GestureAction::ScrollTop, L"滚动到列表顶部" },
-            { "RD", (int)GestureAction::ScrollBottom, L"滚动到列表底部" },
+            { "DU", (int)GestureAction::ScrollTop, L"滚动到列表顶部" },
+            { "UD", (int)GestureAction::ScrollBottom, L"滚动到列表底部" },
             { "LU", (int)GestureAction::PageUp, L"向上翻页" },
             { "LD", (int)GestureAction::PageDown, L"向下翻页" }
         };
@@ -238,6 +269,16 @@ void Config::Load() {
             if (wcslen(vName) > 0 && wcslen(vKey) > 0) {
                 shortcuts.push_back({ vName, vKey, vShift, vCtrl, vAlt });
             }
+        }
+        bool hasNewMD = false;
+        for (const auto& sc : shortcuts) {
+            if (sc.name == L"新建Markdown文档" || sc.name == L"新建Markdown文件" || sc.name == L"新建markdown文件" || sc.name == L"New Markdown Document") {
+                hasNewMD = true;
+                break;
+            }
+        }
+        if (!hasNewMD) {
+            shortcuts.push_back({ L"新建Markdown文档", L"M", true, true, true });
         }
     }
     bool scCorrupted = false;
@@ -273,6 +314,7 @@ void Config::Load() {
             { L"剪切选中项", L"X", false, true, false },
             { L"粘贴", L"V", false, true, false },
             { L"新建文件夹", L"N", true, true, false },
+            { L"新建Markdown文档", L"M", true, true, true },
             { L"属性", L"Enter", false, false, true }
         };
     }
@@ -351,152 +393,136 @@ void Config::Load() {
 }
 
 void Config::Save() {
-    const wchar_t* secGeneral = L"General";
-    const wchar_t* secWindow = L"Window";
-    const wchar_t* secTabs = L"Tabs";
-
-    auto writeInt = [this](const wchar_t* sec, const wchar_t* key, int val) {
-        wchar_t buf[32];
-        StringCchPrintfW(buf, 32, L"%d", val);
-        WritePrivateProfileStringW(sec, key, buf, m_iniPath.c_str());
-    };
+    std::wstringstream out;
 
     // Window
-    writeInt(secWindow, L"X", window.x);
-    writeInt(secWindow, L"Y", window.y);
-    writeInt(secWindow, L"Width", window.width);
-    writeInt(secWindow, L"Height", window.height);
-    writeInt(secWindow, L"Maximized", window.maximized ? 1 : 0);
+    out << L"[Window]\r\n";
+    out << L"X=" << window.x << L"\r\n";
+    out << L"Y=" << window.y << L"\r\n";
+    out << L"Width=" << window.width << L"\r\n";
+    out << L"Height=" << window.height << L"\r\n";
+    out << L"Maximized=" << (window.maximized ? 1 : 0) << L"\r\n\r\n";
 
     // General
-    writeInt(secGeneral, L"ThemeMode", themeMode);
-    writeInt(secGeneral, L"Language", language);
-    writeInt(secGeneral, L"ShowTree", showTree ? 1 : 0);
-    writeInt(secGeneral, L"TreeWidth", treeWidth);
-    writeInt(secGeneral, L"PaneLayout", paneLayout);
-    writeInt(secGeneral, L"SyncNav", syncNav ? 1 : 0);
-    writeInt(secGeneral, L"SplitEnabled", splitEnabled ? 1 : 0);
-    writeInt(secGeneral, L"SplitRatio", splitRatio);
-    writeInt(secGeneral, L"PreviewEnabled", previewEnabled ? 1 : 0);
-    writeInt(secGeneral, L"PreviewWidth", previewWidth);
-    writeInt(secGeneral, L"ViewMode", viewMode);
-    writeInt(secGeneral, L"ShowHidden", showHidden ? 1 : 0);
-    writeInt(secGeneral, L"FoldersFirst", foldersFirst ? 1 : 0);
-    writeInt(secGeneral, L"CalcFolderSize", calcFolderSize ? 1 : 0);
-    writeInt(secGeneral, L"GesturesEnabled", gesturesEnabled ? 1 : 0);
-    writeInt(secGeneral, L"SingleInstance", singleInstance ? 1 : 0);
-    writeInt(secGeneral, L"ZebraStriping", zebraStriping ? 1 : 0);
-    writeInt(secGeneral, L"ShowGridLines", showGridLines ? 1 : 0);
-    writeInt(secGeneral, L"LockToolbars", lockToolbars ? 1 : 0);
-    writeInt(secGeneral, L"SearchBarFirst", searchBarFirst ? 1 : 0);
-    writeInt(secGeneral, L"FilterBarWidth", filterBarWidth);
-    writeInt(secGeneral, L"RestoreTabs", restoreTabsOnStartup ? 1 : 0);
-    writeInt(secGeneral, L"MinimizeToTray", minimizeToTray ? 1 : 0);
-    writeInt(secGeneral, L"CloseToTray", closeToTray ? 1 : 0);
-    writeInt(secGeneral, L"ShowToolbarStandard", showToolbarStandard ? 1 : 0);
-    writeInt(secGeneral, L"ShowToolbarAddress", showToolbarAddress ? 1 : 0);
-    writeInt(secGeneral, L"ShowToolbarLinks", showToolbarLinks ? 1 : 0);
-    writeInt(secGeneral, L"ShowToolbarSearch", showToolbarSearch ? 1 : 0);
-    writeInt(secGeneral, L"ShowStatusBar", showStatusBar ? 1 : 0);
-    writeInt(secGeneral, L"AllowDuplicateTabs", allowDuplicateTabs ? 1 : 0);
-    writeInt(secGeneral, L"TabDblClickAction", tabDoubleClickAction);
-    writeInt(secGeneral, L"AutoExpandTree", autoExpandTree ? 1 : 0);
-    writeInt(secGeneral, L"SearchSubfolders", searchSubfoldersDefault ? 1 : 0);
+    out << L"[General]\r\n";
+    out << L"ThemeMode=" << themeMode << L"\r\n";
+    out << L"AccentColorMode=" << accentColorMode << L"\r\n";
+    out << L"CustomAccentR=" << (int)GetRValue(customAccentColor) << L"\r\n";
+    out << L"CustomAccentG=" << (int)GetGValue(customAccentColor) << L"\r\n";
+    out << L"CustomAccentB=" << (int)GetBValue(customAccentColor) << L"\r\n";
+    out << L"Language=" << language << L"\r\n";
+    out << L"ShowTree=" << (showTree ? 1 : 0) << L"\r\n";
+    out << L"TreeWidth=" << treeWidth << L"\r\n";
+    out << L"PaneLayout=" << paneLayout << L"\r\n";
+    out << L"SyncNav=" << (syncNav ? 1 : 0) << L"\r\n";
+    out << L"SplitEnabled=" << (splitEnabled ? 1 : 0) << L"\r\n";
+    out << L"SplitRatio=" << splitRatio << L"\r\n";
+    out << L"PreviewEnabled=" << (previewEnabled ? 1 : 0) << L"\r\n";
+    out << L"PreviewWidth=" << previewWidth << L"\r\n";
+    out << L"ViewMode=" << viewMode << L"\r\n";
+    out << L"ShowHidden=" << (showHidden ? 1 : 0) << L"\r\n";
+    out << L"HideDotFiles=" << (hideDotFiles ? 1 : 0) << L"\r\n";
+    out << L"ShowItemCheckBoxes=" << (showItemCheckBoxes ? 1 : 0) << L"\r\n";
+    out << L"ListDensity=" << listDensity << L"\r\n";
+    out << L"ListScale=" << listScale << L"\r\n";
+    out << L"FoldersFirst=" << (foldersFirst ? 1 : 0) << L"\r\n";
+    out << L"CalcFolderSize=" << (calcFolderSize ? 1 : 0) << L"\r\n";
+    out << L"GesturesEnabled=" << (gesturesEnabled ? 1 : 0) << L"\r\n";
+    out << L"SingleInstance=" << (singleInstance ? 1 : 0) << L"\r\n";
+    out << L"ZebraStriping=" << (zebraStriping ? 1 : 0) << L"\r\n";
+    out << L"ShowGridLines=" << (showGridLines ? 1 : 0) << L"\r\n";
+    out << L"LockToolbars=" << (lockToolbars ? 1 : 0) << L"\r\n";
+    out << L"SearchBarFirst=" << (searchBarFirst ? 1 : 0) << L"\r\n";
+    out << L"FilterBarWidth=" << filterBarWidth << L"\r\n";
+    out << L"RestoreTabs=" << (restoreTabsOnStartup ? 1 : 0) << L"\r\n";
+    out << L"MinimizeToTray=" << (minimizeToTray ? 1 : 0) << L"\r\n";
+    out << L"CloseToTray=" << (closeToTray ? 1 : 0) << L"\r\n";
+    out << L"ShowMenuBar=" << (showMenuBar ? 1 : 0) << L"\r\n";
+    out << L"ShowToolbarStandard=" << (showToolbarStandard ? 1 : 0) << L"\r\n";
+    out << L"ShowToolbarAddress=" << (showToolbarAddress ? 1 : 0) << L"\r\n";
+    out << L"ShowToolbarLinks=" << (showToolbarLinks ? 1 : 0) << L"\r\n";
+    out << L"ShowToolbarSearch=" << (showToolbarSearch ? 1 : 0) << L"\r\n";
+    out << L"ShowStatusBar=" << (showStatusBar ? 1 : 0) << L"\r\n";
+    out << L"AllowDuplicateTabs=" << (allowDuplicateTabs ? 1 : 0) << L"\r\n";
+    out << L"TabDblClickAction=" << tabDoubleClickAction << L"\r\n";
+    out << L"AutoExpandTree=" << (autoExpandTree ? 1 : 0) << L"\r\n";
+    out << L"SearchSubfolders=" << (searchSubfoldersDefault ? 1 : 0) << L"\r\n";
+
     auto saveAction = [&](const wchar_t* prefix, const TargetActionConfig& tac) {
-        wchar_t k[64];
-        StringCchPrintfW(k, 64, L"%s_OpenCurrent", prefix); writeInt(secGeneral, k, tac.openCurrentPane);
-        StringCchPrintfW(k, 64, L"%s_OpenNewTab", prefix); writeInt(secGeneral, k, tac.openNewTab);
-        StringCchPrintfW(k, 64, L"%s_OpenBgTab", prefix); writeInt(secGeneral, k, tac.openBgTab);
-        StringCchPrintfW(k, 64, L"%s_OpenOtherPane", prefix); writeInt(secGeneral, k, tac.openOtherPane);
-        StringCchPrintfW(k, 64, L"%s_OpenExplorer", prefix); writeInt(secGeneral, k, tac.openExplorer);
+        out << prefix << L"_OpenCurrent=" << tac.openCurrentPane << L"\r\n";
+        out << prefix << L"_OpenNewTab=" << tac.openNewTab << L"\r\n";
+        out << prefix << L"_OpenBgTab=" << tac.openBgTab << L"\r\n";
+        out << prefix << L"_OpenOtherPane=" << tac.openOtherPane << L"\r\n";
+        out << prefix << L"_OpenExplorer=" << tac.openExplorer << L"\r\n";
     };
     saveAction(L"ActionTree", actionTree);
     saveAction(L"ActionLinks", actionLinks);
     saveAction(L"ActionAddress", actionAddress);
+    out << L"\r\n";
+
+    // Quick Access
+    out << L"[QuickAccess]\r\n";
+    out << L"Count=" << quickAccessFolders.size() << L"\r\n";
+    for (size_t i = 0; i < quickAccessFolders.size(); ++i) {
+        out << L"Folder" << i << L"=" << quickAccessFolders[i] << L"\r\n";
+    }
+    out << L"\r\n";
 
     // Tabs
-    WritePrivateProfileSectionW(secTabs, L"", m_iniPath.c_str());
+    out << L"[Tabs]\r\n";
     int saveCount = !sessionTabsInfo.empty() ? (int)sessionTabsInfo.size() : (int)sessionTabs.size();
-    writeInt(secTabs, L"Count", saveCount);
-    writeInt(secTabs, L"Active", activeTabIndex);
+    out << L"Count=" << saveCount << L"\r\n";
+    out << L"Active=" << activeTabIndex << L"\r\n";
     if (!sessionTabsInfo.empty()) {
         for (size_t i = 0; i < sessionTabsInfo.size(); ++i) {
-            wchar_t key[64];
-            StringCchPrintfW(key, 64, L"Tab%d", (int)i);
-            WritePrivateProfileStringW(secTabs, key, sessionTabsInfo[i].path.c_str(), m_iniPath.c_str());
-
-            StringCchPrintfW(key, 64, L"Tab%d_Layout", (int)i);
-            writeInt(secTabs, key, sessionTabsInfo[i].layout);
-
-            StringCchPrintfW(key, 64, L"Tab%d_ActivePane", (int)i);
-            writeInt(secTabs, key, sessionTabsInfo[i].activePaneIndex);
-
-            StringCchPrintfW(key, 64, L"Tab%d_PaneCount", (int)i);
-            writeInt(secTabs, key, (int)sessionTabsInfo[i].panePaths.size());
+            out << L"Tab" << i << L"=" << sessionTabsInfo[i].path << L"\r\n";
+            out << L"Tab" << i << L"_Layout=" << sessionTabsInfo[i].layout << L"\r\n";
+            out << L"Tab" << i << L"_ActivePane=" << sessionTabsInfo[i].activePaneIndex << L"\r\n";
+            out << L"Tab" << i << L"_PaneCount=" << (int)sessionTabsInfo[i].panePaths.size() << L"\r\n";
 
             for (size_t p = 0; p < sessionTabsInfo[i].panePaths.size(); ++p) {
-                wchar_t pKey[64];
-                StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d", (int)i, (int)p);
-                WritePrivateProfileStringW(secTabs, pKey, sessionTabsInfo[i].panePaths[p].c_str(), m_iniPath.c_str());
-
+                out << L"Tab" << i << L"_Pane" << p << L"=" << sessionTabsInfo[i].panePaths[p] << L"\r\n";
                 if (p < sessionTabsInfo[i].paneViewStates.size()) {
                     const auto& vs = sessionTabsInfo[i].paneViewStates[p];
-                    StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_SortCol", (int)i, (int)p);
-                    writeInt(secTabs, pKey, vs.sortCol);
-                    StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_SortAsc", (int)i, (int)p);
-                    writeInt(secTabs, pKey, vs.sortAsc ? 1 : 0);
-                    StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_ViewMode", (int)i, (int)p);
-                    writeInt(secTabs, pKey, vs.viewMode);
-                    StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_FoldersFirst", (int)i, (int)p);
-                    writeInt(secTabs, pKey, vs.foldersFirst);
+                    out << L"Tab" << i << L"_Pane" << p << L"_SortCol=" << vs.sortCol << L"\r\n";
+                    out << L"Tab" << i << L"_Pane" << p << L"_SortAsc=" << (vs.sortAsc ? 1 : 0) << L"\r\n";
+                    out << L"Tab" << i << L"_Pane" << p << L"_ViewMode=" << vs.viewMode << L"\r\n";
+                    out << L"Tab" << i << L"_Pane" << p << L"_FoldersFirst=" << vs.foldersFirst << L"\r\n";
                 }
             }
         }
     } else {
         for (size_t i = 0; i < sessionTabs.size(); ++i) {
-            wchar_t key[32];
-            StringCchPrintfW(key, 32, L"Tab%d", (int)i);
-            WritePrivateProfileStringW(secTabs, key, sessionTabs[i].c_str(), m_iniPath.c_str());
+            out << L"Tab" << i << L"=" << sessionTabs[i] << L"\r\n";
         }
     }
+    out << L"\r\n";
 
     // Gestures
-    const wchar_t* secGestures = L"Gestures";
-    WritePrivateProfileSectionW(secGestures, L"", m_iniPath.c_str());
-    writeInt(secGestures, L"Count", (int)gestures.size());
+    out << L"[Gestures]\r\n";
+    out << L"Count=" << (int)gestures.size() << L"\r\n";
     for (size_t i = 0; i < gestures.size(); ++i) {
-        wchar_t kCode[32], kAct[32], kName[32];
-        StringCchPrintfW(kCode, 32, L"Code%d", (int)i);
-        StringCchPrintfW(kAct, 32, L"Action%d", (int)i);
-        StringCchPrintfW(kName, 32, L"Name%d", (int)i);
-
         std::wstring wCode = Util::Utf8ToWide(gestures[i].code);
-        WritePrivateProfileStringW(secGestures, kCode, wCode.c_str(), m_iniPath.c_str());
-        writeInt(secGestures, kAct, gestures[i].action);
-        WritePrivateProfileStringW(secGestures, kName, gestures[i].name.c_str(), m_iniPath.c_str());
+        out << L"Code" << i << L"=" << wCode << L"\r\n";
+        out << L"Action" << i << L"=" << gestures[i].action << L"\r\n";
+        out << L"Name" << i << L"=" << gestures[i].name << L"\r\n";
     }
+    out << L"\r\n";
 
     // Shortcuts
-    const wchar_t* secShortcuts = L"Shortcuts";
-    WritePrivateProfileSectionW(secShortcuts, L"", m_iniPath.c_str());
-    writeInt(secShortcuts, L"Count", (int)shortcuts.size());
+    out << L"[Shortcuts]\r\n";
+    out << L"Count=" << (int)shortcuts.size() << L"\r\n";
     for (size_t i = 0; i < shortcuts.size(); ++i) {
-        wchar_t kName[32], kKey[32], kShift[32], kCtrl[32], kAlt[32];
-        StringCchPrintfW(kName, 32, L"Name%d", (int)i);
-        StringCchPrintfW(kKey, 32, L"Key%d", (int)i);
-        StringCchPrintfW(kShift, 32, L"Shift%d", (int)i);
-        StringCchPrintfW(kCtrl, 32, L"Ctrl%d", (int)i);
-        StringCchPrintfW(kAlt, 32, L"Alt%d", (int)i);
-
-        WritePrivateProfileStringW(secShortcuts, kName, shortcuts[i].name.c_str(), m_iniPath.c_str());
-        WritePrivateProfileStringW(secShortcuts, kKey, shortcuts[i].key.c_str(), m_iniPath.c_str());
-        writeInt(secShortcuts, kShift, shortcuts[i].shift ? 1 : 0);
-        writeInt(secShortcuts, kCtrl, shortcuts[i].ctrl ? 1 : 0);
-        writeInt(secShortcuts, kAlt, shortcuts[i].alt ? 1 : 0);
+        out << L"Name" << i << L"=" << shortcuts[i].name << L"\r\n";
+        out << L"Key" << i << L"=" << shortcuts[i].key << L"\r\n";
+        out << L"Shift" << i << L"=" << (shortcuts[i].shift ? 1 : 0) << L"\r\n";
+        out << L"Ctrl" << i << L"=" << (shortcuts[i].ctrl ? 1 : 0) << L"\r\n";
+        out << L"Alt" << i << L"=" << (shortcuts[i].alt ? 1 : 0) << L"\r\n";
     }
+    out << L"\r\n";
 
     // Column widths
-    const wchar_t* secColumns = L"Columns";
+    out << L"[Columns]\r\n";
     static const struct { int id; const wchar_t* key; int defW; } s_colDefsSave[] = {
         { 0, L"Col_Name", 300 },
         { 1, L"Col_DateModified", 160 },
@@ -512,38 +538,96 @@ void Config::Save() {
     for (const auto& cd : s_colDefsSave) {
         auto it = columnWidths.find(cd.id);
         int w = (it != columnWidths.end() && it->second > 20) ? it->second : cd.defW;
-        writeInt(secColumns, cd.key, w);
+        out << cd.key << L"=" << w << L"\r\n";
     }
+    out << L"\r\n";
 
     // FolderViews (cap at 200 recent folders to keep INI clean)
-    const wchar_t* secFolderViews = L"FolderViews";
-    WritePrivateProfileSectionW(secFolderViews, L"", m_iniPath.c_str());
+    out << L"[FolderViews]\r\n";
     int fvIdx = 0;
     for (const auto& kv : folderViewMap) {
         if (fvIdx >= 200) break;
         if (kv.first.empty()) continue;
 
-        wchar_t kPath[32], kVal[32];
-        StringCchPrintfW(kPath, 32, L"P%d", fvIdx);
-        StringCchPrintfW(kVal, 32, L"V%d", fvIdx);
-
-        std::wstring vStr;
-        wchar_t head[64];
-        StringCchPrintfW(head, 64, L"%d,%d,%d,%d;", kv.second.sortCol, kv.second.sortAsc ? 1 : 0, kv.second.viewMode, kv.second.foldersFirst);
-        vStr += head;
-
+        out << L"P" << fvIdx << L"=" << kv.first << L"\r\n";
+        out << L"V" << fvIdx << L"=" << kv.second.sortCol << L"," << (kv.second.sortAsc ? 1 : 0)
+            << L"," << kv.second.viewMode << L"," << kv.second.foldersFirst << L";";
         bool firstCol = true;
         for (const auto& cw : kv.second.columnWidths) {
-            if (!firstCol) vStr += L",";
+            if (!firstCol) out << L",";
             firstCol = false;
-            wchar_t cbuf[32];
-            StringCchPrintfW(cbuf, 32, L"%d:%d", cw.first, cw.second);
-            vStr += cbuf;
+            out << cw.first << L":" << cw.second;
         }
-
-        WritePrivateProfileStringW(secFolderViews, kPath, kv.first.c_str(), m_iniPath.c_str());
-        WritePrivateProfileStringW(secFolderViews, kVal, vStr.c_str(), m_iniPath.c_str());
+        out << L"\r\n";
         fvIdx++;
     }
-    writeInt(secFolderViews, L"Count", fvIdx);
+    out << L"Count=" << fvIdx << L"\r\n";
+
+    std::wstring content = out.str();
+    HANDLE hFile = CreateFileW(m_iniPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        unsigned char bom[2] = { 0xFF, 0xFE }; // UTF-16LE BOM
+        DWORD written = 0;
+        WriteFile(hFile, bom, 2, &written, nullptr);
+        WriteFile(hFile, content.data(), (DWORD)(content.size() * sizeof(wchar_t)), &written, nullptr);
+        CloseHandle(hFile);
+    }
+    // Flush Windows internal INI cache
+    WritePrivateProfileStringW(nullptr, nullptr, nullptr, m_iniPath.c_str());
+}
+
+void Config::InitDefaultQuickAccess() {
+    quickAccessFolders.clear();
+    wchar_t path[MAX_PATH];
+    if (SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, path) == S_OK) {
+        quickAccessFolders.push_back(Util::NormalizePath(path));
+    }
+    wchar_t userProfile[MAX_PATH];
+    if (GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH) > 0) {
+        std::wstring dl = std::wstring(userProfile) + L"\\Downloads";
+        if (PathFileExistsW(dl.c_str())) {
+            quickAccessFolders.push_back(Util::NormalizePath(dl));
+        }
+    }
+    if (SHGetFolderPathW(nullptr, CSIDL_MYDOCUMENTS, nullptr, 0, path) == S_OK) {
+        quickAccessFolders.push_back(Util::NormalizePath(path));
+    }
+    if (SHGetFolderPathW(nullptr, CSIDL_MYPICTURES, nullptr, 0, path) == S_OK) {
+        quickAccessFolders.push_back(Util::NormalizePath(path));
+    }
+    if (SHGetFolderPathW(nullptr, CSIDL_MYMUSIC, nullptr, 0, path) == S_OK) {
+        quickAccessFolders.push_back(Util::NormalizePath(path));
+    }
+    if (SHGetFolderPathW(nullptr, CSIDL_MYVIDEO, nullptr, 0, path) == S_OK) {
+        quickAccessFolders.push_back(Util::NormalizePath(path));
+    }
+}
+
+bool Config::AddQuickAccess(const std::wstring& path) {
+    std::wstring norm = Util::NormalizePath(path);
+    if (norm.empty() || !PathFileExistsW(norm.c_str())) return false;
+    for (const auto& f : quickAccessFolders) {
+        if (_wcsicmp(f.c_str(), norm.c_str()) == 0) return false;
+    }
+    quickAccessFolders.push_back(norm);
+    Save();
+    return true;
+}
+
+bool Config::RemoveQuickAccess(const std::wstring& path) {
+    std::wstring norm = Util::NormalizePath(path);
+    for (auto it = quickAccessFolders.begin(); it != quickAccessFolders.end(); ++it) {
+        if (_wcsicmp(it->c_str(), norm.c_str()) == 0) {
+            quickAccessFolders.erase(it);
+            Save();
+            return true;
+        }
+    }
+    return false;
+}
+
+void Config::ResetQuickAccess() {
+    InitDefaultQuickAccess();
+    Save();
 }

@@ -51,7 +51,7 @@ if errorlevel 1 (
 )
 
 echo [2/2] Compiling C++ Sources...
-cl /nologo /std:c++17 /EHsc /O2 /MT /W3 /utf-8 ^
+cl /nologo /std:c++17 /EHsc /O2 /Zi /FS /MT /W3 /utf-8 ^
    /I src ^
    src\main.cpp ^
    src\core\Config.cpp ^
@@ -77,7 +77,7 @@ cl /nologo /std:c++17 /EHsc /O2 /MT /W3 /utf-8 ^
    src\ui\DropIndicatorOverlay.cpp ^
    src\ui\MainWindow.cpp ^
    /Fe:bin\NeoMDIE.exe ^
-   /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup ^
+   /link /DEBUG /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup ^
    src\resources\NeoMDIE.res
 
 if errorlevel 1 (

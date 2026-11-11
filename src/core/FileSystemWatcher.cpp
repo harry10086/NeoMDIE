@@ -10,7 +10,8 @@ FileSystemWatcher::~FileSystemWatcher() {
 void FileSystemWatcher::Watch(const std::wstring& directory, HWND notifyWnd, UINT notifyMsg) {
     Stop();
 
-    if (directory.empty() || directory == L"此电脑" || directory == L"This PC") {
+    if (directory.empty() || directory == L"此电脑" || directory == L"This PC" ||
+        (directory.length() >= 2 && directory[0] == L'\\' && directory[1] == L'\\')) {
         return;
     }
 

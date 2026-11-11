@@ -231,6 +231,13 @@ std::wstring GestureEngine::GetActionName(GestureAction action) {
     case GestureAction::OpenSettings:    return zh ? L"选项与设置" : L"Options & Settings";
     case GestureAction::InvertSelection: return zh ? L"反向选择" : L"Invert Selection";
     case GestureAction::Undo:            return zh ? L"撤销" : L"Undo";
+    case GestureAction::ToggleCheckBoxes: return zh ? L"显示/隐藏项目复选框" : L"Toggle Item Checkboxes";
+    case GestureAction::ToggleDotFiles:   return zh ? L"隐藏/显示点文件" : L"Toggle Dotfiles";
+    case GestureAction::ToggleCalcFolderSize: return zh ? L"计算文件夹大小" : L"Calculate Folder Size";
+    case GestureAction::FocusAddress:     return zh ? L"聚焦到地址栏" : L"Focus Address Bar";
+    case GestureAction::FocusFilter:      return zh ? L"聚焦到搜索过滤栏" : L"Focus Filter Bar";
+    case GestureAction::ToggleDarkMode:   return zh ? L"切换深色/浅色模式" : L"Toggle Dark Mode";
+    case GestureAction::ToggleMenuBar:    return zh ? L"显示/隐藏传统菜单栏" : L"Toggle Menu Bar";
     default: return zh ? L"无动作" : L"None";
     }
 }

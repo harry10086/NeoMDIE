@@ -11,13 +11,43 @@
 const UINT FileListView::WM_NOTIFY_DIR_CHANGED;
 const UINT FileListView::WM_NOTIFY_FOLDER_SIZE;
 
+static void DrawSmoothCheckmark(HDC hdc, const RECT& rcBox, HWND hwnd) {
+    int iconH = Theme::Get().Scale(10, hwnd);
+    LOGFONTW lf = { 0 };
+    lf.lfHeight = -iconH;
+    lf.lfWeight = FW_BOLD;
+    lf.lfQuality = CLEARTYPE_QUALITY;
+    StringCchCopyW(lf.lfFaceName, LF_FACESIZE, L"Segoe Fluent Icons");
+    HFONT hFont = CreateFontIndirectW(&lf);
+    HGDIOBJ oldFont = SelectObject(hdc, hFont);
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(255, 255, 255));
+
+    wchar_t glyph[2] = { (wchar_t)0xE73E, 0 };
+    RECT rcDraw = rcBox;
+    DrawTextW(hdc, glyph, 1, &rcDraw, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    SelectObject(hdc, oldFont);
+    DeleteObject(hFont);
+}
+
 FileListView::FileListView() {
     m_foldersFirst = Config::Get().foldersFirst;
+    m_hideDotFiles = Config::Get().hideDotFiles;
     m_activeColumns = { ColumnId::Name, ColumnId::DateModified, ColumnId::Type, ColumnId::Size };
 }
 
 FileListView::~FileListView() {
     SaveColumnWidths();
+    if (m_hFontText) {
+        DeleteObject(m_hFontText);
+        m_hFontText = nullptr;
+    }
+    if (m_hFontRowMetric) {
+        DeleteObject(m_hFontRowMetric);
+        m_hFontRowMetric = nullptr;
+    }
     m_searchCancelled = true;
     if (m_searchThread.joinable()) {
         m_searchThread.detach();
@@ -28,6 +58,7 @@ FileListView::~FileListView() {
         m_pDropTarget = nullptr;
     }
     m_calcSize.CancelAll();
+    CancelCustomIconLoader();
     m_watcher.Stop();
     m_gesture.Detach();
 }
@@ -46,8 +77,11 @@ HWND FileListView::Create(HWND hwndParent, int id) {
         hwndParent, (HMENU)(INT_PTR)id, hInst, nullptr
     );
 
-    ListView_SetExtendedListViewStyle(m_hwnd,
-        LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_HEADERDRAGDROP | LVS_EX_SUBITEMIMAGES);
+    DWORD exStyle = LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_HEADERDRAGDROP | LVS_EX_SUBITEMIMAGES;
+    if (Config::Get().showItemCheckBoxes) {
+        exStyle |= LVS_EX_CHECKBOXES;
+    }
+    ListView_SetExtendedListViewStyle(m_hwnd, exStyle);
 
     HIMAGELIST himlSmall = ShellUtils::GetSystemImageList(false);
     HIMAGELIST himlLarge = ShellUtils::GetSystemImageList(true);
@@ -59,6 +93,8 @@ HWND FileListView::Create(HWND hwndParent, int id) {
 
     InitColumns();
     ApplyTheme();
+    ApplyDensity(Config::Get().listDensity);
+    UpdateHeaderCheckBox();
 
     SetWindowSubclass(hwndParent, FileListView::ParentSubclassProc, (UINT_PTR)this, (DWORD_PTR)this);
     SetWindowSubclass(m_hwnd, FileListView::ListSubclassProc, (UINT_PTR)this, (DWORD_PTR)this);
@@ -329,6 +365,7 @@ void FileListView::RebuildColumns() {
     }
 
     UpdateHeaderSortArrow();
+    UpdateHeaderCheckBox();
     InvalidateRect(m_hwnd, nullptr, TRUE);
 }
 
@@ -398,6 +435,37 @@ void FileListView::UpdateHeaderSortArrow() {
     }
 }
 
+void FileListView::UpdateHeaderCheckBox() {
+    HWND hHeader = ListView_GetHeader(m_hwnd);
+    if (!hHeader) return;
+    HDITEMW hdi = { sizeof(hdi) };
+    hdi.mask = HDI_FORMAT;
+    if (Header_GetItem(hHeader, 0, &hdi)) {
+        if (Config::Get().showItemCheckBoxes) {
+            hdi.fmt |= HDF_CHECKBOX;
+            int selCount = ListView_GetSelectedCount(m_hwnd);
+            int totalCount = (int)m_filteredIndices.size();
+            if (totalCount > 0 && selCount == totalCount) {
+                hdi.fmt |= HDF_CHECKED;
+            } else {
+                hdi.fmt &= ~HDF_CHECKED;
+            }
+        } else {
+            hdi.fmt &= ~(HDF_CHECKBOX | HDF_CHECKED);
+        }
+        Header_SetItem(hHeader, 0, &hdi);
+    }
+    InvalidateRect(hHeader, nullptr, TRUE);
+}
+
+void FileListView::ApplyItemCheckBoxes() {
+    if (!m_hwnd) return;
+    bool enable = Config::Get().showItemCheckBoxes;
+    ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_CHECKBOXES, enable ? LVS_EX_CHECKBOXES : 0);
+    UpdateHeaderCheckBox();
+    InvalidateRect(m_hwnd, nullptr, TRUE);
+}
+
 void FileListView::ShowColumnHeaderMenu(POINT ptScreen) {
     bool isZh = I18n::Get().IsChinese();
     HMENU hMenu = CreatePopupMenu();
@@ -442,6 +510,31 @@ void FileListView::ShowColumnHeaderMenu(POINT ptScreen) {
 
 LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     FileListView* pThis = (FileListView*)dwRefData;
+    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP) {
+        if (Config::Get().showItemCheckBoxes && pThis) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            RECT rcItem0;
+            if (Header_GetItemRect(hwnd, 0, &rcItem0)) {
+                RECT rcChkZone = rcItem0;
+                rcChkZone.right = rcItem0.left + Theme::Get().Scale(26, hwnd);
+                if (PtInRect(&rcChkZone, pt)) {
+                    if (msg == WM_LBUTTONUP) {
+                        int selCount = ListView_GetSelectedCount(pThis->m_hwnd);
+                        int totalCount = (int)pThis->m_filteredIndices.size();
+                        if (totalCount > 0 && selCount == totalCount) {
+                            ListView_SetItemState(pThis->m_hwnd, -1, 0, LVIS_SELECTED);
+                        } else {
+                            pThis->SelectAll();
+                        }
+                        pThis->UpdateHeaderCheckBox();
+                        pThis->NotifyStatus();
+                        InvalidateRect(hwnd, nullptr, TRUE);
+                    }
+                    return 0; // Handled checkbox click, avoid sorting
+                }
+            }
+        }
+    }
     if (msg == WM_LBUTTONUP) {
         LRESULT res = DefSubclassProc(hwnd, msg, wParam, lParam);
         if (pThis) pThis->SaveColumnWidths();
@@ -453,7 +546,9 @@ LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wP
         if (pThis) pThis->ShowColumnHeaderMenu(pt);
         return 0;
     }
-    if (Theme::Get().IsDarkMode()) {
+
+    bool customHeader = Theme::Get().IsDarkMode() || Config::Get().showItemCheckBoxes;
+    if (customHeader) {
         if (msg == WM_ERASEBKGND) return 1;
         if (msg == WM_PAINT) {
             PAINTSTRUCT ps;
@@ -465,15 +560,19 @@ LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wP
             HBITMAP memBM = CreateCompatibleBitmap(hdc, rcClient.right, rcClient.bottom);
             HGDIOBJ oldBM = SelectObject(memDC, memBM);
 
-            FillRect(memDC, &rcClient, Theme::Get().BrushSurface());
+            bool isDark = Theme::Get().IsDarkMode();
+            HBRUSH hbrBg = isDark ? Theme::Get().BrushSurface() : CreateSolidBrush(RGB(246, 246, 248));
+            FillRect(memDC, &rcClient, hbrBg);
+            if (!isDark) DeleteObject(hbrBg);
 
             HFONT hFont = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
             if (!hFont) hFont = Theme::Get().GetUIFont(hwnd);
             HGDIOBJ oldFont = SelectObject(memDC, hFont);
             SetBkMode(memDC, TRANSPARENT);
-            SetTextColor(memDC, Theme::Get().ClrTextPrimary());
+            SetTextColor(memDC, isDark ? Theme::Get().ClrTextPrimary() : RGB(30, 30, 30));
 
-            HPEN hPenBorder = CreatePen(PS_SOLID, 1, Theme::Get().ClrBorder());
+            COLORREF borderClr = isDark ? Theme::Get().ClrBorder() : RGB(218, 220, 224);
+            HPEN hPenBorder = CreatePen(PS_SOLID, 1, borderClr);
             HGDIOBJ oldPen = SelectObject(memDC, hPenBorder);
 
             int count = Header_GetItemCount(hwnd);
@@ -494,6 +593,49 @@ LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     RECT rcText = rcItem;
                     rcText.left += Theme::Get().Scale(6, hwnd);
                     rcText.right -= Theme::Get().Scale(6, hwnd);
+
+                    // Master checkbox for Column 0
+                    if (i == 0 && Config::Get().showItemCheckBoxes) {
+                        int boxSize = Theme::Get().Scale(14, hwnd);
+                        int boxY = rcItem.top + (rcItem.bottom - rcItem.top - boxSize) / 2;
+                        int rad = Theme::Get().Scale(3, hwnd);
+
+                        // Align header checkbox with row checkbox
+                        int boxLeft = rcItem.left + Theme::Get().Scale(3, hwnd);
+                        if (pThis && pThis->m_hwnd && ListView_GetItemCount(pThis->m_hwnd) > 0) {
+                            RECT rcIcon = {0};
+                            if (ListView_GetItemRect(pThis->m_hwnd, 0, &rcIcon, LVIR_ICON)) {
+                                int slotW = rcIcon.left - rcItem.left;
+                                if (slotW > boxSize) {
+                                    boxLeft = rcItem.left + (slotW - boxSize) / 2;
+                                }
+                            }
+                        }
+
+                        RECT rcBox = { boxLeft, boxY, boxLeft + boxSize, boxY + boxSize };
+
+                        bool isChecked = (hdi.fmt & HDF_CHECKED) != 0;
+                        COLORREF boxBgUnchecked = isDark ? RGB(45, 45, 45) : RGB(255, 255, 255);
+                        COLORREF boxBorderUnchecked = isDark ? RGB(110, 110, 110) : RGB(160, 160, 160);
+                        COLORREF accentClr = Theme::Get().ClrAccent();
+
+                        HBRUSH hbrBox = CreateSolidBrush(isChecked ? accentClr : boxBgUnchecked);
+                        HPEN hPenBox = CreatePen(PS_SOLID, 1, isChecked ? accentClr : boxBorderUnchecked);
+                        HGDIOBJ oldBrush = SelectObject(memDC, hbrBox);
+                        HGDIOBJ oldPen = SelectObject(memDC, hPenBox);
+
+                        RoundRect(memDC, rcBox.left, rcBox.top, rcBox.right, rcBox.bottom, rad, rad);
+
+                        SelectObject(memDC, oldBrush);
+                        SelectObject(memDC, oldPen);
+                        DeleteObject(hbrBox);
+                        DeleteObject(hPenBox);
+
+                        if (isChecked) {
+                            DrawSmoothCheckmark(memDC, rcBox, hwnd);
+                        }
+                        rcText.left = rcBox.right + Theme::Get().Scale(6, hwnd);
+                    }
 
                     std::wstring displayText = text;
                     if (hdi.fmt & HDF_SORTUP) {
@@ -575,14 +717,9 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
         SaveColumnWidths();
     }
 
-    std::vector<NeoShellItem> items;
-    if (!ShellUtils::EnumerateDirectory(normalized, m_showHidden, items)) {
-        return false;
-    }
-
     m_calcSize.CancelAll();
+    CancelCustomIconLoader();
     m_currentPath = normalized;
-    m_allItems = std::move(items);
 
     if (recordHistory) {
         if (m_historyIndex >= 0 && m_historyIndex + 1 < (int)m_history.size()) {
@@ -607,6 +744,50 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
         RebuildColumns();
     }
 
+    bool isNetworkPath = (normalized.length() >= 2 && normalized[0] == L'\\' && normalized[1] == L'\\');
+    if (!isNetworkPath && normalized.length() >= 2 && normalized[1] == L':') {
+        wchar_t dRoot[4] = { normalized[0], L':', L'\\', L'\0' };
+        if (GetDriveTypeW(dRoot) == DRIVE_REMOTE) {
+            isNetworkPath = true;
+        }
+    }
+
+    if (isNetworkPath) {
+        m_isNavLoading = true;
+        m_allItems.clear();
+        m_filteredIndices.clear();
+        ListView_SetItemCountEx(m_hwnd, 0, 0);
+        ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+
+        if (onStatusText) {
+            onStatusText(I18n::Get().IsChinese() ? L"正在连接网络共享目录..." : L"Connecting to network share...");
+        }
+
+        if (onPathChanged) {
+            onPathChanged(m_currentPath);
+        }
+
+        InvalidateRect(m_hwnd, nullptr, TRUE);
+
+        int gen = ++m_navGeneration;
+        std::thread([hwnd = m_hwnd, path = normalized, showHidden = m_showHidden, hideDot = m_hideDotFiles, gen]() {
+            std::vector<NeoShellItem> items;
+            bool ok = ShellUtils::EnumerateDirectory(path, showHidden, items, hideDot);
+            auto* pRes = new AsyncNavResult{ gen, path, ok, std::move(items) };
+            PostMessageW(hwnd, WM_ASYNC_NAV_COMPLETE, 0, (LPARAM)pRes);
+        }).detach();
+
+        return true;
+    }
+
+    m_isNavLoading = false;
+    std::vector<NeoShellItem> items;
+    if (!ShellUtils::EnumerateDirectory(normalized, m_showHidden, items, m_hideDotFiles)) {
+        return false;
+    }
+
+    m_allItems = std::move(items);
+
     SortItems();
     UpdateHeaderSortArrow();
     ListView_SetItemCountEx(m_hwnd, 0, 0);
@@ -623,6 +804,8 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
         }
     }
 
+    StartCustomIconLoader();
+
     if (onPathChanged) {
         onPathChanged(m_currentPath);
     }
@@ -635,9 +818,33 @@ void FileListView::Refresh() {
         m_searchThread.detach();
     }
     m_calcSize.CancelAll();
+    CancelCustomIconLoader();
+
+    bool isNetworkPath = (m_currentPath.length() >= 2 && m_currentPath[0] == L'\\' && m_currentPath[1] == L'\\');
+    if (!isNetworkPath && m_currentPath.length() >= 2 && m_currentPath[1] == L':') {
+        wchar_t dRoot[4] = { m_currentPath[0], L':', L'\\', L'\0' };
+        if (GetDriveTypeW(dRoot) == DRIVE_REMOTE) {
+            isNetworkPath = true;
+        }
+    }
+    if (isNetworkPath) {
+        m_isNavLoading = true;
+        if (onStatusText) {
+            onStatusText(I18n::Get().IsChinese() ? L"正在刷新网络共享目录..." : L"Refreshing network share...");
+        }
+        InvalidateRect(m_hwnd, nullptr, TRUE);
+        int gen = ++m_navGeneration;
+        std::thread([hwnd = m_hwnd, path = m_currentPath, showHidden = m_showHidden, hideDot = m_hideDotFiles, gen]() {
+            std::vector<NeoShellItem> items;
+            bool ok = ShellUtils::EnumerateDirectory(path, showHidden, items, hideDot);
+            auto* pRes = new AsyncNavResult{ gen, path, ok, std::move(items) };
+            PostMessageW(hwnd, WM_ASYNC_NAV_COMPLETE, 0, (LPARAM)pRes);
+        }).detach();
+        return;
+    }
 
     std::vector<NeoShellItem> items;
-    if (!ShellUtils::EnumerateDirectory(m_currentPath, m_showHidden, items)) {
+    if (!ShellUtils::EnumerateDirectory(m_currentPath, m_showHidden, items, m_hideDotFiles)) {
         if (m_currentPath != L"This PC" && m_currentPath != L"此电脑" && m_currentPath != L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") {
             std::wstring parent = ShellUtils::GetParentPath(m_currentPath);
             if (parent.empty() || !PathFileExistsW(parent.c_str())) {
@@ -760,7 +967,7 @@ void FileListView::SearchRecursive(const std::wstring& rootDir, const std::wstri
                         uli.HighPart = fd.nFileSizeHigh;
                         item.size = uli.QuadPart;
                         item.isSizeCalculated = true;
-                        item.iconIndex = ShellUtils::GetItemIconIndex(full, fd.dwFileAttributes, isFolder);
+                        item.iconIndex = ShellUtils::GetItemIconIndex(full, fd.dwFileAttributes, isFolder, true);
                         item.typeName = isFolder ? I18n::Get().T(StringId::Folder) : ShellUtils::GetItemTypeName(full, fd.dwFileAttributes);
                         pBatch->push_back(item);
                         totalFound++;
@@ -843,6 +1050,7 @@ void FileListView::SetViewMode(int mode) {
     SetWindowLongW(m_hwnd, GWL_STYLE, style);
     SendMessageW(m_hwnd, LVM_SETVIEW, lvView, 0);
     UpdateHeaderSortArrow();
+    UpdateHeaderCheckBox();
     InvalidateRect(m_hwnd, nullptr, TRUE);
 }
 
@@ -851,6 +1059,106 @@ void FileListView::SetShowHidden(bool show) {
         m_showHidden = show;
         Refresh();
     }
+}
+
+void FileListView::SetHideDotFiles(bool hide) {
+    if (m_hideDotFiles != hide) {
+        m_hideDotFiles = hide;
+        Refresh();
+    }
+}
+
+int FileListView::GetDesiredRowHeight() const {
+    int dpi = (int)Theme::Get().GetDpi(m_hwnd);
+    int density = Config::Get().listDensity; // 0: 紧凑, 1: 适中, 2: 宽松
+    int scale = Config::Get().listScale;     // 0: 偏小, 1: 标准, 2: 放大
+
+    int baseFontPt = (scale == 0) ? 9 : ((scale == 2) ? 12 : 10);
+    int fontPx = MulDiv(baseFontPt * 4 / 3, dpi, 96);
+
+    int padPx = (density == 0) ? 4 : ((density == 2) ? 16 : 9);
+    int desiredH = fontPx + MulDiv(padPx, dpi, 96);
+    int minH = MulDiv(18, dpi, 96);
+    if (desiredH < minH) desiredH = minH;
+    return desiredH;
+}
+
+void FileListView::ApplyDensity(int density) {
+    Config::Get().listDensity = density;
+    ApplyViewMetrics();
+}
+
+void FileListView::ApplyScale(int scale) {
+    Config::Get().listScale = scale;
+    ApplyViewMetrics();
+}
+
+void FileListView::ApplyViewMetrics() {
+    if (!m_hwnd) return;
+
+    int scale = Config::Get().listScale;
+    int density = Config::Get().listDensity;
+
+    int currentDpi = (int)Theme::Get().GetDpi(m_hwnd);
+
+    // 1. Text display font (controlled by listScale: 偏小 9pt, 标准 10pt, 放大 12pt)
+    int fontSizePt = 10;
+    if (scale == 0) fontSizePt = 9;       // 偏小
+    else if (scale == 2) fontSizePt = 12; // 放大
+
+    int fontHeight = -MulDiv(fontSizePt, currentDpi, 72);
+
+    LOGFONTW lf = { 0 };
+    if (!SystemParametersInfoW(SPI_GETICONTITLELOGFONT, sizeof(LOGFONTW), &lf, 0)) {
+        StringCchCopyW(lf.lfFaceName, LF_FACESIZE, L"Microsoft YaHei UI");
+    }
+    lf.lfHeight = fontHeight;
+    lf.lfWeight = FW_NORMAL;
+    lf.lfQuality = CLEARTYPE_QUALITY;
+
+    HFONT hNewTextFont = CreateFontIndirectW(&lf);
+    if (m_hFontText) {
+        DeleteObject(m_hFontText);
+    }
+    m_hFontText = hNewTextFont;
+
+    // 2. Row metric font (controlled by listDensity: 紧凑 ~20-22px, 适中 ~28-30px, 宽松 ~38-42px)
+    // SysListView32 uses the font assigned via WM_SETFONT to determine line height in Report/Details view
+    int baseMetric = (density == 0) ? 14 : ((density == 2) ? 27 : 20);
+    if (scale == 0) baseMetric -= 1;
+    else if (scale == 2) baseMetric += 2;
+    int metricH = MulDiv(baseMetric, currentDpi, 96);
+
+    LOGFONTW lfMetric = lf;
+    lfMetric.lfHeight = -metricH;
+    HFONT hNewMetricFont = CreateFontIndirectW(&lfMetric);
+
+    SendMessageW(m_hwnd, WM_SETFONT, (WPARAM)hNewMetricFont, TRUE);
+
+    if (m_hFontRowMetric) {
+        DeleteObject(m_hFontRowMetric);
+    }
+    m_hFontRowMetric = hNewMetricFont;
+
+    // Keep header font at clean standard size
+    HWND hHeader = ListView_GetHeader(m_hwnd);
+    if (hHeader) {
+        SendMessageW(hHeader, WM_SETFONT, (WPARAM)Theme::Get().GetUIFont(m_hwnd), TRUE);
+    }
+
+    // 3. Icon spacing in Large Icon / Tile views
+    int spacingX = (density == 0) ? 72 : ((density == 2) ? 120 : 96);
+    int spacingY = (density == 0) ? 60 : ((density == 2) ? 104 : 80);
+    if (scale == 2) {
+        spacingX = (spacingX * 5) / 4;
+        spacingY = (spacingY * 5) / 4;
+    } else if (scale == 0) {
+        spacingX = (spacingX * 9) / 10;
+        spacingY = (spacingY * 9) / 10;
+    }
+    ListView_SetIconSpacing(m_hwnd, Theme::Get().Scale(spacingX, m_hwnd), Theme::Get().Scale(spacingY, m_hwnd));
+
+    InvalidateRect(m_hwnd, nullptr, TRUE);
 }
 
 void FileListView::SetCalcFolderSize(bool calc) {
@@ -1036,6 +1344,12 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
 }
 
 void FileListView::NotifyStatus() {
+    if (m_isNavLoading) {
+        if (onStatusText) {
+            onStatusText(I18n::Get().IsChinese() ? L"正在连接网络共享目录..." : L"Connecting to network share...");
+        }
+        return;
+    }
     if (onStatusUpdated) {
         int selCount = (m_hwnd) ? (int)ListView_GetSelectedCount(m_hwnd) : 0;
         uint64_t totalSize = 0;
@@ -1059,6 +1373,7 @@ void FileListView::NotifyStatus() {
             onStatusUpdated((int)m_filteredIndices.size(), totalSize);
         }
     }
+    UpdateHeaderCheckBox();
 }
 
 void FileListView::PasteToCurrent() {
@@ -1221,6 +1536,11 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
         case CMD_BG_VIEW_TILES:   SetViewMode(4); break;
         case CMD_BG_VIEW_XLARGE:  SetViewMode(1); break;
         case CMD_BG_VIEW_MEDIUM:  SetViewMode(0); break;
+        case CMD_BG_VIEW_ITEM_CHECKBOXES:
+            if (onCustomCommand) {
+                onCustomCommand(CMD_BG_VIEW_ITEM_CHECKBOXES, L"");
+            }
+            break;
 
         case CMD_BG_SORT_NAME:
             SetSort(SortColumn::Name, m_sortAsc);
@@ -1405,6 +1725,64 @@ void FileListView::OnFolderSizeReady(FolderSizeResult* pRes) {
     delete pRes;
 }
 
+void FileListView::CancelCustomIconLoader() {
+    m_iconNavGeneration++;
+    if (m_iconThread.joinable()) {
+        m_iconThread.detach();
+    }
+}
+
+void FileListView::StartCustomIconLoader() {
+    CancelCustomIconLoader();
+
+    struct CustomIconTask {
+        std::wstring fullPath;
+        DWORD attributes;
+    };
+    std::vector<CustomIconTask> tasks;
+    for (const auto& item : m_allItems) {
+        if (!item.isFolder) {
+            const std::wstring& ext = item.ext;
+            if (ext == L".exe" || ext == L".lnk" || ext == L".ico" || ext == L".cur" || ext == L".scr") {
+                if (ShellUtils::GetCustomPathIcon(item.fullPath) < 0) {
+                    tasks.push_back({ item.fullPath, item.attributes });
+                }
+            }
+        }
+    }
+
+    if (tasks.empty()) return;
+
+    int curGen = m_iconNavGeneration.load();
+    HWND hwnd = m_hwnd;
+
+    m_iconThread = std::thread([hwnd, curGen, tasks = std::move(tasks), this]() {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        bool updatedAny = false;
+        DWORD lastNotify = GetTickCount();
+
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            if (m_iconNavGeneration.load() != curGen) {
+                CoUninitialize();
+                return;
+            }
+
+            int icon = ShellUtils::GetItemIconIndex(tasks[i].fullPath, tasks[i].attributes, false, false);
+            if (icon >= 0) {
+                updatedAny = true;
+            }
+
+            DWORD now = GetTickCount();
+            if (updatedAny && (now - lastNotify >= 60 || i == tasks.size() - 1)) {
+                PostMessageW(hwnd, WM_REFRESH_ICONS, (WPARAM)curGen, 0);
+                lastNotify = now;
+                updatedAny = false;
+            }
+        }
+        CoUninitialize();
+    });
+}
+
 LRESULT CALLBACK FileListView::EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
@@ -1413,6 +1791,69 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
     FileListView* pThis = (FileListView*)dwRefData;
 
     switch (msg) {
+    case WM_PAINT: {
+        LRESULT res = DefSubclassProc(hwnd, msg, wParam, lParam);
+        if (pThis && pThis->m_isNavLoading) {
+            HDC hdc = GetDC(hwnd);
+            if (hdc) {
+                RECT rcClient;
+                GetClientRect(hwnd, &rcClient);
+                HWND hHeader = ListView_GetHeader(hwnd);
+                if (hHeader && IsWindowVisible(hHeader)) {
+                    RECT rcHdr;
+                    GetWindowRect(hHeader, &rcHdr);
+                    rcClient.top += (rcHdr.bottom - rcHdr.top);
+                }
+
+                SetBkMode(hdc, TRANSPARENT);
+
+                int cardW = Theme::Get().Scale(320, hwnd);
+                int cardH = Theme::Get().Scale(80, hwnd);
+                int cardX = rcClient.left + (rcClient.right - rcClient.left - cardW) / 2;
+                int cardY = rcClient.top + (rcClient.bottom - rcClient.top - cardH) / 2;
+                RECT rcCard = { cardX, cardY, cardX + cardW, cardY + cardH };
+
+                // Draw soft rounded card background
+                int rad = Theme::Get().Scale(10, hwnd);
+                HBRUSH hbrCard = Theme::Get().BrushSurface();
+                HPEN hPenBorder = Theme::Get().PenBorder();
+                HGDIOBJ oldBrush = SelectObject(hdc, hbrCard);
+                HGDIOBJ oldPen = SelectObject(hdc, hPenBorder);
+                RoundRect(hdc, rcCard.left, rcCard.top, rcCard.right, rcCard.bottom, rad, rad);
+                SelectObject(hdc, oldPen);
+                SelectObject(hdc, oldBrush);
+
+                // Draw network sync icon
+                RECT rcIcon = rcCard;
+                rcIcon.top += Theme::Get().Scale(12, hwnd);
+                rcIcon.bottom = rcIcon.top + Theme::Get().Scale(24, hwnd);
+                HFONT hIconFont = Theme::Get().GetIconFont(18, hwnd);
+                HGDIOBJ oldIconFont = SelectObject(hdc, hIconFont);
+                SetTextColor(hdc, Theme::Get().ClrAccent());
+                wchar_t iconGlyph[2] = { (wchar_t)0xE898, 0 }; // Fluent Cloud/Network sync glyph
+                DrawTextW(hdc, iconGlyph, 1, &rcIcon, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(hdc, oldIconFont);
+                DeleteObject(hIconFont);
+
+                // Draw loading prompt text
+                RECT rcText = rcCard;
+                rcText.top = rcIcon.bottom + Theme::Get().Scale(4, hwnd);
+                rcText.bottom = rcCard.bottom - Theme::Get().Scale(8, hwnd);
+                HFONT hFont = Theme::Get().GetUIFont(hwnd);
+                HGDIOBJ oldFont = SelectObject(hdc, hFont);
+                SetTextColor(hdc, Theme::Get().ClrTextPrimary());
+                std::wstring prompt = I18n::Get().IsChinese()
+                    ? L"正在连接网络共享目录，请稍候..."
+                    : L"Connecting to network share, please wait...";
+                DrawTextW(hdc, prompt.c_str(), -1, &rcText, DT_CENTER | DT_TOP | DT_SINGLELINE);
+                SelectObject(hdc, oldFont);
+
+                ReleaseDC(hwnd, hdc);
+            }
+        }
+        return res;
+    }
+
     case WM_NOTIFY: {
         NMHDR* pnm = (NMHDR*)lParam;
         LRESULT res = DefSubclassProc(hwnd, msg, wParam, lParam);
@@ -1454,6 +1895,22 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         LVHITTESTINFO lvhti = { 0 };
         lvhti.pt = { x, y };
         int hit = ListView_HitTest(hwnd, &lvhti);
+
+        if (Config::Get().showItemCheckBoxes && (lvhti.flags & LVHT_ONITEMSTATEICON) && hit >= 0) {
+            SetFocus(hwnd);
+            bool isSel = (ListView_GetItemState(hwnd, hit, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+            ListView_SetItemState(hwnd, hit, isSel ? 0 : (LVIS_SELECTED | LVIS_FOCUSED), LVIS_SELECTED | LVIS_FOCUSED);
+            ListView_RedrawItems(hwnd, hit, hit);
+            if (pThis) {
+                pThis->NotifyStatus();
+                pThis->UpdateHeaderCheckBox();
+                if (pThis->onSelectionChanged && hit < (int)pThis->m_filteredIndices.size()) {
+                    int idx = pThis->m_filteredIndices[hit];
+                    pThis->onSelectionChanged(pThis->m_allItems[idx].fullPath);
+                }
+            }
+            return 0;
+        }
 
         bool wasFocused = (GetFocus() == hwnd);
         if (!wasFocused) {
@@ -1606,6 +2063,20 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
             return 0;
         }
 
+        if (wParam == VK_SPACE && Config::Get().showItemCheckBoxes && !ctrl && !shift && !alt) {
+            int focus = ListView_GetNextItem(hwnd, -1, LVNI_FOCUSED);
+            if (focus >= 0) {
+                bool isSel = (ListView_GetItemState(hwnd, focus, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+                ListView_SetItemState(hwnd, focus, isSel ? 0 : LVIS_SELECTED, LVIS_SELECTED);
+                ListView_RedrawItems(hwnd, focus, focus);
+                if (pThis) {
+                    pThis->NotifyStatus();
+                    pThis->UpdateHeaderCheckBox();
+                }
+                return 0;
+            }
+        }
+
         if (wParam == VK_F5) {
             HWND hTop = GetAncestor(hwnd, GA_ROOT);
             SendMessageW(hTop, WM_COMMAND, ID_VIEW_REFRESH, 0);
@@ -1707,6 +2178,48 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         pThis->ApplyFilter();
         return 0;
     }
+    case FileListView::WM_ASYNC_NAV_COMPLETE: {
+        auto* pResult = (FileListView::AsyncNavResult*)lParam;
+        if (pResult) {
+            if (pResult->generation == pThis->m_navGeneration && pResult->path == pThis->m_currentPath) {
+                pThis->m_isNavLoading = false;
+                InvalidateRect(pThis->m_hwnd, nullptr, TRUE);
+                if (pResult->success) {
+                    pThis->m_allItems = std::move(pResult->items);
+                    pThis->SortItems();
+                    pThis->UpdateHeaderSortArrow();
+                    ListView_SetItemCountEx(pThis->m_hwnd, 0, 0);
+                    ListView_SetItemState(pThis->m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+                    pThis->ApplyFilter();
+                    pThis->NotifyStatus();
+                    pThis->m_watcher.Watch(pThis->m_currentPath, pThis->m_hwnd, WM_NOTIFY_DIR_CHANGED);
+                    if (pThis->m_calcFolderSize && pThis->m_currentPath != L"此电脑" && pThis->m_currentPath != L"This PC") {
+                        for (const auto& item : pThis->m_allItems) {
+                            if (item.isFolder && !item.isDrive) {
+                                pThis->m_calcSize.RequestFolderSize(item.fullPath, pThis->m_hwnd, WM_NOTIFY_FOLDER_SIZE);
+                            }
+                        }
+                    }
+                    pThis->StartCustomIconLoader();
+                } else {
+                    pThis->m_allItems.clear();
+                    pThis->ApplyFilter();
+                    if (pThis->onStatusText) {
+                        pThis->onStatusText(I18n::Get().IsChinese() ? L"无法访问网络共享路径" : L"Cannot access network share");
+                    }
+                }
+            }
+            delete pResult;
+        }
+        return 0;
+    }
+    case FileListView::WM_REFRESH_ICONS: {
+        int gen = (int)wParam;
+        if (gen == pThis->m_iconNavGeneration.load()) {
+            InvalidateRect(pThis->m_hwnd, nullptr, FALSE);
+        }
+        return 0;
+    }
     }
 
     return DefSubclassProc(hwnd, msg, wParam, lParam);
@@ -1716,6 +2229,14 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
     FileListView* pThis = (FileListView*)dwRefData;
 
     switch (msg) {
+    case WM_MEASUREITEM: {
+        MEASUREITEMSTRUCT* pmis = (MEASUREITEMSTRUCT*)lParam;
+        if (pmis && pmis->CtlType == ODT_LISTVIEW && pmis->CtlID == (UINT)pThis->m_controlId) {
+            pmis->itemHeight = pThis->GetDesiredRowHeight();
+            return TRUE;
+        }
+        break;
+    }
     case WM_NOTIFY: {
         NMHDR* pnm = (NMHDR*)lParam;
         if (pnm->hwndFrom == pThis->m_hwnd) {
@@ -1787,7 +2308,19 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     }
 
                     if (pDisp->item.mask & LVIF_IMAGE) {
-                        pDisp->item.iImage = (pDisp->item.iSubItem == 0) ? item.iconIndex : -1;
+                        int icon = -1;
+                        if (pDisp->item.iSubItem == 0) {
+                            icon = ShellUtils::GetCustomPathIcon(item.fullPath);
+                            if (icon < 0) {
+                                icon = item.iconIndex;
+                            }
+                        }
+                        pDisp->item.iImage = icon;
+                    }
+                    if (Config::Get().showItemCheckBoxes && (pDisp->item.mask & LVIF_STATE)) {
+                        pDisp->item.stateMask |= LVIS_STATEIMAGEMASK;
+                        bool isSel = (ListView_GetItemState(pThis->m_hwnd, row, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+                        pDisp->item.state = INDEXTOSTATEIMAGEMASK(isSel ? 2 : 1);
                     }
                 }
                 return 0;
@@ -1835,7 +2368,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                 }
                 case CDDS_ITEMPOSTPAINT: {
                     int row = (int)pcd->nmcd.dwItemSpec;
-                    bool isSelected = (pcd->nmcd.uItemState & CDIS_SELECTED) != 0;
+                    bool isSelected = (row >= 0 && (ListView_GetItemState(pThis->m_hwnd, row, LVIS_SELECTED) & LVIS_SELECTED) != 0);
 
                     // 1. Cut items ghosting effect (icon虚化)
                     if (row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
@@ -1851,24 +2384,58 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                         }
                     }
 
-                    // 2. Grid lines
+                    // 2. Grid lines - subtle horizontal dividers only
                     if (Config::Get().showGridLines && row >= 0) {
                         RECT rcItem;
                         ListView_GetItemRect(pThis->m_hwnd, row, &rcItem, LVIR_BOUNDS);
-                        COLORREF gridClr = Theme::Get().IsDarkMode() ? RGB(58, 60, 65) : RGB(222, 226, 232);
+                        COLORREF gridClr = Theme::Get().IsDarkMode() ? RGB(45, 47, 52) : RGB(235, 238, 242);
                         HPEN hPen = CreatePen(PS_SOLID, 1, gridClr);
                         HPEN hOldPen = (HPEN)SelectObject(pcd->nmcd.hdc, hPen);
                         MoveToEx(pcd->nmcd.hdc, rcItem.left, rcItem.bottom - 1, nullptr);
                         LineTo(pcd->nmcd.hdc, rcItem.right, rcItem.bottom - 1);
-                        int curX = rcItem.left;
-                        for (size_t col = 0; col < pThis->m_activeColumns.size(); ++col) {
-                            int w = ListView_GetColumnWidth(pThis->m_hwnd, (int)col);
-                            curX += w;
-                            MoveToEx(pcd->nmcd.hdc, curX - 1, rcItem.top, nullptr);
-                            LineTo(pcd->nmcd.hdc, curX - 1, rcItem.bottom);
-                        }
                         SelectObject(pcd->nmcd.hdc, hOldPen);
                         DeleteObject(hPen);
+                    }
+
+                    // 3. Item checkbox custom rendering (unified rounded box with dark-grey background in dark mode)
+                    if (Config::Get().showItemCheckBoxes && row >= 0) {
+                        RECT rcIcon = { 0 };
+                        RECT rcItem = { 0 };
+                        if (ListView_GetItemRect(pThis->m_hwnd, row, &rcIcon, LVIR_ICON) &&
+                            ListView_GetItemRect(pThis->m_hwnd, row, &rcItem, LVIR_BOUNDS)) {
+                            int slotW = rcIcon.left - rcItem.left;
+                            if (slotW > 0) {
+                                HDC hdc = pcd->nmcd.hdc;
+                                HBRUSH hbrRowBg = isSelected ? Theme::Get().BrushSelected() : Theme::Get().BrushBackground();
+                                RECT rcSlot = { rcItem.left, rcItem.top, rcIcon.left, rcItem.bottom };
+                                FillRect(hdc, &rcSlot, hbrRowBg);
+
+                                int boxSize = Theme::Get().Scale(14, pThis->m_hwnd);
+                                int rad = Theme::Get().Scale(3, pThis->m_hwnd);
+                                int boxX = rcItem.left + (slotW - boxSize) / 2;
+                                int boxY = rcItem.top + (rcItem.bottom - rcItem.top - boxSize) / 2;
+                                RECT rcBox = { boxX, boxY, boxX + boxSize, boxY + boxSize };
+
+                                bool isChecked = (ListView_GetItemState(pThis->m_hwnd, row, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+                                bool isDark = Theme::Get().IsDarkMode();
+                                COLORREF boxBg = isChecked ? Theme::Get().ClrAccent() : (isDark ? RGB(45, 45, 45) : RGB(255, 255, 255));
+                                COLORREF boxBorder = isChecked ? Theme::Get().ClrAccent() : (isDark ? RGB(110, 110, 110) : RGB(160, 160, 160));
+
+                                HBRUSH hbrBox = CreateSolidBrush(boxBg);
+                                HPEN hpenBox = CreatePen(PS_SOLID, 1, boxBorder);
+                                HGDIOBJ oldBrush = SelectObject(hdc, hbrBox);
+                                HGDIOBJ oldPen = SelectObject(hdc, hpenBox);
+                                RoundRect(hdc, rcBox.left, rcBox.top, rcBox.right, rcBox.bottom, rad, rad);
+                                SelectObject(hdc, oldBrush);
+                                SelectObject(hdc, oldPen);
+                                DeleteObject(hbrBox);
+                                DeleteObject(hpenBox);
+
+                                if (isChecked) {
+                                    DrawSmoothCheckmark(hdc, rcBox, pThis->m_hwnd);
+                                }
+                            }
+                        }
                     }
                     return CDRF_DODEFAULT;
                 }
@@ -1881,9 +2448,16 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                         int idx = pThis->m_filteredIndices[row];
                         if (idx >= 0 && idx < (int)pThis->m_allItems.size()) {
                             isCut = ShellUtils::IsPathCut(pThis->m_allItems[idx].fullPath);
-                            if (isCut && !isSelected) {
-                                pcd->clrText = Theme::Get().IsDarkMode() ? RGB(140, 140, 140) : RGB(155, 155, 155);
-                            }
+                        }
+                    }
+
+                    if (!isSelected) {
+                        if (isCut) {
+                            pcd->clrText = Theme::Get().IsDarkMode() ? RGB(140, 140, 140) : RGB(155, 155, 155);
+                        } else if (pcd->iSubItem == 0) {
+                            pcd->clrText = Theme::Get().ClrTextPrimary();
+                        } else {
+                            pcd->clrText = Theme::Get().ClrTextSecondary();
                         }
                     }
 
@@ -1938,7 +2512,10 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                             }
                         }
                     }
-                    return isCut ? CDRF_NEWFONT : CDRF_DODEFAULT;
+                    if (pThis->m_hFontText) {
+                        SelectObject(pcd->nmcd.hdc, pThis->m_hFontText);
+                    }
+                    return CDRF_NEWFONT;
                 }
                 }
                 return CDRF_DODEFAULT;
@@ -2024,6 +2601,48 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
     case FileListView::WM_SEARCH_COMPLETE: {
         pThis->SortItems();
         pThis->ApplyFilter();
+        return 0;
+    }
+    case FileListView::WM_ASYNC_NAV_COMPLETE: {
+        auto* pResult = (FileListView::AsyncNavResult*)lParam;
+        if (pResult) {
+            if (pResult->generation == pThis->m_navGeneration && pResult->path == pThis->m_currentPath) {
+                pThis->m_isNavLoading = false;
+                InvalidateRect(pThis->m_hwnd, nullptr, TRUE);
+                if (pResult->success) {
+                    pThis->m_allItems = std::move(pResult->items);
+                    pThis->SortItems();
+                    pThis->UpdateHeaderSortArrow();
+                    ListView_SetItemCountEx(pThis->m_hwnd, 0, 0);
+                    ListView_SetItemState(pThis->m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+                    pThis->ApplyFilter();
+                    pThis->NotifyStatus();
+                    pThis->m_watcher.Watch(pThis->m_currentPath, pThis->m_hwnd, WM_NOTIFY_DIR_CHANGED);
+                    if (pThis->m_calcFolderSize && pThis->m_currentPath != L"此电脑" && pThis->m_currentPath != L"This PC") {
+                        for (const auto& item : pThis->m_allItems) {
+                            if (item.isFolder && !item.isDrive) {
+                                pThis->m_calcSize.RequestFolderSize(item.fullPath, pThis->m_hwnd, WM_NOTIFY_FOLDER_SIZE);
+                            }
+                        }
+                    }
+                    pThis->StartCustomIconLoader();
+                } else {
+                    pThis->m_allItems.clear();
+                    pThis->ApplyFilter();
+                    if (pThis->onStatusText) {
+                        pThis->onStatusText(I18n::Get().IsChinese() ? L"无法访问网络共享路径" : L"Cannot access network share");
+                    }
+                }
+            }
+            delete pResult;
+        }
+        return 0;
+    }
+    case FileListView::WM_REFRESH_ICONS: {
+        int gen = (int)wParam;
+        if (gen == pThis->m_iconNavGeneration.load()) {
+            InvalidateRect(pThis->m_hwnd, nullptr, FALSE);
+        }
         return 0;
     }
     }

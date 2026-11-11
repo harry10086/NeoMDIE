@@ -286,6 +286,30 @@ void MultiPaneContainer::SetShowHidden(bool show) {
   }
 }
 
+void MultiPaneContainer::SetHideDotFiles(bool hide) {
+  for (int i = 0; i < 4; ++i) {
+    m_panes[i].SetHideDotFiles(hide);
+  }
+}
+
+void MultiPaneContainer::ApplyDensity(int density) {
+  for (int i = 0; i < 4; ++i) {
+    m_panes[i].ApplyDensity(density);
+  }
+}
+
+void MultiPaneContainer::ApplyScale(int scale) {
+  for (int i = 0; i < 4; ++i) {
+    m_panes[i].ApplyScale(scale);
+  }
+}
+
+void MultiPaneContainer::ApplyItemCheckBoxes() {
+  for (int i = 0; i < 4; ++i) {
+    m_panes[i].ApplyItemCheckBoxes();
+  }
+}
+
 void MultiPaneContainer::SetCalcFolderSize(bool calc) {
   for (int i = 0; i < 4; ++i) {
     m_panes[i].SetCalcFolderSize(calc);
@@ -460,12 +484,16 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg,
 
     bool isActive = (paneIdx == m_activePane);
 
-    // Header Background
-    HBRUSH hbrBg = isActive ? CreateSolidBrush(Theme::Get().ClrAccent())
-                            : Theme::Get().BrushSurface();
+    // Header Background: refined modern surface
+    HBRUSH hbrBg = isActive ? Theme::Get().BrushHover() : Theme::Get().BrushSurface();
     FillRect(hdc, &rc, hbrBg);
+
+    // Modern left accent bar for active pane
     if (isActive) {
-      DeleteObject(hbrBg);
+      RECT rcAccent = {rc.left, rc.top, rc.left + Theme::Get().Scale(4, hwnd), rc.bottom - 1};
+      HBRUSH hbrAccent = CreateSolidBrush(Theme::Get().ClrAccent());
+      FillRect(hdc, &rcAccent, hbrAccent);
+      DeleteObject(hbrAccent);
     }
 
     // Bottom border line
@@ -477,7 +505,7 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg,
 
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc,
-                 isActive ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary());
+                 isActive ? Theme::Get().ClrTextPrimary() : Theme::Get().ClrTextSecondary());
     HFONT hFont = Theme::Get().GetUIFont(hwnd);
     HGDIOBJ oldFont = SelectObject(hdc, hFont);
 
@@ -489,10 +517,18 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg,
     if (s_headerHoverPane == paneIdx) {
       if (s_headerHoverBtn == 1) {
         HBRUSH hbrHov = Theme::Get().BrushHover();
-        FillRect(hdc, &rcMax, hbrHov);
+        HGDIOBJ oldBrush = SelectObject(hdc, hbrHov);
+        HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(NULL_PEN));
+        RoundRect(hdc, rcMax.left + 2, rcMax.top + 2, rcMax.right - 2, rcMax.bottom - 2, 8, 8);
+        SelectObject(hdc, oldBrush);
+        SelectObject(hdc, oldPen);
       } else if (s_headerHoverBtn == 2) {
         HBRUSH hbrCloseHov = CreateSolidBrush(RGB(232, 17, 35));
-        FillRect(hdc, &rcClose, hbrCloseHov);
+        HGDIOBJ oldBrush = SelectObject(hdc, hbrCloseHov);
+        HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(NULL_PEN));
+        RoundRect(hdc, rcClose.left + 2, rcClose.top + 2, rcClose.right - 2, rcClose.bottom - 2, 8, 8);
+        SelectObject(hdc, oldBrush);
+        SelectObject(hdc, oldPen);
         DeleteObject(hbrCloseHov);
       }
     }
@@ -511,7 +547,7 @@ LRESULT MultiPaneContainer::HandleHeaderMessage(HWND hwnd, UINT msg,
 
     // Header buttons: Maximize/Restore, Close
     COLORREF btnClr =
-        isActive ? RGB(255, 255, 255) : Theme::Get().ClrTextPrimary();
+        isActive ? Theme::Get().ClrTextPrimary() : Theme::Get().ClrTextSecondary();
     HFONT hIconFont = Theme::Get().GetIconFont(11, hwnd);
     HGDIOBJ oldIconFont = SelectObject(hdc, hIconFont);
 

@@ -12,6 +12,9 @@ enum NeoMDIECommand {
     CMD_NEOMDIE_SETTINGS     = 0x7108,
     CMD_NEOMDIE_OPEN_BG_TAB  = 0x7109,
     CMD_NEOMDIE_OPEN_EXPLORER= 0x710A,
+    CMD_NEOMDIE_PIN_QUICKACCESS   = 0x710B,
+    CMD_NEOMDIE_UNPIN_QUICKACCESS = 0x710C,
+    CMD_NEOMDIE_RESET_QUICKACCESS = 0x710D,
 
     // Background view modes
     CMD_BG_VIEW_DETAILS      = 0x7110,
@@ -21,6 +24,7 @@ enum NeoMDIECommand {
     CMD_BG_VIEW_SMALL        = 0x7114,
     CMD_BG_VIEW_LIST         = 0x7115,
     CMD_BG_VIEW_TILES        = 0x7116,
+    CMD_BG_VIEW_ITEM_CHECKBOXES = 0x7117,
 
     // Background sort by
     CMD_BG_SORT_NAME         = 0x7120,
@@ -81,10 +85,11 @@ namespace ShellUtils {
     HBITMAP GetShellNewMdBitmap();
     HBITMAP GetShellNewTextBitmap();
 
-    int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder);
+    int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder, bool fastOnly = false);
+    int GetCustomPathIcon(const std::wstring& path);
     std::wstring GetItemTypeName(const std::wstring& path, DWORD attr);
 
-    bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems);
+    bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems, bool hideDotFiles = false);
     void EnumerateDrives(std::vector<NeoShellItem>& outDrives);
 
     bool OpenItem(HWND hwnd, const std::wstring& path);

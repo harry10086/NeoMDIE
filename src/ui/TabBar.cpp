@@ -1,4 +1,5 @@
 #include "TabBar.h"
+#include "..\core\Config.h"
 #include "..\core\DropTarget.h"
 #include "..\core\I18n.h"
 #include "..\core\ShellUtils.h"
@@ -34,6 +35,7 @@ HWND TabBar::Create(HWND hwndParent, int id) {
     RegisterClassExW(&wc);
   }
 
+  m_hwndParent = hwndParent;
   m_hwnd = CreateWindowExW(0, TABBAR_CLASS, L"",
                            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 100,
                            36, hwndParent, (HMENU)(INT_PTR)id, hInst, this);
@@ -127,9 +129,7 @@ int TabBar::AddTab(const std::wstring &path, bool activate) {
   item.title = ShellUtils::GetDisplayName(path);
   item.iconIndex =
       ShellUtils::GetItemIconIndex(path, FILE_ATTRIBUTE_DIRECTORY, true);
-  item.color = s_tabPalette[s_tabColorIndex %
-                            (sizeof(s_tabPalette) / sizeof(s_tabPalette[0]))];
-  s_tabColorIndex++;
+  item.color = 0; // Default neutral unified styling
   item.layout = 0;
   item.panePaths = {path};
   item.activePaneIndex = 0;
@@ -535,12 +535,13 @@ void TabBar::EnsureTabVisible(int index) {
   RECT rcClient;
   GetClientRect(m_hwnd, &rcClient);
   int totalWidth = rcClient.right - rcClient.left;
+  int capWidth = (!Config::Get().showMenuBar) ? Theme::Get().Scale(46 * 3, m_hwnd) : 0;
   int scrollBtnW = Theme::Get().Scale(22, m_hwnd);
-  int rightReservedW = m_showScrollButtons
+  int rightReservedW = capWidth + (m_showScrollButtons
                            ? (scrollBtnW * 2 + Theme::Get().Scale(10, m_hwnd))
-                           : 0;
+                           : 0);
   int visibleRight = totalWidth - rightReservedW;
-  int startX = Theme::Get().Scale(4, m_hwnd);
+  int startX = m_leftOffset + Theme::Get().Scale(4, m_hwnd);
 
   int minTabWidth = Theme::Get().Scale(90, m_hwnd);
   int spacing = Theme::Get().Scale(2, m_hwnd);
@@ -578,16 +579,28 @@ void TabBar::RecalcLayout() {
   int scrollBtnW = Theme::Get().Scale(22, m_hwnd);
   int scrollBtnH = Theme::Get().Scale(24, m_hwnd);
   int spacing = Theme::Get().Scale(2, m_hwnd);
-  int startX = Theme::Get().Scale(4, m_hwnd);
+  int startX = m_leftOffset + Theme::Get().Scale(4, m_hwnd);
   int tabHeight = h - Theme::Get().Scale(4, m_hwnd);
   int closeSize = Theme::Get().Scale(16, m_hwnd);
 
   int maxTabWidth = Theme::Get().Scale(200, m_hwnd);
   int minTabWidth = Theme::Get().Scale(90, m_hwnd);
 
+  int capWidth = (!Config::Get().showMenuBar) ? Theme::Get().Scale(46 * 3, m_hwnd) : 0;
+  if (!Config::Get().showMenuBar) {
+    int capBtnW = Theme::Get().Scale(46, m_hwnd);
+    m_rcCloseBtn = {totalWidth - capBtnW, 0, totalWidth, h};
+    m_rcMaxBtn   = {m_rcCloseBtn.left - capBtnW, 0, m_rcCloseBtn.left, h};
+    m_rcMinBtn   = {m_rcMaxBtn.left - capBtnW, 0, m_rcMaxBtn.left, h};
+  } else {
+    SetRectEmpty(&m_rcMinBtn);
+    SetRectEmpty(&m_rcMaxBtn);
+    SetRectEmpty(&m_rcCloseBtn);
+  }
+
   int tabCount = (int)m_tabs.size();
   int availableWidthNoScroll =
-      totalWidth - newTabBtnWidth - Theme::Get().Scale(12, m_hwnd);
+      totalWidth - capWidth - m_leftOffset - newTabBtnWidth - Theme::Get().Scale(12, m_hwnd);
   int totalRequiredWidth = tabCount * minTabWidth + (tabCount - 1) * spacing;
 
   if (totalRequiredWidth <= availableWidthNoScroll) {
@@ -630,7 +643,8 @@ void TabBar::RecalcLayout() {
     m_showScrollButtons = true;
 
     int btnY = Theme::Get().Scale(6, m_hwnd);
-    m_rcScrollRight.right = totalWidth - Theme::Get().Scale(4, m_hwnd);
+    int scrollRightEdge = totalWidth - capWidth - Theme::Get().Scale(4, m_hwnd);
+    m_rcScrollRight.right = scrollRightEdge;
     m_rcScrollRight.left = m_rcScrollRight.right - scrollBtnW;
     m_rcScrollRight.top = btnY;
     m_rcScrollRight.bottom = btnY + scrollBtnH;
@@ -640,7 +654,7 @@ void TabBar::RecalcLayout() {
     m_rcScrollLeft.top = btnY;
     m_rcScrollLeft.bottom = btnY + scrollBtnH;
 
-    int rightReservedW = scrollBtnW * 2 + Theme::Get().Scale(10, m_hwnd);
+    int rightReservedW = capWidth + scrollBtnW * 2 + Theme::Get().Scale(10, m_hwnd);
     int tabVisibleAreaW = totalWidth - rightReservedW;
 
     int tabWidth = minTabWidth;
@@ -694,15 +708,16 @@ void TabBar::Draw(HDC hdc) {
   HGDIOBJ oldFont = SelectObject(hdcMem, hFont);
   SetBkMode(hdcMem, TRANSPARENT);
 
-  int startX = Theme::Get().Scale(4, m_hwnd);
-  int rightReservedW = m_showScrollButtons
+  int startX = m_leftOffset + Theme::Get().Scale(4, m_hwnd);
+  int capWidth = (!Config::Get().showMenuBar) ? Theme::Get().Scale(46 * 3, m_hwnd) : 0;
+  int rightReservedW = capWidth + (m_showScrollButtons
                            ? (Theme::Get().Scale(22, m_hwnd) * 2 +
                               Theme::Get().Scale(10, m_hwnd))
-                           : 0;
+                           : 0);
   int tabVisibleAreaW = w - rightReservedW;
 
-  // Apply clipping region so tabs never draw over scroll buttons
-  HRGN hRgnClip = CreateRectRgn(0, 0, tabVisibleAreaW, h);
+  // Apply clipping region so tabs never draw over scroll buttons or menu button
+  HRGN hRgnClip = CreateRectRgn(m_leftOffset, 0, tabVisibleAreaW, h);
   SelectClipRgn(hdcMem, hRgnClip);
   DeleteObject(hRgnClip);
 
@@ -715,29 +730,50 @@ void TabBar::Draw(HDC hdc) {
     bool isActive = ((int)i == m_activeIndex);
     bool isHover = ((int)i == m_hoverIndex);
 
-    // Tab surface
-    COLORREF tabBg = isActive ? Theme::Get().ClrSurface()
-                              : (isHover ? Theme::Get().ClrHover()
-                                         : Theme::Get().ClrBackground());
-    HBRUSH hbrTab = CreateSolidBrush(tabBg);
-    FillRect(hdcMem, &tab.rc, hbrTab);
-    DeleteObject(hbrTab);
+    // Tab surface with Chrome-style rounded corners
+    int r = Theme::Get().Scale(10, m_hwnd);
+    RECT rcDraw = tab.rc;
+    rcDraw.top += Theme::Get().Scale(2, m_hwnd);
 
-    // Colored accent strip at top of tab
-    if (tab.color != 0) {
-      RECT rcColorStrip = tab.rc;
-      rcColorStrip.bottom = rcColorStrip.top + Theme::Get().Scale(3, m_hwnd);
-      HBRUSH hbrStrip = CreateSolidBrush(tab.color);
-      FillRect(hdcMem, &rcColorStrip, hbrStrip);
-      DeleteObject(hbrStrip);
+    if (isActive) {
+      // Active tab: elevated surface with rounded top corners and seamless bottom
+      HBRUSH hbrTab = CreateSolidBrush(Theme::Get().ClrSurface());
+      HGDIOBJ oldBrush = SelectObject(hdcMem, hbrTab);
+      HGDIOBJ oldPen = SelectObject(hdcMem, GetStockObject(NULL_PEN));
+      RoundRect(hdcMem, rcDraw.left, rcDraw.top, rcDraw.right, rcDraw.bottom + r * 2, r * 2, r * 2);
+      SelectObject(hdcMem, oldBrush);
+      SelectObject(hdcMem, oldPen);
+      DeleteObject(hbrTab);
+    } else if (isHover) {
+      // Inactive tab hover: rounded pill
+      HBRUSH hbrHover = CreateSolidBrush(Theme::Get().ClrHover());
+      HGDIOBJ oldBrush = SelectObject(hdcMem, hbrHover);
+      HGDIOBJ oldPen = SelectObject(hdcMem, GetStockObject(NULL_PEN));
+      RoundRect(hdcMem, rcDraw.left + 2, rcDraw.top + 2, rcDraw.right - 2, rcDraw.bottom - 2, r, r);
+      SelectObject(hdcMem, oldBrush);
+      SelectObject(hdcMem, oldPen);
+      DeleteObject(hbrHover);
+    }
+
+    // Separator line between inactive tabs (Chrome/Edge style)
+    if (!isActive && ((int)i + 1 < (int)m_tabs.size()) && ((int)i + 1 != m_activeIndex) && !isHover && ((int)i + 1 != m_hoverIndex)) {
+      int sepX = tab.rc.right - 1;
+      int sepTop = tab.rc.top + Theme::Get().Scale(8, m_hwnd);
+      int sepBottom = tab.rc.bottom - Theme::Get().Scale(8, m_hwnd);
+      HPEN hPenSep = CreatePen(PS_SOLID, 1, Theme::Get().ClrBorder());
+      HGDIOBJ oldPen = SelectObject(hdcMem, hPenSep);
+      MoveToEx(hdcMem, sepX, sepTop, nullptr);
+      LineTo(hdcMem, sepX, sepBottom);
+      SelectObject(hdcMem, oldPen);
+      DeleteObject(hPenSep);
     }
 
     // Active indicator line at bottom
     if (isActive) {
       RECT rcLine = tab.rc;
       rcLine.top = rcLine.bottom - Theme::Get().Scale(3, m_hwnd);
-      HBRUSH hbrAccent = CreateSolidBrush(
-          tab.color != 0 ? tab.color : Theme::Get().ClrAccent());
+      COLORREF accentClr = (tab.color != 0) ? tab.color : Theme::Get().ClrAccent();
+      HBRUSH hbrAccent = CreateSolidBrush(accentClr);
       FillRect(hdcMem, &rcLine, hbrAccent);
       DeleteObject(hbrAccent);
     }
@@ -748,6 +784,21 @@ void TabBar::Draw(HDC hdc) {
     if (himlSmall) {
       ImageList_Draw(himlSmall, tab.iconIndex, hdcMem, iconX, iconY,
                      ILD_TRANSPARENT);
+    }
+
+    // Color tag dot for manually tagged tabs
+    if (tab.color != 0 && !isActive) {
+      int dotSize = Theme::Get().Scale(6, m_hwnd);
+      int dotX = iconX - Theme::Get().Scale(3, m_hwnd);
+      int dotY = tab.rc.top + (tab.rc.bottom - tab.rc.top - dotSize) / 2;
+      RECT rcDot = {dotX, dotY, dotX + dotSize, dotY + dotSize};
+      HBRUSH hbrDot = CreateSolidBrush(tab.color);
+      HGDIOBJ oldBrush = SelectObject(hdcMem, hbrDot);
+      HGDIOBJ oldPen = SelectObject(hdcMem, GetStockObject(NULL_PEN));
+      Ellipse(hdcMem, rcDot.left, rcDot.top, rcDot.right, rcDot.bottom);
+      SelectObject(hdcMem, oldBrush);
+      SelectObject(hdcMem, oldPen);
+      DeleteObject(hbrDot);
     }
 
     // Title
@@ -767,10 +818,14 @@ void TabBar::Draw(HDC hdc) {
     if (!tab.isPinned && (isHover || isActive)) {
       bool closeHover = (isHover && m_hoverClose);
       if (closeHover) {
-        HBRUSH hbrCloseHover = CreateSolidBrush(RGB(232, 17, 35));
-        FillRect(hdcMem, &tab.rcClose, hbrCloseHover);
+        HBRUSH hbrCloseHover = CreateSolidBrush(Theme::Get().IsDarkMode() ? RGB(70, 70, 70) : RGB(218, 218, 218));
+        HGDIOBJ oldBrush = SelectObject(hdcMem, hbrCloseHover);
+        HGDIOBJ oldPen = SelectObject(hdcMem, GetStockObject(NULL_PEN));
+        RoundRect(hdcMem, tab.rcClose.left, tab.rcClose.top, tab.rcClose.right, tab.rcClose.bottom, 6, 6);
+        SelectObject(hdcMem, oldBrush);
+        SelectObject(hdcMem, oldPen);
         DeleteObject(hbrCloseHover);
-        SetTextColor(hdcMem, RGB(255, 255, 255));
+        SetTextColor(hdcMem, Theme::Get().ClrTextPrimary());
       } else {
         SetTextColor(hdcMem, Theme::Get().ClrTextSecondary());
       }
@@ -792,8 +847,9 @@ void TabBar::Draw(HDC hdc) {
       HPEN hPen = Theme::Get().PenBorder();
       HGDIOBJ oldBr = SelectObject(hdcMem, hbrNewTab);
       HGDIOBJ oldP = SelectObject(hdcMem, hPen);
+      int rPlus = Theme::Get().Scale(8, m_hwnd);
       RoundRect(hdcMem, m_rcNewTab.left, m_rcNewTab.top, m_rcNewTab.right,
-                m_rcNewTab.bottom, 4, 4);
+                m_rcNewTab.bottom, rPlus * 2, rPlus * 2);
       SelectObject(hdcMem, oldP);
       SelectObject(hdcMem, oldBr);
       DeleteObject(hbrNewTab);
@@ -812,9 +868,48 @@ void TabBar::Draw(HDC hdc) {
   // Restore clip region
   SelectClipRgn(hdcMem, nullptr);
 
+  // Chrome window caption buttons (Minimize, Maximize/Restore, Close)
+  if (!Config::Get().showMenuBar) {
+    bool isMax = IsZoomed(m_hwndParent);
+    HFONT hCapFont = Theme::Get().GetIconFont(10, m_hwnd);
+    HGDIOBJ oldCapFont = SelectObject(hdcMem, hCapFont);
+
+    // Minimize button
+    if (m_hoverCaptionBtn == 1) {
+      FillRect(hdcMem, &m_rcMinBtn, Theme::Get().BrushHover());
+    }
+    SetTextColor(hdcMem, Theme::Get().ClrTextPrimary());
+    SetBkMode(hdcMem, TRANSPARENT);
+    wchar_t minGlyph[2] = { (wchar_t)0xE921, 0 };
+    DrawTextW(hdcMem, minGlyph, 1, &m_rcMinBtn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    // Maximize / Restore button
+    if (m_hoverCaptionBtn == 2) {
+      FillRect(hdcMem, &m_rcMaxBtn, Theme::Get().BrushHover());
+    }
+    SetTextColor(hdcMem, Theme::Get().ClrTextPrimary());
+    wchar_t maxGlyph[2] = { isMax ? (wchar_t)0xE923 : (wchar_t)0xE922, 0 };
+    DrawTextW(hdcMem, maxGlyph, 1, &m_rcMaxBtn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    // Close button
+    if (m_hoverCaptionBtn == 3) {
+      HBRUSH hbrClose = CreateSolidBrush(RGB(232, 17, 35));
+      FillRect(hdcMem, &m_rcCloseBtn, hbrClose);
+      DeleteObject(hbrClose);
+      SetTextColor(hdcMem, RGB(255, 255, 255));
+    } else {
+      SetTextColor(hdcMem, Theme::Get().ClrTextPrimary());
+    }
+    wchar_t closeGlyph[2] = { (wchar_t)0xE8BB, 0 };
+    DrawTextW(hdcMem, closeGlyph, 1, &m_rcCloseBtn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    SelectObject(hdcMem, oldCapFont);
+    DeleteObject(hCapFont);
+  }
+
   // Draw scroll buttons if overflowing
   if (m_showScrollButtons) {
-    RECT rcScrollBg = {w - rightReservedW, 0, w, h - 1};
+    RECT rcScrollBg = {w - rightReservedW, 0, w - capWidth, h - 1};
     HBRUSH hbrBgRight = Theme::Get().BrushBackground();
     FillRect(hdcMem, &rcScrollBg, hbrBgRight);
 
@@ -915,11 +1010,23 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
     RECT rcClient;
     GetClientRect(hwnd, &rcClient);
     int w = rcClient.right - rcClient.left;
+    int capWidth = (!Config::Get().showMenuBar) ? Theme::Get().Scale(46 * 3, hwnd) : 0;
     int rightReservedW =
-        m_showScrollButtons
+        capWidth + (m_showScrollButtons
             ? (Theme::Get().Scale(22, hwnd) * 2 + Theme::Get().Scale(10, hwnd))
-            : 0;
+            : 0);
     int visibleRight = w - rightReservedW;
+
+    int oldCapHover = m_hoverCaptionBtn;
+    m_hoverCaptionBtn = 0;
+    if (!Config::Get().showMenuBar) {
+      if (PtInRect(&m_rcMinBtn, pt)) m_hoverCaptionBtn = 1;
+      else if (PtInRect(&m_rcMaxBtn, pt)) m_hoverCaptionBtn = 2;
+      else if (PtInRect(&m_rcCloseBtn, pt)) m_hoverCaptionBtn = 3;
+    }
+    if (oldCapHover != m_hoverCaptionBtn) {
+      InvalidateRect(hwnd, nullptr, FALSE);
+    }
 
     if (m_showScrollButtons) {
       m_hoverScrollLeft = PtInRect(&m_rcScrollLeft, pt);
@@ -1060,6 +1167,7 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
     m_hoverNewTab = false;
     m_hoverScrollLeft = false;
     m_hoverScrollRight = false;
+    m_hoverCaptionBtn = 0;
     if (!m_dragging) {
       UpdateTooltip(-1);
       InvalidateRect(hwnd, nullptr, FALSE);
@@ -1082,6 +1190,21 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
   case WM_LBUTTONDOWN: {
     POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
 
+    if (!Config::Get().showMenuBar) {
+      if (PtInRect(&m_rcMinBtn, pt)) {
+        ShowWindow(m_hwndParent, SW_MINIMIZE);
+        return 0;
+      }
+      if (PtInRect(&m_rcMaxBtn, pt)) {
+        ShowWindow(m_hwndParent, IsZoomed(m_hwndParent) ? SW_RESTORE : SW_MAXIMIZE);
+        return 0;
+      }
+      if (PtInRect(&m_rcCloseBtn, pt)) {
+        PostMessage(m_hwndParent, WM_CLOSE, 0, 0);
+        return 0;
+      }
+    }
+
     if (m_showScrollButtons) {
       if (PtInRect(&m_rcScrollLeft, pt)) {
         ScrollBy(-Theme::Get().Scale(100, hwnd));
@@ -1096,10 +1219,11 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
     RECT rcClient;
     GetClientRect(hwnd, &rcClient);
     int w = rcClient.right - rcClient.left;
+    int capWidth = (!Config::Get().showMenuBar) ? Theme::Get().Scale(46 * 3, hwnd) : 0;
     int rightReservedW =
-        m_showScrollButtons
+        capWidth + (m_showScrollButtons
             ? (Theme::Get().Scale(22, hwnd) * 2 + Theme::Get().Scale(10, hwnd))
-            : 0;
+            : 0);
     int visibleRight = w - rightReservedW;
 
     if (pt.x < visibleRight) {
@@ -1129,6 +1253,13 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
           }
         }
       }
+    }
+
+    // Clicked empty area of TabBar -> native window dragging!
+    if (!Config::Get().showMenuBar && m_hoverCaptionBtn == 0) {
+      ReleaseCapture();
+      SendMessage(m_hwndParent, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+      return 0;
     }
     return 0;
   }
@@ -1270,8 +1401,17 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
   }
 
   case WM_LBUTTONDBLCLK: {
-    // Double click empty space to open new tab
     POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+    if (!Config::Get().showMenuBar) {
+      bool onTab = false;
+      for (const auto& t : m_tabs) {
+        if (PtInRect(&t.rc, pt)) { onTab = true; break; }
+      }
+      if (!onTab && !PtInRect(&m_rcNewTab, pt) && !PtInRect(&m_rcMinBtn, pt) && !PtInRect(&m_rcMaxBtn, pt) && !PtInRect(&m_rcCloseBtn, pt)) {
+        ShowWindow(m_hwndParent, IsZoomed(m_hwndParent) ? SW_RESTORE : SW_MAXIMIZE);
+        return 0;
+      }
+    }
     bool onTab = false;
     for (size_t i = 0; i < m_tabs.size(); ++i) {
       if (PtInRect(&m_tabs[i].rc, pt)) {
