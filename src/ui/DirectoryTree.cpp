@@ -180,6 +180,46 @@ void DirectoryTree::SelectPath(const std::wstring &path) {
     return;
   }
 
+  // Handle WSL paths
+  if (m_hLinux && (_wcsicmp(normPath.c_str(), L"\\\\wsl.localhost") == 0 ||
+                   _wcsicmp(normPath.c_str(), L"Linux") == 0 ||
+                   _wcsnicmp(normPath.c_str(), L"\\\\wsl.localhost\\", 16) == 0)) {
+    if (_wcsicmp(normPath.c_str(), L"\\\\wsl.localhost") == 0 || _wcsicmp(normPath.c_str(), L"Linux") == 0) {
+      TreeView_SelectItem(m_hwnd, m_hLinux);
+      TreeView_EnsureVisible(m_hwnd, m_hLinux);
+      SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
+      InvalidateRect(m_hwnd, nullptr, TRUE);
+      m_syncing = false;
+      return;
+    }
+
+    std::wstring rest = normPath.substr(16);
+    std::wistringstream ss(rest);
+    std::wstring segment;
+    std::wstring currentSub = L"\\\\wsl.localhost";
+    HTREEITEM hCurrent = m_hLinux;
+
+    TreeView_Expand(m_hwnd, m_hLinux, TVE_EXPAND);
+
+    while (std::getline(ss, segment, L'\\')) {
+      if (segment.empty()) continue;
+      currentSub = Util::CombinePath(currentSub, segment);
+      HTREEITEM hNext = FindOrLoadChildPath(hCurrent, currentSub);
+      if (hNext) {
+        TreeView_Expand(m_hwnd, hCurrent, TVE_EXPAND);
+        hCurrent = hNext;
+      } else {
+        break;
+      }
+    }
+    TreeView_SelectItem(m_hwnd, hCurrent);
+    TreeView_EnsureVisible(m_hwnd, hCurrent);
+    SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(m_hwnd, nullptr, TRUE);
+    m_syncing = false;
+    return;
+  }
+
   // UNC network paths (e.g. \192.168.188.79\share): do not freeze UI thread with deep tree expansion
   if (normPath.length() >= 2 && normPath[0] == L'\\' && normPath[1] == L'\\') {
     SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
@@ -236,6 +276,8 @@ void DirectoryTree::SelectPath(const std::wstring &path) {
 }
 
 void DirectoryTree::Populate() {
+  bool oldSync = m_syncing;
+  m_syncing = true;
   TreeView_DeleteAllItems(m_hwnd);
   FreeAllNodeData();
 
@@ -272,9 +314,32 @@ void DirectoryTree::Populate() {
   m_hThisPC = TreeView_InsertItem(m_hwnd, &tvis);
   PopulateThisPC(m_hThisPC);
 
+  // 3. Linux root (if WSL is available)
+  std::vector<NeoShellItem> wslDistros = ShellUtils::EnumerateWslDistros();
+  if (!wslDistros.empty()) {
+    TVINSERTSTRUCTW tvisL = {0};
+    tvisL.hParent = TVI_ROOT;
+    tvisL.hInsertAfter = TVI_LAST;
+    tvisL.item.mask =
+        TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_CHILDREN | TVIF_PARAM;
+    tvisL.item.pszText = (LPWSTR)L"Linux";
+    tvisL.item.iImage = ShellUtils::GetLinuxIconIndex();
+    tvisL.item.iSelectedImage = tvisL.item.iImage;
+    tvisL.item.cChildren = 1;
+
+    TreeNodeData *pLinuxData = new TreeNodeData{L"\\\\wsl.localhost", false, true};
+    m_nodeDataList.push_back(pLinuxData);
+    tvisL.item.lParam = (LPARAM)pLinuxData;
+
+    m_hLinux = TreeView_InsertItem(m_hwnd, &tvisL);
+    PopulateLinux(m_hLinux, wslDistros);
+    TreeView_Expand(m_hwnd, m_hLinux, TVE_EXPAND);
+  }
+
   // Expand roots by default
   TreeView_Expand(m_hwnd, m_hQuickAccess, TVE_EXPAND);
   TreeView_Expand(m_hwnd, m_hThisPC, TVE_EXPAND);
+  m_syncing = oldSync;
 }
 
 static bool HasSubdirectories(const std::wstring &folderPath, bool showHidden, bool hideDot) {
@@ -347,7 +412,7 @@ void DirectoryTree::PopulateQuickAccess(HTREEITEM hParent) {
 
   const auto &folders = Config::Get().quickAccessFolders;
   for (const auto &folderPath : folders) {
-    if (folderPath.empty() || !PathFileExistsW(folderPath.c_str()))
+    if (folderPath.empty() || !ShellUtils::IsValidDirectory(folderPath))
       continue;
 
     std::wstring displayName = ShellUtils::GetDisplayName(folderPath);
@@ -426,6 +491,32 @@ void DirectoryTree::PopulateThisPC(HTREEITEM hParent) {
   }
 }
 
+void DirectoryTree::PopulateLinux(HTREEITEM hParent, const std::vector<NeoShellItem>& distros) {
+  for (const auto &d : distros) {
+    TVINSERTSTRUCTW tvis = {0};
+    tvis.hParent = hParent;
+    tvis.hInsertAfter = TVI_LAST;
+    tvis.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE |
+                     TVIF_CHILDREN | TVIF_PARAM;
+    tvis.item.pszText = (LPWSTR)d.name.c_str();
+    tvis.item.iImage = d.iconIndex;
+    tvis.item.iSelectedImage = d.iconIndex;
+    tvis.item.cChildren = 1;
+
+    TreeNodeData *pData = new TreeNodeData{d.fullPath, false, false};
+    m_nodeDataList.push_back(pData);
+    tvis.item.lParam = (LPARAM)pData;
+
+    HTREEITEM hDistro = TreeView_InsertItem(m_hwnd, &tvis);
+
+    TVINSERTSTRUCTW dummy = {0};
+    dummy.hParent = hDistro;
+    dummy.item.mask = TVIF_TEXT;
+    dummy.item.pszText = (LPWSTR)L"";
+    TreeView_InsertItem(m_hwnd, &dummy);
+  }
+}
+
 void DirectoryTree::PopulateChildren(HTREEITEM hParent,
                                      const std::wstring &folderPath) {
   SendMessageW(m_hwnd, WM_SETREDRAW, FALSE, 0);
@@ -436,6 +527,13 @@ void DirectoryTree::PopulateChildren(HTREEITEM hParent,
     HTREEITEM hNext = TreeView_GetNextSibling(m_hwnd, hChild);
     TreeView_DeleteItem(m_hwnd, hChild);
     hChild = hNext;
+  }
+
+  if (_wcsicmp(folderPath.c_str(), L"\\\\wsl.localhost") == 0 || _wcsicmp(folderPath.c_str(), L"Linux") == 0) {
+    std::vector<NeoShellItem> distros = ShellUtils::EnumerateWslDistros();
+    PopulateLinux(hParent, distros);
+    SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
+    return;
   }
 
   std::wstring search = Util::CombinePath(folderPath, L"*");
@@ -519,7 +617,10 @@ void DirectoryTree::Refresh() {
         curPath = pData->path;
     }
   }
+  bool oldSync = m_syncing;
+  m_syncing = true;
   Populate();
+  m_syncing = oldSync;
   if (!curPath.empty()) {
     SelectPath(curPath);
   }
@@ -636,16 +737,10 @@ LRESULT CALLBACK DirectoryTree::ParentSubclassProc(HWND hwnd, UINT msg,
               rcSel.bottom = rcRow.bottom - padY;
 
               bool isDark = Theme::Get().IsDarkMode();
-              HBRUSH hbr = Theme::Get().BrushSelected();
+              COLORREF clrBg = isDark ? RGB(50, 50, 50) : RGB(205, 230, 255);
               COLORREF clrBorder = isDark ? RGB(75, 75, 75) : RGB(180, 215, 255);
-              HPEN hPen = CreatePen(PS_SOLID, 1, clrBorder);
-              HGDIOBJ oldBrush = SelectObject(hdc, hbr);
-              HGDIOBJ oldPen = SelectObject(hdc, hPen);
               int rad = Theme::Get().Scale(4, pThis->m_hwnd);
-              RoundRect(hdc, rcSel.left, rcSel.top, rcSel.right, rcSel.bottom, rad, rad);
-              SelectObject(hdc, oldBrush);
-              SelectObject(hdc, oldPen);
-              DeleteObject(hPen);
+              Theme::Get().DrawSmoothRoundRect(hdc, rcSel, rad, clrBg, clrBorder, 1.0f);
 
               // Get full item info (image, text, children, expanded state)
               TVITEMW tvi = {0};
@@ -739,6 +834,8 @@ LRESULT CALLBACK DirectoryTree::ParentSubclassProc(HWND hwnd, UINT msg,
         if (pThis->m_syncing || (GetKeyState(VK_RBUTTON) < 0))
           break;
         NMTREEVIEWW *pnmtv = (NMTREEVIEWW *)lParam;
+        if (pnmtv->action != TVC_BYMOUSE && pnmtv->action != TVC_BYKEYBOARD)
+          break;
         TreeNodeData *pData = (TreeNodeData *)pnmtv->itemNew.lParam;
         if (pData) {
           if (pData->path == L"QuickAccess") {

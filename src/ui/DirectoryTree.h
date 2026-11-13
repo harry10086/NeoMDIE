@@ -1,5 +1,6 @@
 #pragma once
 #include "..\Common.h"
+#include "..\core\ShellItem.h"
 
 struct TreeNodeData {
     std::wstring path;
@@ -33,6 +34,7 @@ private:
 
     void PopulateQuickAccess(HTREEITEM hParent);
     void PopulateThisPC(HTREEITEM hParent);
+    void PopulateLinux(HTREEITEM hParent, const std::vector<NeoShellItem>& distros);
     void PopulateChildren(HTREEITEM hParent, const std::wstring& folderPath);
     void AddSpecialFolder(HTREEITEM hParent, const wchar_t* name, int csidl);
     void FreeAllNodeData();
@@ -45,6 +47,7 @@ private:
 
     HTREEITEM m_hQuickAccess = nullptr;
     HTREEITEM m_hThisPC = nullptr;
+    HTREEITEM m_hLinux = nullptr;
     HTREEITEM m_hDropHighlight = nullptr;
 
     class DropTarget* m_pDropTarget = nullptr;

@@ -89,8 +89,14 @@ namespace ShellUtils {
     int GetCustomPathIcon(const std::wstring& path);
     std::wstring GetItemTypeName(const std::wstring& path, DWORD attr);
 
+    bool IsWslPath(const std::wstring& path);
+    bool IsValidDirectory(const std::wstring& path);
+    int GetLinuxIconIndex();
+    std::vector<NeoShellItem> EnumerateWslDistros();
+
     bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems, bool hideDotFiles = false);
     void EnumerateDrives(std::vector<NeoShellItem>& outDrives);
+    void ClearDriveIconCache();
 
     bool OpenItem(HWND hwnd, const std::wstring& path);
     bool ShowItemProperties(HWND hwnd, const std::wstring& path);

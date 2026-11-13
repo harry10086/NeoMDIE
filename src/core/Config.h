@@ -132,7 +132,7 @@ public:
     int previewWidth = 320;
     int viewMode = 0; // 0: Details, 1: Large Icons, 2: Small Icons, 3: List, 4: Tiles
     bool showHidden = false;
-    bool hideDotFiles = true;  // 默认隐藏 . 开头的点文件/点文件夹
+    bool hideDotFiles = false;  // 默认隐藏 . 开头的点文件/点文件夹
     bool showItemCheckBoxes = false; // 项目复选框 (Item check boxes)
     int listDensity = 1;       // 间距调整: 0: 紧凑, 1: 适中 (默认), 2: 宽松
     int listScale = 1;         // 放大调整: 0: 偏小 (9pt/90%), 1: 标准 (10pt/100%, 默认), 2: 放大 (12pt/125%)
@@ -253,6 +253,7 @@ public:
 
     // Quick Access (快速访问)
     std::vector<std::wstring> quickAccessFolders;
+    std::vector<LinkItem> links;
     void InitDefaultQuickAccess();
     bool AddQuickAccess(const std::wstring& path);
     bool RemoveQuickAccess(const std::wstring& path);

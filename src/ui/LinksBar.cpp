@@ -52,59 +52,12 @@ HWND LinksBar::Create(HWND hwndParent, int id) {
 }
 
 void LinksBar::LoadLinks() {
-    m_links.clear();
-    std::wstring iniPath = Config::Get().GetConfigFilePath();
-    const wchar_t* sec = L"Links";
-
-    int count = GetPrivateProfileIntW(sec, L"Count", -1, iniPath.c_str());
-    if (count >= 0) {
-        for (int i = 0; i < count; ++i) {
-            wchar_t kName[32], kPath[32], kColor[32];
-            StringCchPrintfW(kName, 32, L"Name%d", i);
-            StringCchPrintfW(kPath, 32, L"Path%d", i);
-            StringCchPrintfW(kColor, 32, L"Color%d", i);
-
-            wchar_t vName[MAX_PATH], vPath[MAX_PATH];
-            GetPrivateProfileStringW(sec, kName, L"", vName, MAX_PATH, iniPath.c_str());
-            GetPrivateProfileStringW(sec, kPath, L"", vPath, MAX_PATH, iniPath.c_str());
-            DWORD dwColor = (DWORD)GetPrivateProfileIntW(sec, kColor, 0, iniPath.c_str());
-
-            if (wcslen(vPath) > 0) {
-                m_links.push_back({ vName, vPath, (COLORREF)dwColor });
-            }
-        }
-    }
-
-    // Defaults if empty
-    if (m_links.empty()) {
-        wchar_t userProfile[MAX_PATH];
-        if (GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH) > 0) {
-            m_links.push_back({ I18n::Get().T(StringId::Desktop), std::wstring(userProfile) + L"\\Desktop", 0 });
-            m_links.push_back({ I18n::Get().T(StringId::Downloads), std::wstring(userProfile) + L"\\Downloads", 0 });
-            m_links.push_back({ I18n::Get().T(StringId::Documents), std::wstring(userProfile) + L"\\Documents", 0 });
-            m_links.push_back({ I18n::Get().T(StringId::Pictures), std::wstring(userProfile) + L"\\Pictures", 0 });
-        }
-        SaveLinks();
-    }
+    m_links = Config::Get().links;
 }
 
 void LinksBar::SaveLinks() {
-    std::wstring iniPath = Config::Get().GetConfigFilePath();
-    const wchar_t* sec = L"Links";
-
-    WritePrivateProfileSectionW(sec, L"", iniPath.c_str());
-    WritePrivateProfileStringW(sec, L"Count", std::to_wstring(m_links.size()).c_str(), iniPath.c_str());
-
-    for (size_t i = 0; i < m_links.size(); ++i) {
-        wchar_t kName[32], kPath[32], kColor[32];
-        StringCchPrintfW(kName, 32, L"Name%d", (int)i);
-        StringCchPrintfW(kPath, 32, L"Path%d", (int)i);
-        StringCchPrintfW(kColor, 32, L"Color%d", (int)i);
-
-        WritePrivateProfileStringW(sec, kName, m_links[i].name.c_str(), iniPath.c_str());
-        WritePrivateProfileStringW(sec, kPath, m_links[i].path.c_str(), iniPath.c_str());
-        WritePrivateProfileStringW(sec, kColor, std::to_wstring((DWORD)m_links[i].color).c_str(), iniPath.c_str());
-    }
+    Config::Get().links = m_links;
+    Config::Get().Save();
 }
 
 void LinksBar::AddLink(const std::wstring& name, const std::wstring& path) {
@@ -209,12 +162,7 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (m_hoverIcon) {
             RECT rcHover = { m_rcIcon.left, Theme::Get().Scale(2, hwnd), m_rcIcon.right, m_rcIcon.bottom - Theme::Get().Scale(2, hwnd) };
             int rad = Theme::Get().Scale(6, hwnd);
-            HBRUSH hbrHover = Theme::Get().BrushHover();
-            HGDIOBJ oldBrush = SelectObject(hdcMem, hbrHover);
-            HGDIOBJ oldP = SelectObject(hdcMem, GetStockObject(NULL_PEN));
-            RoundRect(hdcMem, rcHover.left, rcHover.top, rcHover.right, rcHover.bottom, rad, rad);
-            SelectObject(hdcMem, oldP);
-            SelectObject(hdcMem, oldBrush);
+            Theme::Get().FillSmoothRoundRect(hdcMem, rcHover, rad, Theme::Get().ClrHover());
         }
 
         HFONT hIconFont = Theme::Get().GetIconFont(16, hwnd);
@@ -280,21 +228,9 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
             int rad = Theme::Get().Scale(8, hwnd);
             if ((m_dragging && (int)i == m_dragIndex) || ((int)i == m_pressedIndex)) {
-                HBRUSH hbrDrag = Theme::Get().BrushSelected();
-                HPEN hPen = Theme::Get().PenBorder();
-                HGDIOBJ oldBrush = SelectObject(hdcMem, hbrDrag);
-                HGDIOBJ oldP = SelectObject(hdcMem, hPen);
-                RoundRect(hdcMem, rcItem.left, rcItem.top, rcItem.right, rcItem.bottom, rad, rad);
-                SelectObject(hdcMem, oldBrush);
-                SelectObject(hdcMem, oldP);
+                Theme::Get().DrawSmoothRoundRect(hdcMem, rcItem, rad, Theme::Get().ClrSelected(), Theme::Get().ClrBorder(), 1.0f);
             } else if ((int)i == m_hoverIndex) {
-                HBRUSH hbrHover = Theme::Get().BrushHover();
-                HPEN hPen = Theme::Get().PenBorder();
-                HGDIOBJ oldBrush = SelectObject(hdcMem, hbrHover);
-                HGDIOBJ oldP = SelectObject(hdcMem, hPen);
-                RoundRect(hdcMem, rcItem.left, rcItem.top, rcItem.right, rcItem.bottom, rad, rad);
-                SelectObject(hdcMem, oldBrush);
-                SelectObject(hdcMem, oldP);
+                Theme::Get().DrawSmoothRoundRect(hdcMem, rcItem, rad, Theme::Get().ClrHover(), Theme::Get().ClrBorder(), 1.0f);
             }
 
             COLORREF textColor = (m_links[i].color != 0) ? m_links[i].color : Theme::Get().ClrTextPrimary();
@@ -630,9 +566,16 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 SendMessageW(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(9901, 0), 0);
                 break;
             case 11: {
-                std::wstring iniPath = Config::Get().GetConfigFilePath();
-                WritePrivateProfileSectionW(L"Links", L"", iniPath.c_str());
-                LoadLinks();
+                Config::Get().links.clear();
+                wchar_t userProfile[MAX_PATH];
+                if (GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH) > 0) {
+                    Config::Get().links.push_back({ I18n::Get().T(StringId::Desktop), std::wstring(userProfile) + L"\\Desktop", 0 });
+                    Config::Get().links.push_back({ I18n::Get().T(StringId::Downloads), std::wstring(userProfile) + L"\\Downloads", 0 });
+                    Config::Get().links.push_back({ I18n::Get().T(StringId::Documents), std::wstring(userProfile) + L"\\Documents", 0 });
+                    Config::Get().links.push_back({ I18n::Get().T(StringId::Pictures), std::wstring(userProfile) + L"\\Pictures", 0 });
+                }
+                Config::Get().Save();
+                m_links = Config::Get().links;
                 InvalidateRect(hwnd, nullptr, TRUE);
                 break;
             }

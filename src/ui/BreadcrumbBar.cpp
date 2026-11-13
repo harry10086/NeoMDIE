@@ -63,29 +63,87 @@ void BreadcrumbBar::ParseSegments() {
         return;
     }
 
-    // Always start with "This PC"
-    BreadcrumbSegment root;
-    root.name = L"此电脑";
-    root.targetPath = L"此电脑";
-    m_segments.push_back(root);
+    bool isWsl = (_wcsnicmp(m_currentPath.c_str(), L"\\\\wsl.localhost", 15) == 0 ||
+                  _wcsnicmp(m_currentPath.c_str(), L"\\\\wsl$", 6) == 0 ||
+                  _wcsicmp(m_currentPath.c_str(), L"Linux") == 0 ||
+                  m_currentPath.find(L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6") != std::wstring::npos);
 
-    // Break down path: e.g. "C:\Users\harry" -> "C:", "Users", "harry"
-    std::wstring accum;
-    std::wistringstream ss(m_currentPath);
-    std::wstring part;
+    if (isWsl) {
+        BreadcrumbSegment root;
+        root.name = L"Linux";
+        root.targetPath = L"\\\\wsl.localhost";
+        m_segments.push_back(root);
 
-    while (std::getline(ss, part, L'\\')) {
-        if (part.empty()) continue;
-        if (accum.empty()) {
-            accum = part + L"\\";
-        } else {
-            accum += (accum.back() == L'\\' ? L"" : L"\\") + part;
+        std::wstring subPath;
+        if (_wcsnicmp(m_currentPath.c_str(), L"\\\\wsl.localhost", 15) == 0) {
+            subPath = m_currentPath.substr(15);
+        } else if (_wcsnicmp(m_currentPath.c_str(), L"\\\\wsl$", 6) == 0) {
+            subPath = m_currentPath.substr(6);
+        }
+        if (!subPath.empty() && subPath[0] == L'\\') {
+            subPath = subPath.substr(1);
         }
 
-        BreadcrumbSegment seg;
-        seg.name = part;
-        seg.targetPath = accum;
-        m_segments.push_back(seg);
+        if (!subPath.empty()) {
+            std::wstring accum = L"\\\\wsl.localhost";
+            std::wistringstream ss(subPath);
+            std::wstring part;
+            while (std::getline(ss, part, L'\\')) {
+                if (part.empty()) continue;
+                accum += L"\\" + part;
+                BreadcrumbSegment seg;
+                seg.name = part;
+                seg.targetPath = accum;
+                m_segments.push_back(seg);
+            }
+        }
+        return;
+    }
+
+    bool isUnc = (m_currentPath.length() >= 2 && m_currentPath[0] == L'\\' && m_currentPath[1] == L'\\');
+    if (!isUnc) {
+        // Always start with "This PC"
+        BreadcrumbSegment root;
+        root.name = I18n::Get().T(StringId::ThisPC);
+        root.targetPath = L"This PC";
+        m_segments.push_back(root);
+
+        // Break down path: e.g. "C:\Users\harry" -> "C:", "Users", "harry"
+        std::wstring accum;
+        std::wistringstream ss(m_currentPath);
+        std::wstring part;
+
+        while (std::getline(ss, part, L'\\')) {
+            if (part.empty()) continue;
+            if (accum.empty()) {
+                accum = part + L"\\";
+            } else {
+                accum += (accum.back() == L'\\' ? L"" : L"\\") + part;
+            }
+
+            BreadcrumbSegment seg;
+            seg.name = part;
+            seg.targetPath = accum;
+            m_segments.push_back(seg);
+        }
+    } else {
+        std::wstring accum = L"\\\\";
+        std::wistringstream ss(m_currentPath.substr(2));
+        std::wstring part;
+        bool first = true;
+        while (std::getline(ss, part, L'\\')) {
+            if (part.empty()) continue;
+            if (first) {
+                accum += part;
+                first = false;
+            } else {
+                accum += L"\\" + part;
+            }
+            BreadcrumbSegment seg;
+            seg.name = part;
+            seg.targetPath = accum;
+            m_segments.push_back(seg);
+        }
     }
 }
 
@@ -93,10 +151,23 @@ void BreadcrumbBar::UpdateLayout(int x, int y, int width, int height) {
     if (m_hwnd) {
         MoveWindow(m_hwnd, x, y, width, height, TRUE);
         if (m_editMode && m_hwndEdit) {
+            int fontH = Theme::Get().Scale(16, m_hwnd);
+            HDC hdc = GetDC(m_hwndEdit);
+            HFONT hFont = (HFONT)SendMessageW(m_hwndEdit, WM_GETFONT, 0, 0);
+            if (!hFont) hFont = Theme::Get().GetUIFont(m_hwnd);
+            HGDIOBJ oldFont = SelectObject(hdc, hFont);
+            TEXTMETRIC tm;
+            if (GetTextMetrics(hdc, &tm)) {
+                fontH = tm.tmHeight;
+            }
+            SelectObject(hdc, oldFont);
+            ReleaseDC(m_hwndEdit, hdc);
+
+            int editH = fontH;
+            int editY = (height - editH) / 2;
             int padX = Theme::Get().Scale(10, m_hwnd);
-            int padY = Theme::Get().Scale(4, m_hwnd);
-            MoveWindow(m_hwndEdit, padX, padY,
-                       width - padX * 2, height - padY * 2, TRUE);
+            MoveWindow(m_hwndEdit, padX, editY,
+                       width - padX * 2, editH, TRUE);
         }
     }
 }
@@ -108,10 +179,25 @@ void BreadcrumbBar::SwitchToEditMode() {
 
     RECT rc;
     GetClientRect(m_hwnd, &rc);
+    int height = rc.bottom - rc.top;
+
+    int fontH = Theme::Get().Scale(16, m_hwnd);
+    HDC hdc = GetDC(m_hwndEdit);
+    HFONT hFont = (HFONT)SendMessageW(m_hwndEdit, WM_GETFONT, 0, 0);
+    if (!hFont) hFont = Theme::Get().GetUIFont(m_hwnd);
+    HGDIOBJ oldFont = SelectObject(hdc, hFont);
+    TEXTMETRIC tm;
+    if (GetTextMetrics(hdc, &tm)) {
+        fontH = tm.tmHeight;
+    }
+    SelectObject(hdc, oldFont);
+    ReleaseDC(m_hwndEdit, hdc);
+
+    int editH = fontH;
+    int editY = (height - editH) / 2;
     int padX = Theme::Get().Scale(10, m_hwnd);
-    int padY = Theme::Get().Scale(4, m_hwnd);
-    MoveWindow(m_hwndEdit, padX, padY,
-               rc.right - padX * 2, rc.bottom - padY * 2, TRUE);
+    MoveWindow(m_hwndEdit, padX, editY,
+               rc.right - padX * 2, editH, TRUE);
 
     ShowWindow(m_hwndEdit, SW_SHOW);
     SetFocus(m_hwndEdit);
@@ -151,19 +237,14 @@ void BreadcrumbBar::Draw(HDC hdc) {
     // 1. Fill background with parent toolbar surface
     FillRect(hdcMem, &rcClient, Theme::Get().BrushSurface());
 
-    // 2. Draw modern rounded omnibox container
-    int rad = Theme::Get().Scale(10, m_hwnd);
-    RECT rcBox = { 0, 0, w - 1, h - 1 };
+    // 2. Draw modern rounded omnibox container (antialiased with uniform border)
+    int insetY = Theme::Get().Scale(2, m_hwnd);
+    int rad = Theme::Get().Scale(6, m_hwnd);
+    RECT rcBox = { 0, insetY, w, h - insetY };
     COLORREF boxBg = Theme::Get().IsDarkMode() ? RGB(32, 33, 36) : RGB(241, 243, 244);
-    HBRUSH hbrBox = CreateSolidBrush(boxBg);
-    HPEN hPen = m_editMode ? CreatePen(PS_SOLID, 2, Theme::Get().ClrAccent()) : Theme::Get().PenBorder();
-    HGDIOBJ oldBrush = SelectObject(hdcMem, hbrBox);
-    HGDIOBJ oldPen = SelectObject(hdcMem, hPen);
-    RoundRect(hdcMem, rcBox.left, rcBox.top, rcBox.right, rcBox.bottom, rad, rad);
-    SelectObject(hdcMem, oldBrush);
-    SelectObject(hdcMem, oldPen);
-    DeleteObject(hbrBox);
-    if (m_editMode) DeleteObject(hPen);
+    COLORREF borderClr = m_editMode ? Theme::Get().ClrAccent() : Theme::Get().ClrBorder();
+    float borderW = 1.0f;
+    Theme::Get().DrawSmoothRoundRect(hdcMem, rcBox, rad, boxBg, borderClr, borderW);
 
     if (!m_editMode) {
         HFONT hFont = Theme::Get().GetUIFont(m_hwnd);
@@ -172,27 +253,21 @@ void BreadcrumbBar::Draw(HDC hdc) {
 
         int curX = Theme::Get().Scale(10, m_hwnd);
         int arrowWidth = Theme::Get().Scale(14, m_hwnd);
+        int segMargin = Theme::Get().Scale(2, m_hwnd);
 
         for (size_t i = 0; i < m_segments.size(); ++i) {
             SIZE textSize;
             GetTextExtentPoint32W(hdcMem, m_segments[i].name.c_str(), (int)m_segments[i].name.length(), &textSize);
 
             m_segments[i].rc.left = curX;
-            m_segments[i].rc.top = Theme::Get().Scale(3, m_hwnd);
+            m_segments[i].rc.top = insetY + segMargin;
             m_segments[i].rc.right = curX + textSize.cx + Theme::Get().Scale(8, m_hwnd);
-            m_segments[i].rc.bottom = h - Theme::Get().Scale(3, m_hwnd);
+            m_segments[i].rc.bottom = h - insetY - segMargin;
 
             // Hover background for segment (rounded pill)
             if ((int)i == m_hoverSegment) {
-                HBRUSH hbrHover = Theme::Get().BrushHover();
-                HPEN hNullPen = CreatePen(PS_NULL, 0, 0);
-                HGDIOBJ oldHoverB = SelectObject(hdcMem, hbrHover);
-                HGDIOBJ oldHoverP = SelectObject(hdcMem, hNullPen);
-                int segRad = Theme::Get().Scale(6, m_hwnd);
-                RoundRect(hdcMem, m_segments[i].rc.left, m_segments[i].rc.top, m_segments[i].rc.right, m_segments[i].rc.bottom, segRad, segRad);
-                SelectObject(hdcMem, oldHoverB);
-                SelectObject(hdcMem, oldHoverP);
-                DeleteObject(hNullPen);
+                int segRad = Theme::Get().Scale(4, m_hwnd);
+                Theme::Get().FillSmoothRoundRect(hdcMem, m_segments[i].rc, segRad, Theme::Get().ClrHover());
             }
 
             // Draw segment text
@@ -204,7 +279,7 @@ void BreadcrumbBar::Draw(HDC hdc) {
 
             // Draw '>' separator if not last segment
             if (i + 1 < m_segments.size()) {
-                RECT rcArrow = { curX, 0, curX + arrowWidth, h };
+                RECT rcArrow = { curX, insetY, curX + arrowWidth, h - insetY };
                 SetTextColor(hdcMem, Theme::Get().ClrTextSecondary());
                 DrawTextW(hdcMem, L">", -1, &rcArrow, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 curX += arrowWidth;

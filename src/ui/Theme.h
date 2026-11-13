@@ -14,6 +14,7 @@ public:
     static Theme& Get();
 
     void Initialize();
+    void Shutdown();
     bool IsDarkMode() const { return m_isDark; }
     void SetDarkMode(bool dark);
     void ToggleTheme();
@@ -46,6 +47,10 @@ public:
     HPEN   PenBorder() const { return m_hpenBorder; }
 
     void RecreateGdiObjects();
+
+    // Antialiased rendering helpers (GDI+)
+    static void DrawSmoothRoundRect(HDC hdc, const RECT& rc, int radius, COLORREF fillColor, COLORREF borderColor, float borderWidth = 1.0f, BYTE fillAlpha = 255);
+    static void FillSmoothRoundRect(HDC hdc, const RECT& rc, int radius, COLORREF fillColor, BYTE fillAlpha = 255);
 
     HFONT GetUIFont(HWND hwnd = nullptr);
     HFONT GetUIFontBold(HWND hwnd = nullptr);

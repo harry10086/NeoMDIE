@@ -48,6 +48,8 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "wininet.lib")
 
+#define WM_ACTIVATE_INSTANCE (WM_USER + 202)
+
 template <typename T>
 inline void SafeRelease(T*& p) {
     if (p) {
@@ -65,6 +67,12 @@ struct PaneViewState {
     bool sortAsc = true;
     int viewMode = -1;
     int foldersFirst = -1; // -1: use default, 0: files first, 1: folders first
+};
+
+struct LinkItem {
+    std::wstring name;
+    std::wstring path;
+    COLORREF color = 0; // 0 = default, otherwise custom RGB
 };
 
 namespace Util {
@@ -172,8 +180,28 @@ namespace Util {
         if (path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
             return L"This PC";
         }
+        if (path.find(L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6") != std::wstring::npos ||
+            path.find(L"b2b4a4d1-2754-4140-a2eb-9a76d9d7cdc6") != std::wstring::npos) {
+            return L"\\\\wsl.localhost";
+        }
         std::wstring p = path;
         std::replace(p.begin(), p.end(), L'/', L'\\');
+
+        if (_wcsicmp(p.c_str(), L"Linux") == 0 || _wcsicmp(p.c_str(), L"\\Linux") == 0 ||
+            _wcsicmp(p.c_str(), L"\\\\Linux") == 0 || _wcsicmp(p.c_str(), L"\\\\wsl") == 0 ||
+            _wcsicmp(p.c_str(), L"\\\\wsl$") == 0 || _wcsicmp(p.c_str(), L"wsl") == 0 ||
+            _wcsicmp(p.c_str(), L"wsl$") == 0 || _wcsicmp(p.c_str(), L"wsl.localhost") == 0) {
+            return L"\\\\wsl.localhost";
+        }
+
+        if (_wcsnicmp(p.c_str(), L"wsl.localhost\\", 14) == 0) {
+            p = L"\\\\" + p;
+        } else if (_wcsnicmp(p.c_str(), L"wsl$\\", 5) == 0) {
+            p = L"\\\\wsl.localhost\\" + p.substr(5);
+        } else if (_wcsnicmp(p.c_str(), L"\\\\wsl$\\", 7) == 0) {
+            p = L"\\\\wsl.localhost\\" + p.substr(7);
+        }
+
         while (p.length() > 3 && p.back() == L'\\') {
             p.pop_back();
         }

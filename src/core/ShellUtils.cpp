@@ -538,6 +538,20 @@ static std::unordered_map<wchar_t, int> s_driveIconCache;
 
 int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder, bool fastOnly) {
     if (isFolder) {
+        if (!path.empty()) {
+            std::wstring norm = Util::NormalizePath(path);
+            if (_wcsicmp(norm.c_str(), L"\\\\wsl.localhost") == 0 ||
+                _wcsicmp(norm.c_str(), L"Linux") == 0 ||
+                norm.find(L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6") != std::wstring::npos) {
+                return GetLinuxIconIndex();
+            }
+            if (_wcsnicmp(norm.c_str(), L"\\\\wsl.localhost\\", 16) == 0) {
+                std::wstring rest = norm.substr(16);
+                if (rest.find(L'\\') == std::wstring::npos) {
+                    return GetLinuxIconIndex();
+                }
+            }
+        }
         if (path.length() <= 3 && path.length() >= 2 && path[1] == L':') {
             wchar_t driveLetter = (wchar_t)towupper(path[0]);
             {
@@ -549,7 +563,8 @@ int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder, bool f
             }
             SHFILEINFOW sfi = { 0 };
             UINT driveType = GetDriveTypeW(path.c_str());
-            if (driveType == DRIVE_REMOTE || driveType == DRIVE_CDROM || driveType == DRIVE_REMOVABLE) {
+            if (driveType == DRIVE_REMOTE) {
+                // Avoid potential network hang for disconnected remote drives
                 if (SHGetFileInfoW(path.c_str(), FILE_ATTRIBUTE_DIRECTORY, &sfi, sizeof(sfi),
                                    SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES) != 0 && sfi.iIcon >= 0) {
                     std::lock_guard<std::mutex> lock(s_iconCacheMutex);
@@ -557,6 +572,7 @@ int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder, bool f
                     return sfi.iIcon;
                 }
             } else {
+                // Local fixed, removable USB, CD-ROM: retrieve real shell icon
                 if (SHGetFileInfoW(path.c_str(), 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0 && sfi.iIcon >= 0) {
                     std::lock_guard<std::mutex> lock(s_iconCacheMutex);
                     s_driveIconCache[driveLetter] = sfi.iIcon;
@@ -698,6 +714,11 @@ std::wstring GetItemTypeName(const std::wstring& path, DWORD attr) {
     return typeName;
 }
 
+void ClearDriveIconCache() {
+    std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+    s_driveIconCache.clear();
+}
+
 void EnumerateDrives(std::vector<NeoShellItem>& outDrives) {
     wchar_t driveStrings[512] = { 0 };
     DWORD len = GetLogicalDriveStringsW(512, driveStrings);
@@ -720,27 +741,31 @@ void EnumerateDrives(std::vector<NeoShellItem>& outDrives) {
         else if (driveType == DRIVE_CDROM) typeStr = I18n::Get().T(StringId::DriveCD);
         else if (driveType == DRIVE_REMOTE) typeStr = I18n::Get().T(StringId::DriveNetwork);
 
-        wchar_t volName[MAX_PATH] = { 0 };
-        wchar_t fsName[MAX_PATH] = { 0 };
-
-        // Only query volume information for local fixed or ramdisk drives to prevent network/optical/empty removable drive hangs
-        if (driveType == DRIVE_FIXED || driveType == DRIVE_RAMDISK) {
-            GetVolumeInformationW(pDrive, volName, MAX_PATH, nullptr, nullptr, nullptr, fsName, MAX_PATH);
-
-            ULARGE_INTEGER freeBytes, totalBytes, totalFree;
-            if (GetDiskFreeSpaceExW(pDrive, &freeBytes, &totalBytes, &totalFree)) {
-                item.size = totalBytes.QuadPart;
+        SHFILEINFOW sfi = { 0 };
+        // Query official Windows Shell display name, type name and icon (matches Explorer)
+        if (SHGetFileInfoW(pDrive, 0, &sfi, sizeof(sfi),
+                           SHGFI_DISPLAYNAME | SHGFI_TYPENAME | SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0) {
+            if (sfi.szDisplayName[0] != L'\0') {
+                item.name = sfi.szDisplayName;
+            } else {
+                item.name = typeStr + L" (" + pDrive[0] + L":)";
             }
-        }
-
-        if (wcslen(volName) > 0) {
-            item.name = std::wstring(volName) + L" (" + pDrive[0] + L":)";
+            if (sfi.szTypeName[0] != L'\0') {
+                item.typeName = sfi.szTypeName;
+            } else {
+                item.typeName = typeStr;
+            }
+            item.iconIndex = sfi.iIcon;
         } else {
             item.name = typeStr + L" (" + pDrive[0] + L":)";
+            item.typeName = typeStr;
+            item.iconIndex = GetItemIconIndex(pDrive, FILE_ATTRIBUTE_DIRECTORY, true);
         }
 
-        item.typeName = typeStr;
-        item.iconIndex = GetItemIconIndex(pDrive, FILE_ATTRIBUTE_DIRECTORY, true);
+        ULARGE_INTEGER freeBytes, totalBytes, totalFree;
+        if (GetDiskFreeSpaceExW(pDrive, &freeBytes, &totalBytes, &totalFree)) {
+            item.size = totalBytes.QuadPart;
+        }
 
         outDrives.push_back(item);
         pDrive += wcslen(pDrive) + 1;
@@ -749,12 +774,165 @@ void EnumerateDrives(std::vector<NeoShellItem>& outDrives) {
     SetErrorMode(oldErrMode);
 }
 
+bool IsWslPath(const std::wstring& path) {
+    if (path.empty()) return false;
+    std::wstring norm = Util::NormalizePath(path);
+    if (_wcsicmp(norm.c_str(), L"\\\\wsl.localhost") == 0 ||
+        _wcsicmp(norm.c_str(), L"\\\\wsl$") == 0 ||
+        _wcsicmp(norm.c_str(), L"Linux") == 0 ||
+        norm.find(L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6") != std::wstring::npos ||
+        norm.find(L"b2b4a4d1-2754-4140-a2eb-9a76d9d7cdc6") != std::wstring::npos) {
+        return true;
+    }
+    if (_wcsnicmp(norm.c_str(), L"\\\\wsl.localhost\\", 16) == 0 ||
+        _wcsnicmp(norm.c_str(), L"\\\\wsl$\\", 7) == 0) {
+        return true;
+    }
+    return false;
+}
+
+bool IsValidDirectory(const std::wstring& path) {
+    if (path.empty()) return false;
+    if (path == L"This PC" || path == L"此电脑" || path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
+        return true;
+    }
+    if (IsWslPath(path)) {
+        return true;
+    }
+    return PathFileExistsW(path.c_str()) != FALSE;
+}
+
+int GetLinuxIconIndex() {
+    static int s_linuxIconIndex = -1;
+    if (s_linuxIconIndex >= 0) return s_linuxIconIndex;
+
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (SUCCEEDED(SHParseDisplayName(L"::{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}", nullptr, &pidl, 0, nullptr)) && pidl) {
+        SHFILEINFOW sfi = { 0 };
+        if (SHGetFileInfoW((LPCWSTR)pidl, 0, &sfi, sizeof(sfi), SHGFI_PIDL | SHGFI_SYSICONINDEX | SHGFI_SMALLICON) != 0 && sfi.iIcon >= 0) {
+            s_linuxIconIndex = sfi.iIcon;
+        }
+        CoTaskMemFree(pidl);
+    }
+    if (s_linuxIconIndex < 0) {
+        s_linuxIconIndex = GetItemIconIndex(L"", FILE_ATTRIBUTE_DIRECTORY, true);
+    }
+    return s_linuxIconIndex;
+}
+
+std::vector<NeoShellItem> EnumerateWslDistros() {
+    std::vector<NeoShellItem> distros;
+    std::unordered_set<std::wstring> seen;
+
+    auto cleanDistroName = [](std::wstring name) -> std::wstring {
+        size_t pos = name.find(L" (\\");
+        if (pos != std::wstring::npos) {
+            name = name.substr(0, pos);
+        }
+        return name;
+    };
+
+    // 1. Shell namespace enumeration (::{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6} or \\wsl.localhost)
+    PIDLIST_ABSOLUTE pidlLinux = nullptr;
+    HRESULT hr = SHParseDisplayName(L"::{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}", nullptr, &pidlLinux, 0, nullptr);
+    if (FAILED(hr)) {
+        hr = SHParseDisplayName(L"\\\\wsl.localhost", nullptr, &pidlLinux, 0, nullptr);
+    }
+    if (SUCCEEDED(hr) && pidlLinux) {
+        IShellFolder* pDesktop = nullptr;
+        if (SUCCEEDED(SHGetDesktopFolder(&pDesktop))) {
+            IShellFolder* pLinuxFolder = nullptr;
+            if (SUCCEEDED(pDesktop->BindToObject(pidlLinux, nullptr, IID_IShellFolder, (void**)&pLinuxFolder))) {
+                IEnumIDList* pEnum = nullptr;
+                if (SUCCEEDED(pLinuxFolder->EnumObjects(nullptr, SHCONTF_FOLDERS, &pEnum)) && pEnum) {
+                    PITEMID_CHILD pidlChild = nullptr;
+                    ULONG fetched = 0;
+                    while (pEnum->Next(1, &pidlChild, &fetched) == S_OK && fetched == 1) {
+                        STRRET str;
+                        wchar_t name[MAX_PATH] = { 0 };
+                        if (SUCCEEDED(pLinuxFolder->GetDisplayNameOf(pidlChild, SHGDN_NORMAL, &str))) {
+                            StrRetToBufW(&str, pidlChild, name, MAX_PATH);
+                        }
+                        if (name[0] != L'\0') {
+                            std::wstring dName = cleanDistroName(name);
+                            if (seen.find(dName) == seen.end()) {
+                                seen.insert(dName);
+                                NeoShellItem item;
+                                item.name = dName;
+                                item.fullPath = L"\\\\wsl.localhost\\" + dName;
+                                item.isFolder = true;
+                                item.isDrive = false;
+                                item.size = 0;
+                                item.isSizeCalculated = false;
+                                item.typeName = I18n::Get().T(StringId::Folder);
+                                item.iconIndex = GetLinuxIconIndex();
+                                distros.push_back(item);
+                            }
+                        }
+                        CoTaskMemFree(pidlChild);
+                    }
+                    pEnum->Release();
+                }
+                pLinuxFolder->Release();
+            }
+            pDesktop->Release();
+        }
+        CoTaskMemFree(pidlLinux);
+    }
+
+    // 2. Fallback / supplementary: HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss
+    HKEY hLxss = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Lxss", 0, KEY_READ, &hLxss) == ERROR_SUCCESS) {
+        DWORD subIdx = 0;
+        wchar_t subKeyName[256];
+        DWORD subKeyLen = 256;
+        while (RegEnumKeyExW(hLxss, subIdx++, subKeyName, &subKeyLen, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS) {
+            subKeyLen = 256;
+            HKEY hDistro = nullptr;
+            if (RegOpenKeyExW(hLxss, subKeyName, 0, KEY_READ, &hDistro) == ERROR_SUCCESS) {
+                wchar_t distroName[256] = { 0 };
+                DWORD dNameSize = sizeof(distroName);
+                if (RegQueryValueExW(hDistro, L"DistributionName", nullptr, nullptr, (LPBYTE)distroName, &dNameSize) == ERROR_SUCCESS && distroName[0]) {
+                    std::wstring dName = cleanDistroName(distroName);
+                    if (seen.find(dName) == seen.end()) {
+                        seen.insert(dName);
+                        NeoShellItem item;
+                        item.name = dName;
+                        item.fullPath = L"\\\\wsl.localhost\\" + dName;
+                        item.isFolder = true;
+                        item.isDrive = false;
+                        item.size = 0;
+                        item.isSizeCalculated = false;
+                        item.typeName = I18n::Get().T(StringId::Folder);
+                        item.iconIndex = GetLinuxIconIndex();
+                        distros.push_back(item);
+                    }
+                }
+                RegCloseKey(hDistro);
+            }
+        }
+        RegCloseKey(hLxss);
+    }
+
+    return distros;
+}
+
 bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems, bool hideDotFiles) {
     outItems.clear();
 
     // Check if it's "This PC" / My Computer
     if (path == L"此电脑" || path == L"This PC" || path == L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}" || path.empty()) {
         EnumerateDrives(outItems);
+        return true;
+    }
+
+    // Check if it's Linux virtual root
+    std::wstring normPath = Util::NormalizePath(path);
+    if (_wcsicmp(normPath.c_str(), L"\\\\wsl.localhost") == 0 ||
+        _wcsicmp(normPath.c_str(), L"\\\\wsl$") == 0 ||
+        _wcsicmp(normPath.c_str(), L"Linux") == 0 ||
+        normPath.find(L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6") != std::wstring::npos) {
+        outItems = EnumerateWslDistros();
         return true;
     }
 
@@ -1040,71 +1218,36 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
                 if (GetCapture()) ReleaseCapture();
                 SetCursor(LoadCursorW(nullptr, IDC_ARROW));
 
-                // Safe threaded QueryContextMenu with 800ms timeout to prevent buggy 3rd-party shell extensions (e.g. YunShellExt) from hanging UI
-                struct QueryContextTask {
-                    IContextMenu* pContextMenu;
-                    HMENU hMenu;
-                    UINT indexMenu;
-                    UINT idCmdFirst;
-                    UINT idCmdLast;
-                    UINT uFlags;
-                    HRESULT hr;
-                };
+                // Safe in-thread QueryContextMenu with Structured Exception Handling (__try / __except)
+                // COM apartment rules require IContextMenu::QueryContextMenu to run on the creating STA thread,
+                // or background thread inter-thread COM calls will block/hang or return raw unmangled verb strings.
+                SafeQueryContextMenu(pContextMenu, hMenu, (UINT)topItemsCount, 1, 0x6FFF, CMF_NORMAL | CMF_EXPLORE);
 
-                QueryContextTask qTask = {
-                    pContextMenu, hMenu, (UINT)topItemsCount, 1, 0x6FFF, CMF_NORMAL | CMF_EXPLORE, E_FAIL
-                };
-
-                HANDLE hQueryThread = CreateThread(nullptr, 0, [](LPVOID lpParam) -> DWORD {
-                    auto* t = (QueryContextTask*)lpParam;
-                    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-                    __try {
-                        t->hr = t->pContextMenu->QueryContextMenu(t->hMenu, t->indexMenu, t->idCmdFirst, t->idCmdLast, t->uFlags);
-                    } __except (EXCEPTION_EXECUTE_HANDLER) {
-                        t->hr = E_FAIL;
-                    }
-                    CoUninitialize();
-                    return 0;
-                }, &qTask, 0, nullptr);
-
-                bool timedOut = false;
-                if (hQueryThread) {
-                    DWORD dwStart = GetTickCount();
-                    while (true) {
-                        DWORD elapsed = GetTickCount() - dwStart;
-                        if (elapsed >= 800) {
-                            timedOut = true;
-                            break;
-                        }
-                        DWORD dwWait = MsgWaitForMultipleObjects(1, &hQueryThread, FALSE, 800 - elapsed, QS_ALLINPUT);
-                        if (dwWait == WAIT_OBJECT_0) {
-                            break;
-                        } else if (dwWait == WAIT_OBJECT_0 + 1) {
-                            MSG qmsg;
-                            while (PeekMessageW(&qmsg, nullptr, 0, 0, PM_REMOVE)) {
-                                TranslateMessage(&qmsg);
-                                DispatchMessageW(&qmsg);
-                            }
-                        } else {
-                            timedOut = true;
-                            break;
+                // Clean up any broken/raw verbs or shell items if necessary
+                int totalItems = GetMenuItemCount(hMenu);
+                for (int i = totalItems - 1; i >= topItemsCount; --i) {
+                    wchar_t itemText[256] = { 0 };
+                    MENUITEMINFOW mii = { sizeof(mii) };
+                    mii.fMask = MIIM_STRING | MIIM_SUBMENU | MIIM_ID;
+                    mii.dwTypeData = itemText;
+                    mii.cch = 256;
+                    if (GetMenuItemInfoW(hMenu, i, TRUE, &mii)) {
+                        // Filter out empty or raw shell verb scripts if any
+                        std::wstring s = itemText;
+                        if (s.find(L"powershell -") != std::wstring::npos ||
+                            s.find(L"cmd.exe /c") != std::wstring::npos) {
+                            DeleteMenu(hMenu, i, MF_BYPOSITION);
                         }
                     }
-                    CloseHandle(hQueryThread);
                 }
 
                 SetCursor(LoadCursorW(nullptr, IDC_ARROW));
-
-                if (!timedOut) {
-                    SetWindowSubclass(hwnd, ContextMenuSubclassProc, 9999, 0);
-                }
+                SetWindowSubclass(hwnd, ContextMenuSubclassProc, 9999, 0);
 
                 int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                          ptScreen.x, ptScreen.y, 0, hwnd, nullptr);
 
-                if (!timedOut) {
-                    RemoveWindowSubclass(hwnd, ContextMenuSubclassProc, 9999);
-                }
+                RemoveWindowSubclass(hwnd, ContextMenuSubclassProc, 9999);
 
                 if (g_pContextMenu3) { g_pContextMenu3->Release(); g_pContextMenu3 = nullptr; }
                 if (g_pContextMenu2) { g_pContextMenu2->Release(); g_pContextMenu2 = nullptr; }
@@ -2077,8 +2220,22 @@ void CopyToClipboard(const std::wstring& text) {
 }
 
 std::wstring GetParentPath(const std::wstring& path) {
+    std::wstring norm = Util::NormalizePath(path);
+    if (norm.empty() || norm == L"此电脑" || norm == L"This PC") {
+        return L"This PC";
+    }
+    if (_wcsicmp(norm.c_str(), L"\\\\wsl.localhost") == 0 || _wcsicmp(norm.c_str(), L"Linux") == 0) {
+        return L"This PC";
+    }
+    if (_wcsnicmp(norm.c_str(), L"\\\\wsl.localhost\\", 16) == 0) {
+        std::wstring rest = norm.substr(16);
+        if (rest.find(L'\\') == std::wstring::npos) {
+            return L"\\\\wsl.localhost";
+        }
+    }
+
     wchar_t buf[MAX_PATH];
-    StringCchCopyW(buf, MAX_PATH, path.c_str());
+    StringCchCopyW(buf, MAX_PATH, norm.c_str());
     PathRemoveBackslashW(buf);
     if (PathIsRootW(buf)) {
         return L"This PC";
@@ -2092,6 +2249,10 @@ std::wstring GetParentPath(const std::wstring& path) {
 std::wstring GetDisplayName(const std::wstring& path) {
     if (path.empty() || path == L"此电脑" || path == L"This PC" || path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
         return I18n::Get().T(StringId::ThisPC);
+    }
+    if (_wcsicmp(path.c_str(), L"\\\\wsl.localhost") == 0 || _wcsicmp(path.c_str(), L"Linux") == 0 ||
+        path.find(L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6") != std::wstring::npos) {
+        return L"Linux";
     }
     std::wstring p = path;
     while (p.length() > 3 && (p.back() == L'\\' || p.back() == L'/')) {
@@ -2600,7 +2761,7 @@ void CheckForUpdates(HWND hwndParent) {
         std::wstring wTagName = Util::Utf8ToWide(tagName);
         std::wstring wHtmlUrl = Util::Utf8ToWide(htmlUrl);
 
-        const std::wstring currentVer = L"v1.1.0";
+        const std::wstring currentVer = L"v1.1.1";
         if (!wTagName.empty() && wTagName != currentVer) {
             std::wstring msg = isZh
                 ? (L"发现 NeoMDIE 新版本: " + wTagName + L" (当前版本: " + currentVer + L")\n\n下载路径与发布页面:\n" + wHtmlUrl + L"\n\n是否立即前往 GitHub 下载更新？")

@@ -1,5 +1,6 @@
 #include "Config.h"
 #include "GestureEngine.h"
+#include "I18n.h"
 
 Config& Config::Get() {
     static Config instance;
@@ -52,6 +53,7 @@ void Config::Load() {
     int clrB = GetPrivateProfileIntW(secGeneral, L"CustomAccentB", 212, m_iniPath.c_str());
     customAccentColor = RGB(clrR, clrG, clrB);
     language = GetPrivateProfileIntW(secGeneral, L"Language", -1, m_iniPath.c_str());
+    I18n::Get().Initialize();
     showTree = GetPrivateProfileIntW(secGeneral, L"ShowTree", 1, m_iniPath.c_str()) != 0;
     treeWidth = GetPrivateProfileIntW(secGeneral, L"TreeWidth", 240, m_iniPath.c_str());
     paneLayout = GetPrivateProfileIntW(secGeneral, L"PaneLayout", 0, m_iniPath.c_str());
@@ -62,7 +64,7 @@ void Config::Load() {
     previewWidth = GetPrivateProfileIntW(secGeneral, L"PreviewWidth", 320, m_iniPath.c_str());
     viewMode = GetPrivateProfileIntW(secGeneral, L"ViewMode", 0, m_iniPath.c_str());
     showHidden = GetPrivateProfileIntW(secGeneral, L"ShowHidden", 0, m_iniPath.c_str()) != 0;
-    hideDotFiles = GetPrivateProfileIntW(secGeneral, L"HideDotFiles", 1, m_iniPath.c_str()) != 0;
+    hideDotFiles = GetPrivateProfileIntW(secGeneral, L"HideDotFiles", 0, m_iniPath.c_str()) != 0;
     showItemCheckBoxes = GetPrivateProfileIntW(secGeneral, L"ShowItemCheckBoxes", 0, m_iniPath.c_str()) != 0;
     listDensity = GetPrivateProfileIntW(secGeneral, L"ListDensity", 1, m_iniPath.c_str());
     listScale = GetPrivateProfileIntW(secGeneral, L"ListScale", 1, m_iniPath.c_str());
@@ -118,6 +120,36 @@ void Config::Load() {
         }
         if (quickAccessFolders.empty()) {
             InitDefaultQuickAccess();
+        }
+    }
+
+    // Links
+    links.clear();
+    const wchar_t* secLinks = L"Links";
+    int linkCount = GetPrivateProfileIntW(secLinks, L"Count", -1, m_iniPath.c_str());
+    if (linkCount >= 0) {
+        for (int i = 0; i < linkCount; ++i) {
+            wchar_t kName[32], kPath[32], kColor[32];
+            StringCchPrintfW(kName, 32, L"Name%d", i);
+            StringCchPrintfW(kPath, 32, L"Path%d", i);
+            StringCchPrintfW(kColor, 32, L"Color%d", i);
+
+            wchar_t vName[MAX_PATH], vPath[MAX_PATH];
+            GetPrivateProfileStringW(secLinks, kName, L"", vName, MAX_PATH, m_iniPath.c_str());
+            GetPrivateProfileStringW(secLinks, kPath, L"", vPath, MAX_PATH, m_iniPath.c_str());
+            DWORD dwColor = (DWORD)GetPrivateProfileIntW(secLinks, kColor, 0, m_iniPath.c_str());
+
+            if (wcslen(vPath) > 0) {
+                links.push_back({ vName, vPath, (COLORREF)dwColor });
+            }
+        }
+    } else {
+        wchar_t userProfile[MAX_PATH];
+        if (GetEnvironmentVariableW(L"USERPROFILE", userProfile, MAX_PATH) > 0) {
+            links.push_back({ I18n::Get().T(StringId::Desktop), std::wstring(userProfile) + L"\\Desktop", 0 });
+            links.push_back({ I18n::Get().T(StringId::Downloads), std::wstring(userProfile) + L"\\Downloads", 0 });
+            links.push_back({ I18n::Get().T(StringId::Documents), std::wstring(userProfile) + L"\\Documents", 0 });
+            links.push_back({ I18n::Get().T(StringId::Pictures), std::wstring(userProfile) + L"\\Pictures", 0 });
         }
     }
 
@@ -465,6 +497,16 @@ void Config::Save() {
     out << L"Count=" << quickAccessFolders.size() << L"\r\n";
     for (size_t i = 0; i < quickAccessFolders.size(); ++i) {
         out << L"Folder" << i << L"=" << quickAccessFolders[i] << L"\r\n";
+    }
+    out << L"\r\n";
+
+    // Links
+    out << L"[Links]\r\n";
+    out << L"Count=" << links.size() << L"\r\n";
+    for (size_t i = 0; i < links.size(); ++i) {
+        out << L"Name" << i << L"=" << links[i].name << L"\r\n";
+        out << L"Path" << i << L"=" << links[i].path << L"\r\n";
+        out << L"Color" << i << L"=" << (DWORD)links[i].color << L"\r\n";
     }
     out << L"\r\n";
 

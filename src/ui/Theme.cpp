@@ -1,5 +1,9 @@
 #include "Theme.h"
 #include "..\core\Config.h"
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus.lib")
+
+static ULONG_PTR s_gdiplusToken = 0;
 
 Theme& Theme::Get() {
     static Theme instance;
@@ -20,6 +24,7 @@ Theme::Theme() {
 }
 
 Theme::~Theme() {
+    Shutdown();
     if (m_hbrBg) DeleteObject(m_hbrBg);
     if (m_hbrSurface) DeleteObject(m_hbrSurface);
     if (m_hbrHover) DeleteObject(m_hbrHover);
@@ -32,6 +37,10 @@ Theme::~Theme() {
 }
 
 void Theme::Initialize() {
+    if (!s_gdiplusToken) {
+        Gdiplus::GdiplusStartupInput gdiInput;
+        Gdiplus::GdiplusStartup(&s_gdiplusToken, &gdiInput, nullptr);
+    }
     if (m_pfnSetPreferredAppMode) {
         m_pfnSetPreferredAppMode(PreferredAppMode::AllowDark);
     }
@@ -40,6 +49,13 @@ void Theme::Initialize() {
     }
     DetectSystemDarkMode();
     RecreateGdiObjects();
+}
+
+void Theme::Shutdown() {
+    if (s_gdiplusToken) {
+        Gdiplus::GdiplusShutdown(s_gdiplusToken);
+        s_gdiplusToken = 0;
+    }
 }
 
 void Theme::DetectSystemDarkMode() {
@@ -225,3 +241,49 @@ HFONT Theme::GetIconFont(int pixelHeight, HWND hwnd) {
     HFONT hFont = CreateFontIndirectW(&lf);
     return hFont;
 }
+
+void Theme::DrawSmoothRoundRect(HDC hdc, const RECT& rc, int radius, COLORREF fillColor, COLORREF borderColor, float borderWidth, BYTE fillAlpha) {
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+    if (w <= 0 || h <= 0) return;
+
+    Gdiplus::Graphics g(hdc);
+    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+
+    bool hasBorder = (borderColor != CLR_INVALID && borderWidth > 0.0f);
+    float inset = hasBorder ? (borderWidth * 0.5f) : 0.0f;
+    float x = (float)rc.left + inset;
+    float y = (float)rc.top + inset;
+    float fw = (float)w - (hasBorder ? borderWidth : 0.0f);
+    float fh = (float)h - (hasBorder ? borderWidth : 0.0f);
+    float d = (float)(radius * 2) - (hasBorder ? borderWidth : 0.0f);
+
+    if (d > fw) d = fw;
+    if (d > fh) d = fh;
+    if (d < 1.0f) d = 1.0f;
+
+    Gdiplus::GraphicsPath path;
+    path.AddArc(x, y, d, d, 180.0f, 90.0f);
+    path.AddArc(x + fw - d, y, d, d, 270.0f, 90.0f);
+    path.AddArc(x + fw - d, y + fh - d, d, d, 0.0f, 90.0f);
+    path.AddArc(x, y + fh - d, d, d, 90.0f, 90.0f);
+    path.CloseFigure();
+
+    if (fillColor != CLR_INVALID) {
+        Gdiplus::Color gdiFillColor(fillAlpha, GetRValue(fillColor), GetGValue(fillColor), GetBValue(fillColor));
+        Gdiplus::SolidBrush brush(gdiFillColor);
+        g.FillPath(&brush, &path);
+    }
+
+    if (hasBorder) {
+        Gdiplus::Color gdiBorderColor(GetRValue(borderColor), GetGValue(borderColor), GetBValue(borderColor));
+        Gdiplus::Pen pen(gdiBorderColor, borderWidth);
+        g.DrawPath(&pen, &path);
+    }
+}
+
+void Theme::FillSmoothRoundRect(HDC hdc, const RECT& rc, int radius, COLORREF fillColor, BYTE fillAlpha) {
+    DrawSmoothRoundRect(hdc, rc, radius, fillColor, CLR_INVALID, 0.0f, fillAlpha);
+}
+

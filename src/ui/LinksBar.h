@@ -1,11 +1,7 @@
 #pragma once
 #include "..\Common.h"
 
-struct LinkItem {
-    std::wstring name;
-    std::wstring path;
-    COLORREF color = 0; // 0 = default, otherwise custom RGB
-};
+
 
 class LinksBar {
 public:

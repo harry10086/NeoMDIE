@@ -50,35 +50,70 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [2/2] Compiling C++ Sources...
-cl /nologo /std:c++17 /EHsc /O2 /Zi /FS /MT /W3 /utf-8 ^
-   /I src ^
-   src\main.cpp ^
-   src\core\Config.cpp ^
-   src\core\I18n.cpp ^
-   src\core\ShellItem.cpp ^
-   src\core\ShellUtils.cpp ^
-   src\core\DropTarget.cpp ^
-   src\core\FileSystemWatcher.cpp ^
-   src\core\FolderSizeCalculator.cpp ^
-   src\core\GestureEngine.cpp ^
-   src\core\PreviewHandlerHost.cpp ^
-   src\core\ScriptEngine.cpp ^
-   src\ui\Theme.cpp ^
-   src\ui\DirectoryTree.cpp ^
-   src\ui\SettingsDialog.cpp ^
-   src\ui\TabBar.cpp ^
-   src\ui\BreadcrumbBar.cpp ^
-   src\ui\FilterBar.cpp ^
-   src\ui\LinksBar.cpp ^
-   src\ui\FileListView.cpp ^
-   src\ui\PreviewPane.cpp ^
-   src\ui\MultiPaneContainer.cpp ^
-   src\ui\DropIndicatorOverlay.cpp ^
-   src\ui\MainWindow.cpp ^
-   /Fe:bin\NeoMDIE.exe ^
-   /link /DEBUG /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup ^
-   src\resources\NeoMDIE.res
+set "BUILD_MODE=release"
+if /i "%1"=="debug" set "BUILD_MODE=debug"
+
+if "%BUILD_MODE%"=="debug" (
+    echo [2/2] Compiling C++ Sources [Debug Mode with Symbols]...
+    cl /nologo /std:c++17 /EHsc /O2 /Zi /FS /MT /W3 /utf-8 ^
+       /I src ^
+       src\main.cpp ^
+       src\core\Config.cpp ^
+       src\core\I18n.cpp ^
+       src\core\ShellItem.cpp ^
+       src\core\ShellUtils.cpp ^
+       src\core\DropTarget.cpp ^
+       src\core\FileSystemWatcher.cpp ^
+       src\core\FolderSizeCalculator.cpp ^
+       src\core\GestureEngine.cpp ^
+       src\core\PreviewHandlerHost.cpp ^
+       src\core\ScriptEngine.cpp ^
+       src\ui\Theme.cpp ^
+       src\ui\DirectoryTree.cpp ^
+       src\ui\SettingsDialog.cpp ^
+       src\ui\TabBar.cpp ^
+       src\ui\BreadcrumbBar.cpp ^
+       src\ui\FilterBar.cpp ^
+       src\ui\LinksBar.cpp ^
+       src\ui\FileListView.cpp ^
+       src\ui\PreviewPane.cpp ^
+       src\ui\MultiPaneContainer.cpp ^
+       src\ui\DropIndicatorOverlay.cpp ^
+       src\ui\MainWindow.cpp ^
+       /Fe:bin\NeoMDIE.exe ^
+       /link /DEBUG /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup ^
+       src\resources\NeoMDIE.res
+) else (
+    echo [2/2] Compiling C++ Sources [Optimized Release Mode]...
+    cl /nologo /std:c++17 /EHsc /O2 /MT /W3 /utf-8 ^
+       /I src ^
+       src\main.cpp ^
+       src\core\Config.cpp ^
+       src\core\I18n.cpp ^
+       src\core\ShellItem.cpp ^
+       src\core\ShellUtils.cpp ^
+       src\core\DropTarget.cpp ^
+       src\core\FileSystemWatcher.cpp ^
+       src\core\FolderSizeCalculator.cpp ^
+       src\core\GestureEngine.cpp ^
+       src\core\PreviewHandlerHost.cpp ^
+       src\core\ScriptEngine.cpp ^
+       src\ui\Theme.cpp ^
+       src\ui\DirectoryTree.cpp ^
+       src\ui\SettingsDialog.cpp ^
+       src\ui\TabBar.cpp ^
+       src\ui\BreadcrumbBar.cpp ^
+       src\ui\FilterBar.cpp ^
+       src\ui\LinksBar.cpp ^
+       src\ui\FileListView.cpp ^
+       src\ui\PreviewPane.cpp ^
+       src\ui\MultiPaneContainer.cpp ^
+       src\ui\DropIndicatorOverlay.cpp ^
+       src\ui\MainWindow.cpp ^
+       /Fe:bin\NeoMDIE.exe ^
+       /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup /OPT:REF /OPT:ICF ^
+       src\resources\NeoMDIE.res
+)
 
 if errorlevel 1 (
     echo [ERROR] Build failed!

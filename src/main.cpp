@@ -42,6 +42,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     if (folderArg.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
         folderArg = L"This PC";
     }
+    if (folderArg.find(L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6") != std::wstring::npos ||
+        folderArg.find(L"b2b4a4d1-2754-4140-a2eb-9a76d9d7cdc6") != std::wstring::npos) {
+        folderArg = L"\\\\wsl.localhost";
+    }
 
     // 4. Single Instance / Explorer Replace Check & IPC
     HANDLE hMutex = nullptr;
@@ -56,9 +60,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                     cds.cbData = (DWORD)((folderArg.length() + 1) * sizeof(wchar_t));
                     cds.lpData = (PVOID)folderArg.c_str();
                     SendMessageW(hExisting, WM_COPYDATA, 0, (LPARAM)&cds);
-                }
-                if (!IsWindowVisible(hExisting) || IsIconic(hExisting)) {
-                    ShowWindow(hExisting, SW_RESTORE);
+                } else {
+                    SendMessageW(hExisting, WM_ACTIVATE_INSTANCE, 0, 0);
                 }
                 SetForegroundWindow(hExisting);
                 if (hMutex) CloseHandle(hMutex);
@@ -128,6 +131,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     }
 
     if (hMutex) CloseHandle(hMutex);
+    Theme::Get().Shutdown();
     OleUninitialize();
     return (int)msg.wParam;
 }

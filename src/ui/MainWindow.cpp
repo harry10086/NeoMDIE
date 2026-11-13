@@ -74,6 +74,22 @@ void MainWindow::RemoveTrayIcon() {
     m_hasTrayIcon = false;
 }
 
+void MainWindow::RestoreFromTrayOrMinimized() {
+    bool isHidden = !IsWindowVisible(m_hwnd);
+    bool isMin = (IsIconic(m_hwnd) != FALSE);
+    if (isHidden || isMin) {
+        if (m_wasMaximizedBeforeTray) {
+            ShowWindow(m_hwnd, SW_MAXIMIZE);
+        } else {
+            ShowWindow(m_hwnd, SW_RESTORE);
+        }
+        if (m_hasTrayIcon) {
+            RemoveTrayIcon();
+        }
+    }
+    SetForegroundWindow(m_hwnd);
+}
+
 MainWindow::MainWindow() {
 }
 
@@ -158,7 +174,7 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
         while (!arg.empty() && (arg.back() == L'"' || arg.back() == L' ')) arg.pop_back();
         while (!arg.empty() && arg.front() == L'"') arg.erase(arg.begin());
         if (arg.length() == 2 && arg[1] == L':') arg += L"\\";
-        if (PathFileExistsW(arg.c_str()) || arg == L"此电脑" || arg == L"This PC") {
+        if (ShellUtils::IsValidDirectory(arg) || arg == L"此电脑" || arg == L"This PC") {
             cmdPath = arg;
         }
     }
@@ -225,7 +241,7 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
 void MainWindow::UpdateWindowTitle(const std::wstring& path) {
     std::wstring name = ShellUtils::GetDisplayName(path);
     if (name.empty()) name = path;
-    if (name.empty()) {
+    if (name.empty() || _wcsicmp(name.c_str(), L"NeoMDIE") == 0) {
         SetWindowTextW(m_hwnd, L"NeoMDIE");
     } else {
         std::wstring fullTitle = name + L" - NeoMDIE";
@@ -2996,13 +3012,13 @@ void MainWindow::OnCommand(UINT cmdId) {
         bool isZh = I18n::Get().IsChinese();
         std::wstring aboutText = isZh ?
             L"NeoMDIE - 现代化多标签多栏文件管理器\n"
-            L"版本: v1.1.0 (x64 Release)\n\n"
+            L"版本: v1.1.1 (x64 Release)\n\n"
             L"作者: Harry (https://mianao.info)\n"
             L"开源项目仓库: https://github.com/harry10086/NeoMDIE\n"
             L"致敬经典: MDIE(Multiple Document Interface Explorer)\n\n"
             L"基于 GNU General Public License v3 (GPLv3) 开源协议发布。" :
             L"NeoMDIE - Modern Native Win32 Tabbed & Multi-Pane File Manager\n"
-            L"Version: v1.1.0 (x64 Release)\n\n"
+            L"Version: v1.1.1 (x64 Release)\n\n"
             L"Author: Harry (https://mianao.info)\n"
             L"Repository: https://github.com/harry10086/NeoMDIE\n"
             L"Inspired by: MDIE(Multiple Document Interface Explorer)\n\n"
@@ -3060,43 +3076,22 @@ void MainWindow::DrawToolbarButton(DRAWITEMSTRUCT* pdis) {
     HBRUSH hbrBg = (btnId == IDC_BTN_MENU) ? Theme::Get().BrushBackground() : Theme::Get().BrushSurface();
     FillRect(hdc, &rc, hbrBg);
 
-    // Rounded rectangle on hover / selected / active
-    int rad = Theme::Get().Scale(8, pdis->hwndItem);
+    // Modern antialiased rounded rectangle on hover / selected / active
+    int rad = Theme::Get().Scale(6, pdis->hwndItem);
     RECT rcBtn = { rc.left + 2, rc.top + 2, rc.right - 2, rc.bottom - 2 };
     if (btnId == IDC_BTN_MENU) {
         if (isSelected) {
-            HBRUSH hbrPressed = Theme::Get().BrushSelected();
-            HGDIOBJ oldBrush = SelectObject(hdc, hbrPressed);
-            HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(NULL_PEN));
-            RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, rad, rad);
-            SelectObject(hdc, oldPen);
-            SelectObject(hdc, oldBrush);
+            Theme::Get().FillSmoothRoundRect(hdc, rcBtn, rad, Theme::Get().ClrSelected());
         } else if (isHot) {
-            HBRUSH hbrHover = Theme::Get().BrushHover();
-            HGDIOBJ oldBrush = SelectObject(hdc, hbrHover);
-            HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(NULL_PEN));
-            RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, rad, rad);
-            SelectObject(hdc, oldPen);
-            SelectObject(hdc, oldBrush);
+            Theme::Get().FillSmoothRoundRect(hdc, rcBtn, rad, Theme::Get().ClrHover());
         }
     } else {
         if (isSelected) {
-            HBRUSH hbrPressed = Theme::Get().BrushSelected();
-            HPEN hPen = Theme::Get().PenBorder();
-            HGDIOBJ oldBrush = SelectObject(hdc, hbrPressed);
-            HGDIOBJ oldPen = SelectObject(hdc, hPen);
-            RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, rad, rad);
-            SelectObject(hdc, oldPen);
-            SelectObject(hdc, oldBrush);
+            Theme::Get().DrawSmoothRoundRect(hdc, rcBtn, rad, Theme::Get().ClrSelected(), Theme::Get().ClrBorder(), 1.0f);
         } else if (isHot || isActiveToggle) {
-            HBRUSH hbrHover = isActiveToggle ? Theme::Get().BrushSelected() : Theme::Get().BrushHover();
-            HPEN hPen = isActiveToggle ? CreatePen(PS_SOLID, 1, Theme::Get().ClrAccent()) : Theme::Get().PenBorder();
-            HGDIOBJ oldBrush = SelectObject(hdc, hbrHover);
-            HGDIOBJ oldPen = SelectObject(hdc, hPen);
-            RoundRect(hdc, rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom, rad, rad);
-            SelectObject(hdc, oldPen);
-            SelectObject(hdc, oldBrush);
-            if (isActiveToggle) DeleteObject(hPen);
+            COLORREF bg = isActiveToggle ? Theme::Get().ClrSelected() : Theme::Get().ClrHover();
+            COLORREF border = isActiveToggle ? Theme::Get().ClrAccent() : Theme::Get().ClrBorder();
+            Theme::Get().DrawSmoothRoundRect(hdc, rcBtn, rad, bg, border, 1.0f);
         }
     }
 
@@ -3142,6 +3137,7 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_DEVICECHANGE: {
         // 0x8000: DBT_DEVICEARRIVAL, 0x8004: DBT_DEVICEREMOVECOMPLETE
         if (wParam == 0x8000 || wParam == 0x8004) {
+            ShellUtils::ClearDriveIconCache();
             m_tree.Refresh();
             for (int i = 0; i < m_multiPane.GetPaneCount(); ++i) {
                 FileListView& pane = m_multiPane.GetPane(i);
@@ -3168,16 +3164,17 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
                 path = L"This PC";
             }
-            if (PathFileExistsW(path.c_str()) || path == L"此电脑" || path == L"This PC") {
+            if (ShellUtils::IsValidDirectory(path) || path == L"此电脑" || path == L"This PC") {
                 m_tabBar.AddTab(path, true);
             }
-            if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) {
-                ShowWindow(hwnd, SW_RESTORE);
-            }
-            SetForegroundWindow(hwnd);
+            RestoreFromTrayOrMinimized();
             return TRUE;
         }
         return FALSE;
+    }
+    case WM_ACTIVATE_INSTANCE: {
+        RestoreFromTrayOrMinimized();
+        return 0;
     }
     case WM_NCCALCSIZE: {
         if (wParam == TRUE && !Config::Get().showMenuBar) {
@@ -3507,11 +3504,13 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
     case WM_SYSCOMMAND: {
         UINT cmd = (wParam & 0xFFF0);
-        if (cmd == SC_MINIMIZE && Config::Get().minimizeToTray) {
+        if (cmd == SC_MINIMIZE) {
             m_wasMaximizedBeforeTray = (IsZoomed(hwnd) != FALSE);
-            AddTrayIcon();
-            ShowWindow(hwnd, SW_HIDE);
-            return 0;
+            if (Config::Get().minimizeToTray) {
+                AddTrayIcon();
+                ShowWindow(hwnd, SW_HIDE);
+                return 0;
+            }
         }
         if (cmd == SC_RESTORE && IsZoomed(hwnd)) {
             WINDOWPLACEMENT wp = { sizeof(wp) };
@@ -3541,13 +3540,7 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_TRAY_NOTIFY: {
         UINT uMsg = LOWORD(lParam);
         if (uMsg == WM_LBUTTONUP || uMsg == WM_LBUTTONDBLCLK) {
-            if (m_wasMaximizedBeforeTray) {
-                ShowWindow(hwnd, SW_MAXIMIZE);
-            } else {
-                ShowWindow(hwnd, SW_RESTORE);
-            }
-            SetForegroundWindow(hwnd);
-            RemoveTrayIcon();
+            RestoreFromTrayOrMinimized();
         } else if (uMsg == WM_RBUTTONUP) {
             POINT pt;
             GetCursorPos(&pt);
@@ -3560,13 +3553,7 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
             DestroyMenu(hMenu);
             if (cmd == 5001) {
-                if (m_wasMaximizedBeforeTray) {
-                    ShowWindow(hwnd, SW_MAXIMIZE);
-                } else {
-                    ShowWindow(hwnd, SW_RESTORE);
-                }
-                SetForegroundWindow(hwnd);
-                RemoveTrayIcon();
+                RestoreFromTrayOrMinimized();
             } else if (cmd == 5002) {
                 m_forceClose = true;
                 SendMessageW(hwnd, WM_CLOSE, 0, 0);

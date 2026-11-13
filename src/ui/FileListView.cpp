@@ -847,7 +847,7 @@ void FileListView::Refresh() {
     if (!ShellUtils::EnumerateDirectory(m_currentPath, m_showHidden, items, m_hideDotFiles)) {
         if (m_currentPath != L"This PC" && m_currentPath != L"此电脑" && m_currentPath != L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") {
             std::wstring parent = ShellUtils::GetParentPath(m_currentPath);
-            if (parent.empty() || !PathFileExistsW(parent.c_str())) {
+            if (parent.empty() || !ShellUtils::IsValidDirectory(parent)) {
                 NavigateTo(L"This PC", true);
             } else {
                 NavigateTo(parent, true);
@@ -2370,15 +2370,19 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     int row = (int)pcd->nmcd.dwItemSpec;
                     bool isSelected = (row >= 0 && (ListView_GetItemState(pThis->m_hwnd, row, LVIS_SELECTED) & LVIS_SELECTED) != 0);
 
-                    // 1. Cut items ghosting effect (icon虚化)
+                    // 1. Cut items and Hidden items ghosting effect (icon虚化淡化)
+                    // Windows Explorer standard: only items with FILE_ATTRIBUTE_HIDDEN are dimmed; dotfiles without hidden attr remain normal
                     if (row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
                         int idx = pThis->m_filteredIndices[row];
                         if (idx >= 0 && idx < (int)pThis->m_allItems.size()) {
-                            if (ShellUtils::IsPathCut(pThis->m_allItems[idx].fullPath)) {
+                            bool isCut = ShellUtils::IsPathCut(pThis->m_allItems[idx].fullPath);
+                            bool isHidden = (pThis->m_allItems[idx].attributes & FILE_ATTRIBUTE_HIDDEN) != 0;
+                            if (isCut || isHidden) {
                                 RECT rcIcon;
                                 if (ListView_GetItemRect(pThis->m_hwnd, row, &rcIcon, LVIR_ICON)) {
                                     COLORREF bgClr = isSelected ? Theme::Get().ClrSelected() : Theme::Get().ClrBackground();
-                                    ShellUtils::BlendRectWithColor(pcd->nmcd.hdc, rcIcon, bgClr, 140);
+                                    BYTE alpha = isCut ? 140 : 120;
+                                    ShellUtils::BlendRectWithColor(pcd->nmcd.hdc, rcIcon, bgClr, alpha);
                                 }
                             }
                         }
@@ -2444,16 +2448,20 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     bool isSelected = (pcd->nmcd.uItemState & CDIS_SELECTED) != 0;
 
                     bool isCut = false;
+                    bool isHidden = false;
                     if (row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
                         int idx = pThis->m_filteredIndices[row];
                         if (idx >= 0 && idx < (int)pThis->m_allItems.size()) {
                             isCut = ShellUtils::IsPathCut(pThis->m_allItems[idx].fullPath);
+                            isHidden = (pThis->m_allItems[idx].attributes & FILE_ATTRIBUTE_HIDDEN) != 0;
                         }
                     }
 
                     if (!isSelected) {
                         if (isCut) {
                             pcd->clrText = Theme::Get().IsDarkMode() ? RGB(140, 140, 140) : RGB(155, 155, 155);
+                        } else if (isHidden) {
+                            pcd->clrText = Theme::Get().IsDarkMode() ? RGB(150, 150, 150) : RGB(140, 140, 140);
                         } else if (pcd->iSubItem == 0) {
                             pcd->clrText = Theme::Get().ClrTextPrimary();
                         } else {

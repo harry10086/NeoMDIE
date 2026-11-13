@@ -86,6 +86,7 @@ private:
     void OnSettingsApplied();
     void AddTrayIcon();
     void RemoveTrayIcon();
+    void RestoreFromTrayOrMinimized();
     bool m_hasTrayIcon = false;
     bool m_forceClose = false;
     bool m_wasMaximizedBeforeTray = false;
