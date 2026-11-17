@@ -19,6 +19,7 @@ public:
     std::wstring GetPath() const { return m_currentPath; }
 
     void UpdateLayout(int x, int y, int width, int height);
+    void SwitchToEditMode();
 
     std::function<void(const std::wstring& path)> onPathNavigated;
 
@@ -29,7 +30,6 @@ private:
     LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     void Draw(HDC hdc);
     void ParseSegments();
-    void SwitchToEditMode();
     void CommitEdit();
     void CancelEdit();
 

@@ -443,9 +443,26 @@ void Initialize() {
     s_himlSmall = (HIMAGELIST)SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
     s_himlLarge = (HIMAGELIST)SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_LARGEICON);
 
-    // Warm up ShellNew registry items in background so startup UI is not delayed
+    // Warm up ShellNew registry items and Shell background context menu in background
     std::thread([]() {
         GetShellNewItems();
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        IShellItem* pItem = nullptr;
+        if (SUCCEEDED(SHCreateItemFromParsingName(L"C:\\", nullptr, IID_PPV_ARGS(&pItem))) && pItem) {
+            IShellFolder* pFolder = nullptr;
+            if (SUCCEEDED(pItem->BindToHandler(nullptr, BHID_SFObject, IID_PPV_ARGS(&pFolder))) && pFolder) {
+                IContextMenu* pCM = nullptr;
+                if (SUCCEEDED(pFolder->CreateViewObject(nullptr, IID_PPV_ARGS(&pCM))) && pCM) {
+                    HMENU hDummy = CreatePopupMenu();
+                    pCM->QueryContextMenu(hDummy, 0, 1, 0x1000, CMF_NORMAL);
+                    DestroyMenu(hDummy);
+                    pCM->Release();
+                }
+                pFolder->Release();
+            }
+            pItem->Release();
+        }
+        if (SUCCEEDED(hr)) CoUninitialize();
     }).detach();
 }
 
@@ -2192,17 +2209,22 @@ void LaunchVSCode(const std::wstring& dir) {
 }
 
 void OpenInExplorer(const std::wstring& path) {
+    wchar_t winDir[MAX_PATH];
+    GetWindowsDirectoryW(winDir, MAX_PATH);
+    std::wstring explorerExe = std::wstring(winDir) + L"\\explorer.exe";
+
     if (path.empty() || path == L"This PC" || path == L"此电脑" || path == L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") {
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", nullptr, SW_SHOWNORMAL);
+        std::wstring args = L"/n,/e,::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
+        ShellExecuteW(nullptr, nullptr, explorerExe.c_str(), args.c_str(), nullptr, SW_SHOWNORMAL);
         return;
     }
 
     if (PathIsDirectoryW(path.c_str())) {
-        std::wstring args = L"\"" + path + L"\"";
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+        std::wstring args = L"/n,/e,\"" + path + L"\"";
+        ShellExecuteW(nullptr, nullptr, explorerExe.c_str(), args.c_str(), nullptr, SW_SHOWNORMAL);
     } else {
-        std::wstring args = L"/select,\"" + path + L"\"";
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+        std::wstring args = L"/n,/select,\"" + path + L"\"";
+        ShellExecuteW(nullptr, nullptr, explorerExe.c_str(), args.c_str(), nullptr, SW_SHOWNORMAL);
     }
 }
 
@@ -2604,15 +2626,27 @@ static bool CreateLauncherScript(const std::wstring& scriptPath, const std::wstr
 bool SetExplorerReplaced(bool enable) {
     // Windows 10 and 11 delegate directory/folder clicks through DelegateExecute COM handlers.
     // To cleanly override Windows Explorer per-user without requiring Administrator/UAC elevation:
-    // 1. Override HKCU\Software\Classes\Directory\shell\open\command
-    // 2. Override HKCU\Software\Classes\Folder\shell\open\command
-    // 3. Override HKCU\Software\Classes\Drive\shell\open\command
-    // 4. Set DelegateExecute = "" (empty string) to suppress Explorer's internal COM delegate!
+    // 1. Override HKCU\Software\Classes\Directory\shell\open\command & explore\command
+    // 2. Override HKCU\Software\Classes\Folder\shell\open\command & explore\command
+    // 3. Override HKCU\Software\Classes\Drive\shell\open\command & explore\command
+    // 4. Override HKCU\Software\Classes\CLSID\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\shell\open & explore
+    // 5. Set (Default) = "open" on Directory\shell, Folder\shell, Drive\shell
+    // 6. Set DelegateExecute = "" (empty string) to suppress Explorer's internal COM delegate!
     const wchar_t* openCmdKeys[] = {
         L"Software\\Classes\\Directory\\shell\\open\\command",
+        L"Software\\Classes\\Directory\\shell\\explore\\command",
+        L"Software\\Classes\\Directory\\shell\\opennewwindow\\command",
+        L"Software\\Classes\\Directory\\shell\\opennewtab\\command",
         L"Software\\Classes\\Folder\\shell\\open\\command",
+        L"Software\\Classes\\Folder\\shell\\explore\\command",
+        L"Software\\Classes\\Folder\\shell\\opennewwindow\\command",
+        L"Software\\Classes\\Folder\\shell\\opennewtab\\command",
         L"Software\\Classes\\Drive\\shell\\open\\command",
-        L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\open\\command"
+        L"Software\\Classes\\Drive\\shell\\explore\\command",
+        L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\open\\command",
+        L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\explore\\command",
+        L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\opennewwindow\\command",
+        L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\opennewtab\\command"
     };
 
     const wchar_t* shellParents[] = {
@@ -2625,20 +2659,15 @@ bool SetExplorerReplaced(bool enable) {
         wchar_t exePath[MAX_PATH];
         GetModuleFileNameW(nullptr, exePath, MAX_PATH);
 
-        std::wstring scriptPath = GetLauncherScriptPath();
-        if (!scriptPath.empty()) {
-            CreateLauncherScript(scriptPath, exePath);
-        }
-        // Direct invocation for instant folder opening without wscript.exe intermediary process
+        // Direct invocation for instant folder opening
         std::wstring cmdStr = L"\"" + std::wstring(exePath) + L"\" \"%1\"";
-
         const wchar_t* emptyDelegate = L"";
 
-        // First clean any stale default verb or ghost verbs
+        // Set (Default) = "open" so verb-less opens always use our open verb
         for (const auto* sp : shellParents) {
             HKEY hKey = nullptr;
-            if (RegOpenKeyExW(HKEY_CURRENT_USER, sp, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-                RegDeleteValueW(hKey, nullptr);
+            if (RegCreateKeyExW(HKEY_CURRENT_USER, sp, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &hKey, nullptr) == ERROR_SUCCESS) {
+                RegSetValueExW(hKey, nullptr, 0, REG_SZ, (const BYTE*)L"open", sizeof(L"open"));
                 RegCloseKey(hKey);
             }
         }
@@ -2647,19 +2676,50 @@ bool SetExplorerReplaced(bool enable) {
             HKEY hKey = nullptr;
             if (RegCreateKeyExW(HKEY_CURRENT_USER, k, 0, nullptr, 0, KEY_WRITE, nullptr, &hKey, nullptr) == ERROR_SUCCESS) {
                 RegSetValueExW(hKey, nullptr, 0, REG_SZ, (const BYTE*)cmdStr.c_str(), (DWORD)((cmdStr.length() + 1) * sizeof(wchar_t)));
-                // Clear DelegateExecute so Windows Explorer doesn't hijack the open verb
+                // Clear DelegateExecute so Windows Explorer doesn't hijack the verb
                 RegSetValueExW(hKey, L"DelegateExecute", 0, REG_SZ, (const BYTE*)emptyDelegate, sizeof(wchar_t));
                 RegCloseKey(hKey);
             }
+        }
+
+        // Set DisabledHotkeys to include 'E' so system Explorer doesn't claim Win+E at login
+        HKEY hAdvKey = nullptr;
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", 0, nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &hAdvKey, nullptr) == ERROR_SUCCESS) {
+            wchar_t disKeys[64] = { 0 };
+            DWORD size = sizeof(disKeys);
+            DWORD type = 0;
+            RegQueryValueExW(hAdvKey, L"DisabledHotkeys", nullptr, &type, (LPBYTE)disKeys, &size);
+            std::wstring strDis = disKeys;
+            if (strDis.find(L'E') == std::wstring::npos && strDis.find(L'e') == std::wstring::npos) {
+                strDis += L"E";
+                RegSetValueExW(hAdvKey, L"DisabledHotkeys", 0, REG_SZ, (const BYTE*)strDis.c_str(), (DWORD)((strDis.length() + 1) * sizeof(wchar_t)));
+            }
+            RegCloseKey(hAdvKey);
+        }
+
+        // Clean up legacy vbs script if present
+        std::wstring scriptPath = GetLauncherScriptPath();
+        if (!scriptPath.empty() && PathFileExistsW(scriptPath.c_str())) {
+            DeleteFileW(scriptPath.c_str());
         }
     } else {
         for (const auto* k : openCmdKeys) {
             RegDeleteKeyW(HKEY_CURRENT_USER, k);
         }
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\explore");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\opennewwindow");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\opennewtab");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\open");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\explore");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\opennewwindow");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell\\opennewtab");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\explore");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\open");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\explore");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\opennewwindow");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\opennewtab");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}");
 
@@ -2671,7 +2731,7 @@ bool SetExplorerReplaced(bool enable) {
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open_NeoMDIE\\command");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Drive\\shell\\open_NeoMDIE");
 
-        // CRITICAL: Clear (Default) value on shell parents to eliminate "找不到应用程序"
+        // Clear (Default) value on shell parents
         for (const auto* sp : shellParents) {
             HKEY hKey = nullptr;
             if (RegOpenKeyExW(HKEY_CURRENT_USER, sp, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
@@ -2681,9 +2741,29 @@ bool SetExplorerReplaced(bool enable) {
         }
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell");
 
+        // Remove 'E' from DisabledHotkeys
+        HKEY hAdvKey = nullptr;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", 0, KEY_READ | KEY_WRITE, &hAdvKey) == ERROR_SUCCESS) {
+            wchar_t disKeys[64] = { 0 };
+            DWORD size = sizeof(disKeys);
+            DWORD type = 0;
+            if (RegQueryValueExW(hAdvKey, L"DisabledHotkeys", nullptr, &type, (LPBYTE)disKeys, &size) == ERROR_SUCCESS) {
+                std::wstring strDis = disKeys;
+                size_t pos;
+                while ((pos = strDis.find(L'E')) != std::wstring::npos) strDis.erase(pos, 1);
+                while ((pos = strDis.find(L'e')) != std::wstring::npos) strDis.erase(pos, 1);
+                if (strDis.empty()) {
+                    RegDeleteValueW(hAdvKey, L"DisabledHotkeys");
+                } else {
+                    RegSetValueExW(hAdvKey, L"DisabledHotkeys", 0, REG_SZ, (const BYTE*)strDis.c_str(), (DWORD)((strDis.length() + 1) * sizeof(wchar_t)));
+                }
+            }
+            RegCloseKey(hAdvKey);
+        }
+
         // Clean launcher script
         std::wstring scriptPath = GetLauncherScriptPath();
-        if (!scriptPath.empty()) {
+        if (!scriptPath.empty() && PathFileExistsW(scriptPath.c_str())) {
             DeleteFileW(scriptPath.c_str());
         }
     }
@@ -2761,7 +2841,7 @@ void CheckForUpdates(HWND hwndParent) {
         std::wstring wTagName = Util::Utf8ToWide(tagName);
         std::wstring wHtmlUrl = Util::Utf8ToWide(htmlUrl);
 
-        const std::wstring currentVer = L"v1.1.1";
+        const std::wstring currentVer = L"v1.1.2";
         if (!wTagName.empty() && wTagName != currentVer) {
             std::wstring msg = isZh
                 ? (L"发现 NeoMDIE 新版本: " + wTagName + L" (当前版本: " + currentVer + L")\n\n下载路径与发布页面:\n" + wHtmlUrl + L"\n\n是否立即前往 GitHub 下载更新？")

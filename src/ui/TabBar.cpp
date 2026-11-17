@@ -135,7 +135,7 @@ int TabBar::AddTab(const std::wstring &path, bool activate) {
   item.activePaneIndex = 0;
   item.paneHistories = {{{path}, 0}};
   item.paneSelectedPaths = {{}};
-  item.paneViewStates = {{0, L"", L"", {}}};
+  item.paneViewStates = {};
 
   int index = (int)m_tabs.size();
   m_tabs.push_back(item);
@@ -156,6 +156,12 @@ void TabBar::CloseTab(int index) {
   if (m_tabs[index].isPinned)
     return; // Cannot close pinned tab
 
+  if (m_tabs.size() == 1) {
+    if (onLastTabClosing && onLastTabClosing()) {
+      return; // Handled by closing window
+    }
+  }
+
   UpdateTooltip(-1);
   if (!m_tabs[index].path.empty()) {
     m_closedHistory.push_back(m_tabs[index].path);
@@ -167,6 +173,7 @@ void TabBar::CloseTab(int index) {
   }
 
   if (m_tabs.empty()) {
+    m_activeIndex = -1;
     AddTab(L"This PC", true);
     return;
   }

@@ -75,6 +75,7 @@ public:
   // Callbacks
   std::function<void(int index)> onTabChanged;
   std::function<void(int index)> onTabClosed;
+  std::function<bool()> onLastTabClosing;
   std::function<void()> onTabOrderChanged;
   std::function<void()> onNewTabRequested;
   int GetPrevActiveIndex() const { return m_prevActiveIndex; }

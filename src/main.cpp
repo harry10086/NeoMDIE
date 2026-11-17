@@ -27,8 +27,45 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     int nArgs = 0;
     LPWSTR* szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
     if (szArglist && nArgs > 1) {
-        folderArg = szArglist[1];
+        std::wstring rawArg;
+        for (int i = 1; i < nArgs; ++i) {
+            std::wstring a = szArglist[i];
+            while (!a.empty() && (a.front() == L' ' || a.front() == L'"')) a.erase(a.begin());
+            while (!a.empty() && (a.back() == L' ' || a.back() == L'"')) a.pop_back();
+
+            if (_wcsnicmp(a.c_str(), L"/select,", 8) == 0) {
+                std::wstring sel = a.substr(8);
+                while (!sel.empty() && (sel.front() == L' ' || sel.front() == L'"')) sel.erase(sel.begin());
+                while (!sel.empty() && (sel.back() == L' ' || sel.back() == L'"')) sel.pop_back();
+                if (!sel.empty()) {
+                    rawArg = sel;
+                } else if (i + 1 < nArgs) {
+                    rawArg = szArglist[++i];
+                }
+            } else if (_wcsicmp(a.c_str(), L"/select") == 0) {
+                if (i + 1 < nArgs) {
+                    rawArg = szArglist[++i];
+                }
+            } else if (_wcsicmp(a.c_str(), L"/n") == 0 || _wcsicmp(a.c_str(), L"/e") == 0 ||
+                       _wcsicmp(a.c_str(), L"/separate") == 0 || a == L",") {
+                continue;
+            } else if (!a.empty() && a.front() != L'/') {
+                rawArg = a;
+            }
+        }
         LocalFree(szArglist);
+
+        while (!rawArg.empty() && (rawArg.front() == L' ' || rawArg.front() == L'"')) rawArg.erase(rawArg.begin());
+        while (!rawArg.empty() && (rawArg.back() == L' ' || rawArg.back() == L'"')) rawArg.pop_back();
+
+        if (PathFileExistsW(rawArg.c_str()) && !PathIsDirectoryW(rawArg.c_str())) {
+            wchar_t dir[MAX_PATH];
+            StringCchCopyW(dir, MAX_PATH, rawArg.c_str());
+            PathRemoveFileSpecW(dir);
+            folderArg = dir;
+        } else {
+            folderArg = rawArg;
+        }
     }
     while (!folderArg.empty() && (folderArg.back() == L'"' || folderArg.back() == L' ')) folderArg.pop_back();
     while (!folderArg.empty() && folderArg.front() == L'"') folderArg.erase(folderArg.begin());

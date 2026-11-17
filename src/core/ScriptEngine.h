@@ -20,8 +20,8 @@ public:
     const std::vector<ScriptInfo>& GetScripts() const { return m_scripts; }
     std::wstring GetScriptsDir() const { return Util::GetExecutableDir() + L"\\scripts"; }
 
-    bool ExecuteScript(const std::wstring& filePath, const std::wstring& activePath, const std::vector<std::wstring>& selectedFiles);
-    bool ExecuteCommand(UINT cmdId, const std::wstring& activePath, const std::vector<std::wstring>& selectedFiles);
+    bool ExecuteScript(const std::wstring& filePath, const std::wstring& activePath, const std::vector<std::wstring>& selectedFiles, const std::vector<std::wstring>& panePaths = {});
+    bool ExecuteCommand(UINT cmdId, const std::wstring& activePath, const std::vector<std::wstring>& selectedFiles, const std::vector<std::wstring>& panePaths = {});
 
     void ShowConsole();
     void Log(const std::wstring& msg);

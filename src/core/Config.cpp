@@ -76,6 +76,7 @@ void Config::Load() {
     searchBarFirst = GetPrivateProfileIntW(secGeneral, L"SearchBarFirst", 0, m_iniPath.c_str()) != 0;
     filterBarWidth = GetPrivateProfileIntW(secGeneral, L"FilterBarWidth", 240, m_iniPath.c_str());
     restoreTabsOnStartup = GetPrivateProfileIntW(secGeneral, L"RestoreTabs", 1, m_iniPath.c_str()) != 0;
+    closeLastTabClosesWindow = GetPrivateProfileIntW(secGeneral, L"CloseLastTabClosesWindow", 1, m_iniPath.c_str()) != 0;
     minimizeToTray = GetPrivateProfileIntW(secGeneral, L"MinimizeToTray", 0, m_iniPath.c_str()) != 0;
     closeToTray = GetPrivateProfileIntW(secGeneral, L"CloseToTray", 0, m_iniPath.c_str()) != 0;
     showMenuBar = GetPrivateProfileIntW(secGeneral, L"ShowMenuBar", 0, m_iniPath.c_str()) != 0;
@@ -193,7 +194,7 @@ void Config::Load() {
 
                 PaneViewState vs;
                 StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_SortCol", i, p);
-                vs.sortCol = GetPrivateProfileIntW(secTabs, pKey, 0, m_iniPath.c_str());
+                vs.sortCol = GetPrivateProfileIntW(secTabs, pKey, -1, m_iniPath.c_str());
                 StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_SortAsc", i, p);
                 vs.sortAsc = GetPrivateProfileIntW(secTabs, pKey, 1, m_iniPath.c_str()) != 0;
                 StringCchPrintfW(pKey, 64, L"Tab%d_Pane%d_ViewMode", i, p);
@@ -245,8 +246,12 @@ void Config::Load() {
 
             if (wcslen(vCode) > 0) {
                 std::wstring nameStr = vName;
-                if (nameStr == L"滚动到列表首端") nameStr = L"滚动到列表顶部";
-                else if (nameStr == L"滚动到列表末端") nameStr = L"滚动到列表底部";
+                if (nameStr.empty() || nameStr.length() <= 1 || nameStr.find(L'\uFFFD') != std::wstring::npos) {
+                    nameStr = GestureEngine::GetActionName((GestureAction)vAct);
+                } else {
+                    if (nameStr == L"滚动到列表首端") nameStr = L"滚动到列表顶部";
+                    else if (nameStr == L"滚动到列表末端") nameStr = L"滚动到列表底部";
+                }
                 std::string codeStr = Util::WideToUtf8(vCode);
                 if (codeStr == "UD" && vAct == (int)GestureAction::NewTab) codeStr = "RL";
                 else if ((codeStr == "RU" || codeStr == "LDR") && vAct == (int)GestureAction::ScrollTop) codeStr = "DU";
@@ -258,8 +263,11 @@ void Config::Load() {
         }
     }
     bool gestCorrupted = false;
-    for (const auto& g : gestures) {
-        if (g.name.length() <= 1) { gestCorrupted = true; break; }
+    for (auto& g : gestures) {
+        if (g.name.length() <= 1 || g.name.find(L'\uFFFD') != std::wstring::npos) {
+            g.name = GestureEngine::GetActionName((GestureAction)g.action);
+        }
+        if (g.action <= 0 || g.action > (int)GestureAction::ToggleSyncNav) { gestCorrupted = true; break; }
     }
     if (gestures.empty() || gestCorrupted) {
         gestures = {
@@ -315,7 +323,7 @@ void Config::Load() {
     }
     bool scCorrupted = false;
     for (const auto& sc : shortcuts) {
-        if (sc.name.length() <= 1) { scCorrupted = true; break; }
+        if (sc.name.length() <= 1 || sc.name.find(L'\uFFFD') != std::wstring::npos) { scCorrupted = true; break; }
     }
     if (shortcuts.empty() || scCorrupted) {
         shortcuts = {
@@ -343,6 +351,9 @@ void Config::Load() {
             { L"反向选择", L"I", false, true, false },
             { L"撤销", L"Z", false, true, false },
             { L"复制选中项", L"C", false, true, false },
+            { L"复制选中文件名", L"C", true, true, false },
+            { L"复制完整路径", L"C", true, true, true },
+            { L"复制所在目录", L"C", false, true, true },
             { L"剪切选中项", L"X", false, true, false },
             { L"粘贴", L"V", false, true, false },
             { L"新建文件夹", L"N", true, true, false },
@@ -467,6 +478,7 @@ void Config::Save() {
     out << L"SearchBarFirst=" << (searchBarFirst ? 1 : 0) << L"\r\n";
     out << L"FilterBarWidth=" << filterBarWidth << L"\r\n";
     out << L"RestoreTabs=" << (restoreTabsOnStartup ? 1 : 0) << L"\r\n";
+    out << L"CloseLastTabClosesWindow=" << (closeLastTabClosesWindow ? 1 : 0) << L"\r\n";
     out << L"MinimizeToTray=" << (minimizeToTray ? 1 : 0) << L"\r\n";
     out << L"CloseToTray=" << (closeToTray ? 1 : 0) << L"\r\n";
     out << L"ShowMenuBar=" << (showMenuBar ? 1 : 0) << L"\r\n";
@@ -545,9 +557,13 @@ void Config::Save() {
     out << L"Count=" << (int)gestures.size() << L"\r\n";
     for (size_t i = 0; i < gestures.size(); ++i) {
         std::wstring wCode = Util::Utf8ToWide(gestures[i].code);
+        std::wstring gName = gestures[i].name;
+        if (gName.empty() || gName.length() <= 1 || gName.find(L'\uFFFD') != std::wstring::npos) {
+            gName = GestureEngine::GetActionName((GestureAction)gestures[i].action);
+        }
         out << L"Code" << i << L"=" << wCode << L"\r\n";
         out << L"Action" << i << L"=" << gestures[i].action << L"\r\n";
-        out << L"Name" << i << L"=" << gestures[i].name << L"\r\n";
+        out << L"Name" << i << L"=" << gName << L"\r\n";
     }
     out << L"\r\n";
 

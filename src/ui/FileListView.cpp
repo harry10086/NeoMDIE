@@ -733,13 +733,20 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
     FolderViewSettings fvs = Config::Get().GetFolderView(normalized);
     if (fvs.foldersFirst >= 0) {
         m_foldersFirst = (fvs.foldersFirst != 0);
+    } else {
+        m_foldersFirst = Config::Get().foldersFirst;
     }
     if (fvs.sortCol >= 0) {
         m_sortCol = (SortColumn)fvs.sortCol;
         m_sortAsc = fvs.sortAsc;
+    } else {
+        m_sortCol = SortColumn::Name;
+        m_sortAsc = true;
     }
     if (fvs.viewMode >= 0 && fvs.viewMode != m_viewMode) {
         SetViewMode(fvs.viewMode);
+    } else if (fvs.viewMode < 0 && m_viewMode != Config::Get().viewMode) {
+        SetViewMode(Config::Get().viewMode);
     } else if (m_viewMode == 0) {
         RebuildColumns();
     }
@@ -1270,10 +1277,16 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
         SetViewMode(state.viewMode);
     }
     if (state.foldersFirst >= 0 && m_foldersFirst != (state.foldersFirst != 0)) {
-        SetFoldersFirst(state.foldersFirst != 0);
+        m_foldersFirst = (state.foldersFirst != 0);
+        SortItems();
+        ApplyFilter();
     }
     if (state.sortCol >= 0 && ((int)m_sortCol != state.sortCol || m_sortAsc != state.sortAsc)) {
-        SetSort((SortColumn)state.sortCol, state.sortAsc);
+        m_sortCol = (SortColumn)state.sortCol;
+        m_sortAsc = state.sortAsc;
+        SortItems();
+        ApplyFilter();
+        UpdateHeaderSortArrow();
     }
 
     // 1. Clear previous selection & focus
@@ -1408,9 +1421,11 @@ void FileListView::SetSort(SortColumn col, bool ascending) {
 
 void FileListView::SetFoldersFirst(bool foldersFirst) {
     m_foldersFirst = foldersFirst;
+    Config::Get().foldersFirst = foldersFirst;
     if (!m_currentPath.empty()) {
         Config::Get().SetFolderFoldersFirst(m_currentPath, foldersFirst);
     }
+    Config::Get().Save();
     SortItems();
     ApplyFilter();
 }

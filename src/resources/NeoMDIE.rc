@@ -39,7 +39,9 @@ BEGIN
     "C",            ID_EDIT_COPY,           VIRTKEY, CONTROL
     "X",            ID_EDIT_CUT,            VIRTKEY, CONTROL
     "V",            ID_EDIT_PASTE,          VIRTKEY, CONTROL
-    "C",            ID_EDIT_COPY_PATH,      VIRTKEY, CONTROL, SHIFT
+    "C",            ID_EDIT_COPY_NAME,      VIRTKEY, CONTROL, SHIFT
+    "C",            ID_EDIT_COPY_PATH,      VIRTKEY, CONTROL, SHIFT, ALT
+    "C",            ID_EDIT_COPY_DIR,       VIRTKEY, CONTROL, ALT
     VK_DELETE,      ID_EDIT_DELETE,         VIRTKEY
     VK_F2,          ID_EDIT_RENAME,         VIRTKEY
     VK_OEM_3,       ID_TOOLS_OPEN_TERMINAL, VIRTKEY, CONTROL
@@ -124,8 +126,8 @@ END
 
 // Version Info
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,1,1,0
-PRODUCTVERSION  1,1,1,0
+FILEVERSION     1,1,2,0
+PRODUCTVERSION  1,1,2,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          VOS__WINDOWS32
@@ -138,11 +140,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "NeoMDIE Open Source Project"
             VALUE "FileDescription",  "NeoMDIE"
-            VALUE "FileVersion",      "1.1.1.0"
+            VALUE "FileVersion",      "1.1.2.0"
             VALUE "InternalName",     "NeoMDIE"
             VALUE "OriginalFilename", "NeoMDIE.exe"
             VALUE "ProductName",      "NeoMDIE"
-            VALUE "ProductVersion",   "1.1.1.0"
+            VALUE "ProductVersion",   "1.1.2.0"
         END
     END
     BLOCK "VarFileInfo"

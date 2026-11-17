@@ -110,6 +110,8 @@ private:
     TabBar m_tabBar;
     int m_currentTabIndex = -1;
     bool m_isSwitchingTab = false;
+    bool m_isSyncingNav = false;
+    std::wstring m_lastPanePaths[4];
     BreadcrumbBar m_breadcrumb;
     FilterBar m_filterBar;
     LinksBar m_linksBar;

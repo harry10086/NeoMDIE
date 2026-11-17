@@ -63,9 +63,9 @@ struct PaneViewState {
     std::wstring topItemPath;
     std::wstring focusedPath;
     std::vector<std::wstring> selectedPaths;
-    int sortCol = 0;
+    int sortCol = -1;      // -1: default / use folder setting, >= 0: explicit column
     bool sortAsc = true;
-    int viewMode = -1;
+    int viewMode = -1;     // -1: default / use folder setting, >= 0: explicit view mode
     int foldersFirst = -1; // -1: use default, 0: files first, 1: folders first
 };
 

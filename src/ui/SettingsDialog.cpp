@@ -69,6 +69,7 @@ static HWND s_hChkSyncNav = nullptr;
 static HWND s_hChkLockToolbars = nullptr;
 
 // Page 3: Tabs
+static HWND s_hChkCloseLastTab = nullptr;
 static HWND s_hChkAllowDupTabs = nullptr;
 static HWND s_hTabDblClickCombo = nullptr;
 
@@ -191,7 +192,8 @@ static const ActionDef s_allActions[] = {
     { (int)GestureAction::FocusAddress, L"聚焦到地址栏", L"Focus Address Bar" },
     { (int)GestureAction::FocusFilter, L"聚焦到搜索过滤栏", L"Focus Filter Bar" },
     { (int)GestureAction::ToggleDarkMode, L"切换深色/浅色模式", L"Toggle Dark Mode" },
-    { (int)GestureAction::ToggleMenuBar, L"显示/隐藏传统菜单栏", L"Toggle Menu Bar" }
+    { (int)GestureAction::ToggleMenuBar, L"显示/隐藏传统菜单栏", L"Toggle Menu Bar" },
+    { (int)GestureAction::ToggleSyncNav, L"多窗格同步浏览", L"Synchronized Navigation" }
 };
 
 struct GestPatternDef {
@@ -280,7 +282,7 @@ static void PopulateGestureList(HWND hList) {
         lvi.pszText = (LPWSTR)pattern.c_str();
         ListView_InsertItem(hList, &lvi);
 
-        std::wstring actName = (!s_tempGestures[i].name.empty() && s_tempGestures[i].name.length() > 1)
+        std::wstring actName = (!s_tempGestures[i].name.empty() && s_tempGestures[i].name.length() > 1 && s_tempGestures[i].name.find(L'\uFFFD') == std::wstring::npos)
             ? s_tempGestures[i].name : GestureEngine::GetActionName((GestureAction)s_tempGestures[i].action);
         ListView_SetItemText(hList, (int)i, 1, (LPWSTR)actName.c_str());
         ListView_SetItemText(hList, (int)i, 2, (LPWSTR)(zh ? L"全局 / 列表" : L"Global / List"));
@@ -323,6 +325,9 @@ static void ResetDefaultShortcuts() {
         { zh ? L"反向选择" : L"Invert Selection", L"I", false, true, false, L"Ctrl + I" },
         { zh ? L"撤销" : L"Undo", L"Z", false, true, false, L"Ctrl + Z" },
         { zh ? L"复制选中项" : L"Copy", L"C", false, true, false, L"Ctrl + C" },
+        { zh ? L"复制选中文件名" : L"Copy Selected File Name", L"C", true, true, false, L"Ctrl + Shift + C" },
+        { zh ? L"复制完整路径" : L"Copy Full Path", L"C", true, true, true, L"Ctrl + Shift + Alt + C" },
+        { zh ? L"复制所在目录" : L"Copy Directory Path", L"C", false, true, true, L"Ctrl + Alt + C" },
         { zh ? L"剪切选中项" : L"Cut", L"X", false, true, false, L"Ctrl + X" },
         { zh ? L"粘贴" : L"Paste", L"V", false, true, false, L"Ctrl + V" },
         { zh ? L"新建文件夹" : L"New Folder", L"N", true, true, false, L"Ctrl + Shift + N" },
@@ -334,13 +339,17 @@ static void ResetDefaultShortcuts() {
 static void InitDefaultShortcuts() {
     const auto& saved = Config::Get().shortcuts;
     bool hasValid = false;
+    bool hasCorrupted = false;
     for (const auto& item : saved) {
-        if (item.name.length() > 1) {
-            hasValid = true;
+        if (item.name.length() <= 1 || item.name.find(L'\uFFFD') != std::wstring::npos) {
+            hasCorrupted = true;
             break;
         }
+        if (item.name.length() > 1) {
+            hasValid = true;
+        }
     }
-    if (hasValid) {
+    if (hasValid && !hasCorrupted) {
         s_tempShortcuts.clear();
         for (const auto& item : saved) {
             ShortcutItem sc;
@@ -850,6 +859,10 @@ void SettingsDialog::CreateControls(HWND hwnd) {
   createLabel(3, zh ? L"标签页基本行为:" : L"Tab Behavior:", marginX, y2, contentW, lineH, true);
   y2 += lineH + spacing;
 
+  s_hChkCloseLastTab = createChk(3, zh ? L"关闭最后一个标签页时关闭窗口" : L"Closing the last tab closes the window",
+                                y2, 319, cfg.closeLastTabClosesWindow);
+  y2 += lineH + spacing;
+
   s_hChkAllowDupTabs = createChk(3, zh ? L"允许打开重复路径的标签页" : L"Allow duplicate folder tabs",
                                 y2, 320, cfg.allowDuplicateTabs);
   y2 += lineH + spacing;
@@ -1086,8 +1099,11 @@ void SettingsDialog::CreateControls(HWND hwnd) {
 
   s_tempGestures = cfg.gestures;
   bool gestCorrupted = false;
-  for (const auto& g : s_tempGestures) {
-      if (g.name.length() <= 1) { gestCorrupted = true; break; }
+  for (auto& g : s_tempGestures) {
+      if (g.name.length() <= 1 || g.name.find(L'\uFFFD') != std::wstring::npos) {
+          g.name = GestureEngine::GetActionName((GestureAction)g.action);
+      }
+      if (g.action <= 0 || g.action > (int)GestureAction::ToggleSyncNav) { gestCorrupted = true; break; }
   }
   if (s_tempGestures.empty() || gestCorrupted) {
       s_tempGestures = {
@@ -1095,12 +1111,12 @@ void SettingsDialog::CreateControls(HWND hwnd) {
           { "R", (int)GestureAction::NavForward, zh ? L"前进" : L"Forward" },
           { "U", (int)GestureAction::NavUp, zh ? L"向上一级" : L"Up to Parent" },
           { "D", (int)GestureAction::Refresh, zh ? L"刷新" : L"Refresh" },
-          { "UD", (int)GestureAction::NewTab, zh ? L"新建标签页" : L"New Tab" },
+          { "RL", (int)GestureAction::NewTab, zh ? L"新建标签页" : L"New Tab" },
           { "DR", (int)GestureAction::CloseTab, zh ? L"关闭当前标签页" : L"Close Current Tab" },
           { "UL", (int)GestureAction::ToggleTree, zh ? L"显示/隐藏侧边栏目录树" : L"Toggle Tree Sidebar" },
           { "UR", (int)GestureAction::TogglePreview, zh ? L"显示/隐藏快速预览窗格" : L"Toggle Preview Pane" },
-          { "RU", (int)GestureAction::ScrollTop, zh ? L"滚动到列表顶部" : L"Scroll to Top" },
-          { "RD", (int)GestureAction::ScrollBottom, zh ? L"滚动到列表底部" : L"Scroll to Bottom" },
+          { "DU", (int)GestureAction::ScrollTop, zh ? L"滚动到列表顶部" : L"Scroll to Top" },
+          { "UD", (int)GestureAction::ScrollBottom, zh ? L"滚动到列表底部" : L"Scroll to Bottom" },
           { "LU", (int)GestureAction::PageUp, zh ? L"向上翻页" : L"Page Up" },
           { "LD", (int)GestureAction::PageDown, zh ? L"向下翻页" : L"Page Down" }
       };
@@ -1306,9 +1322,7 @@ void SettingsDialog::SaveSettings(HWND hwnd) {
   cfg.singleInstance = (SendMessageW(s_hChkSingleInstance, BM_GETCHECK, 0, 0) == BST_CHECKED);
 
   bool replaceExp = (SendMessageW(s_hChkReplaceExplorer, BM_GETCHECK, 0, 0) == BST_CHECKED);
-  if (replaceExp != ShellUtils::IsExplorerReplaced()) {
-      ShellUtils::SetExplorerReplaced(replaceExp);
-  }
+  ShellUtils::SetExplorerReplaced(replaceExp);
 
   // Page 1: Window Actions
   SaveActionCombosForCurrentTarget();
@@ -1322,6 +1336,7 @@ void SettingsDialog::SaveSettings(HWND hwnd) {
   cfg.lockToolbars = (SendMessageW(s_hChkLockToolbars, BM_GETCHECK, 0, 0) == BST_CHECKED);
 
   // Page 3: Tabs
+  cfg.closeLastTabClosesWindow = (SendMessageW(s_hChkCloseLastTab, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.allowDuplicateTabs = (SendMessageW(s_hChkAllowDupTabs, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.tabDoubleClickAction = (int)SendMessageW(s_hTabDblClickCombo, CB_GETCURSEL, 0, 0);
 
@@ -1359,6 +1374,9 @@ void SettingsDialog::SaveSettings(HWND hwnd) {
   // Page 8: Gestures
   cfg.gesturesEnabled = (SendMessageW(s_hChkGestures, BM_GETCHECK, 0, 0) == BST_CHECKED);
   cfg.gestures = s_tempGestures;
+  for (auto& g : cfg.gestures) {
+      g.name = GestureEngine::GetActionName((GestureAction)g.action);
+  }
 
   // Page 9: Appearance & Toolbars
   int themeSel = (int)SendMessageW(s_hThemeCombo, CB_GETCURSEL, 0, 0);

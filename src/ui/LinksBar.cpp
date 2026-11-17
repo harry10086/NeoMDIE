@@ -471,7 +471,7 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     else if (act == WindowAction::OtherPane && onOpenSplit) onOpenSplit(m_links[i].path);
                     else if (act == WindowAction::NewTab && onOpenNewTab) onOpenNewTab(m_links[i].path);
                     else if (act == WindowAction::BgTab && onOpenBgTab) onOpenBgTab(m_links[i].path);
-                    else if (act == WindowAction::Explorer) ShellExecuteW(nullptr, L"explore", m_links[i].path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    else if (act == WindowAction::Explorer) ShellUtils::OpenInExplorer(m_links[i].path);
                     return 0;
                 }
             }
@@ -493,7 +493,7 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     else if (act == WindowAction::OtherPane && onOpenSplit) onOpenSplit(m_links[i].path);
                     else if (act == WindowAction::NewTab && onOpenNewTab) onOpenNewTab(m_links[i].path);
                     else if (act == WindowAction::BgTab && onOpenBgTab) onOpenBgTab(m_links[i].path);
-                    else if (act == WindowAction::Explorer) ShellExecuteW(nullptr, L"explore", m_links[i].path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                    else if (act == WindowAction::Explorer) ShellUtils::OpenInExplorer(m_links[i].path);
                     return 0;
                 }
             }

@@ -109,8 +109,14 @@ public:
 
     static std::wstring NormalizeFolderKey(const std::wstring& path) {
         if (path.empty()) return L"";
-        std::wstring k = path;
+        if (path == L"此电脑" || path == L"This PC" ||
+            path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos ||
+            path.find(L"20d04fe0-3aea-1069-a2d8-08002b30309d") != std::wstring::npos) {
+            return L"this pc";
+        }
+        std::wstring k = Util::NormalizePath(path);
         for (auto& ch : k) ch = towlower(ch);
+        if (k.length() == 2 && k[1] == L':') k += L'\\';
         while (k.length() > 3 && (k.back() == L'\\' || k.back() == L'/')) {
             k.pop_back();
         }
@@ -233,6 +239,7 @@ public:
     bool searchBarFirst = false;
     int filterBarWidth = 240;
     bool restoreTabsOnStartup = true;
+    bool closeLastTabClosesWindow = true;
     bool minimizeToTray = false;
     bool closeToTray = false;
     bool showMenuBar = false;

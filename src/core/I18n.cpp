@@ -94,15 +94,15 @@ const wchar_t* I18n::T(StringId id) const {
     case StringId::MenuEdit:           return zh ? L"编辑(&E)" : L"Edit(&E)";
     case StringId::MenuCut:            return zh ? L"剪切(&T)\tCtrl+X" : L"Cut(&T)\tCtrl+X";
     case StringId::MenuCopy:           return zh ? L"复制(&C)\tCtrl+C" : L"Copy(&C)\tCtrl+C";
-    case StringId::MenuCopyName:       return zh ? L"复制文件名(&N)" : L"Copy File Name(&N)";
-    case StringId::MenuCopyDir:        return zh ? L"复制所在目录路径(&D)" : L"Copy Directory Path(&D)";
+    case StringId::MenuCopyName:       return zh ? L"复制选中文件名(&N)\tCtrl+Shift+C" : L"Copy Selected File Name(&N)\tCtrl+Shift+C";
+    case StringId::MenuCopyDir:        return zh ? L"复制所在目录(&D)\tCtrl+Alt+C" : L"Copy Directory Path(&D)\tCtrl+Alt+C";
     case StringId::MenuPaste:          return zh ? L"粘贴(&P)\tCtrl+V" : L"Paste(&P)\tCtrl+V";
     case StringId::MenuPasteShortcut:  return zh ? L"粘贴快捷方式(&S)" : L"Paste Shortcut(&S)";
     case StringId::MenuDelete:         return zh ? L"删除(&D)\tDel" : L"Delete(&D)\tDel";
     case StringId::MenuRename:         return zh ? L"重命名(&M)\tF2" : L"Rename(&M)\tF2";
     case StringId::MenuSelectAll:      return zh ? L"全选(&A)\tCtrl+A" : L"Select All(&A)\tCtrl+A";
     case StringId::MenuInvertSelection:return zh ? L"反向选择(&I)" : L"Invert Selection(&I)";
-    case StringId::MenuCopyPath:       return zh ? L"复制完整路径(&Y)\tCtrl+Shift+C" : L"Copy Full Path(&Y)\tCtrl+Shift+C";
+    case StringId::MenuCopyPath:       return zh ? L"复制完整路径(&Y)\tCtrl+Shift+Alt+C" : L"Copy Full Path(&Y)\tCtrl+Shift+Alt+C";
 
     case StringId::MenuView:           return zh ? L"查看(&V)" : L"View(&V)";
     case StringId::MenuRefresh:        return zh ? L"刷新(&R)\tF5" : L"Refresh(&R)\tF5";

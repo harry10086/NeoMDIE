@@ -141,16 +141,16 @@ void ScriptEngine::ReloadScripts() {
     Log(L"扩展脚本重新加载完成，共载入 " + std::to_wstring(m_scripts.size()) + L" 个脚本。");
 }
 
-bool ScriptEngine::ExecuteCommand(UINT cmdId, const std::wstring& activePath, const std::vector<std::wstring>& selectedFiles) {
+bool ScriptEngine::ExecuteCommand(UINT cmdId, const std::wstring& activePath, const std::vector<std::wstring>& selectedFiles, const std::vector<std::wstring>& panePaths) {
     for (const auto& s : m_scripts) {
         if (s.commandId == cmdId) {
-            return ExecuteScript(s.filePath, activePath, selectedFiles);
+            return ExecuteScript(s.filePath, activePath, selectedFiles, panePaths);
         }
     }
     return false;
 }
 
-bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstring& activePath, const std::vector<std::wstring>& selectedFiles) {
+bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstring& activePath, const std::vector<std::wstring>& selectedFiles, const std::vector<std::wstring>& panePaths) {
     bool isZh = I18n::Get().IsChinese();
 
     // Validate active directory
@@ -179,6 +179,16 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
         filesJoined += f;
     }
     SetEnvironmentVariableW(L"NEOMDIE_SELECTED_FILES", filesJoined.c_str());
+
+    SetEnvironmentVariableW(L"NEOMDIE_PANE_COUNT", std::to_wstring(panePaths.size()).c_str());
+    std::wstring panesJoined;
+    for (size_t i = 0; i < panePaths.size(); ++i) {
+        if (!panesJoined.empty()) panesJoined += L"|";
+        panesJoined += panePaths[i];
+        std::wstring varName = L"NEOMDIE_PANE_" + std::to_wstring(i);
+        SetEnvironmentVariableW(varName.c_str(), panePaths[i].c_str());
+    }
+    SetEnvironmentVariableW(L"NEOMDIE_PANE_PATHS", panesJoined.c_str());
 
     // 检查是否存在同名的 PowerShell (.ps1) 原生 GUI 界面扩展脚本
     std::wstring ps1Path;

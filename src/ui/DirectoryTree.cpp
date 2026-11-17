@@ -863,8 +863,7 @@ LRESULT CALLBACK DirectoryTree::ParentSubclassProc(HWND hwnd, UINT msg,
               if (pThis->onCustomCommand)
                 pThis->onCustomCommand(CMD_NEOMDIE_OPEN_BG_TAB, target);
             } else if (act == WindowAction::Explorer) {
-              ShellExecuteW(nullptr, L"explore", target.c_str(), nullptr,
-                            nullptr, SW_SHOWNORMAL);
+              ShellUtils::OpenInExplorer(target);
             }
           }
         }
@@ -925,8 +924,7 @@ LRESULT CALLBACK DirectoryTree::TreeSubclassProc(HWND hwnd, UINT msg,
             if (pThis->onCustomCommand)
               pThis->onCustomCommand(CMD_NEOMDIE_OPEN_BG_TAB, target);
           } else if (act == WindowAction::Explorer) {
-            ShellExecuteW(nullptr, L"explore", target.c_str(), nullptr, nullptr,
-                          SW_SHOWNORMAL);
+            ShellUtils::OpenInExplorer(target);
           }
           return 0;
         }

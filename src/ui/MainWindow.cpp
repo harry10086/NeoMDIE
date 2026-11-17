@@ -90,11 +90,50 @@ void MainWindow::RestoreFromTrayOrMinimized() {
     SetForegroundWindow(m_hwnd);
 }
 
+static HHOOK s_hWinEHook = nullptr;
+static HWND s_hMainWndForWinE = nullptr;
+static const UINT WM_WIN_E_TRIGGERED = WM_APP + 199;
+
+static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
+        auto* pKb = (KBDLLHOOKSTRUCT*)lParam;
+        if (pKb->vkCode == 'E' || pKb->vkCode == 'e') {
+            bool winDown = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
+                           (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
+            bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+            bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+
+            if (winDown && !ctrlDown && !altDown && !shiftDown) {
+                if (s_hMainWndForWinE && IsWindow(s_hMainWndForWinE)) {
+                    PostMessageW(s_hMainWndForWinE, WM_WIN_E_TRIGGERED, 0, 0);
+                }
+                return 1; // Consume key, completely intercepting Win+E!
+            }
+        }
+    }
+    return CallNextHookEx(s_hWinEHook, nCode, wParam, lParam);
+}
+
+static void UpdateWinEHook(HWND hwnd, bool enable) {
+    s_hMainWndForWinE = hwnd;
+    if (enable) {
+        if (!s_hWinEHook) {
+            s_hWinEHook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandleW(nullptr), 0);
+        }
+    } else {
+        if (s_hWinEHook) {
+            UnhookWindowsHookEx(s_hWinEHook);
+            s_hWinEHook = nullptr;
+        }
+    }
+}
+
 MainWindow::MainWindow() {
 }
 
 MainWindow::~MainWindow() {
-    if (m_hwnd) UnregisterHotKey(m_hwnd, 9001);
+    UpdateWinEHook(nullptr, false);
     if (m_hAccel) DestroyAcceleratorTable(m_hAccel);
 }
 
@@ -155,7 +194,7 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
     RebuildAccelerators();
     AddClipboardFormatListener(m_hwnd);
     if (ShellUtils::IsExplorerReplaced()) {
-        RegisterHotKey(m_hwnd, 9001, MOD_WIN, 'E');
+        UpdateWinEHook(m_hwnd, true);
     }
 
 // Shell COM initialized cleanly on main UI thread
@@ -179,27 +218,52 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
         }
     }
 
-    if (!cmdPath.empty()) {
-        m_tabBar.AddTab(cmdPath, true);
-    } else {
-        if (cfg.restoreTabsOnStartup && !cfg.sessionTabsInfo.empty()) {
-            for (size_t i = 0; i < cfg.sessionTabsInfo.size(); ++i) {
-                const auto& info = cfg.sessionTabsInfo[i];
-                int tabIdx = m_tabBar.AddTab(info.path, false);
-                auto& item = m_tabBar.GetTabItemRef(tabIdx);
-                item.layout = info.layout;
-                item.activePaneIndex = info.activePaneIndex;
-                item.panePaths = info.panePaths;
-                item.paneViewStates = info.paneViewStates;
-                if (item.panePaths.empty()) {
-                    item.panePaths.push_back(item.path.empty() ? L"This PC" : item.path);
-                }
-            }
-        } else if (cfg.restoreTabsOnStartup && !cfg.sessionTabs.empty()) {
-            for (const auto& tabPath : cfg.sessionTabs) {
-                m_tabBar.AddTab(tabPath, false);
+    // Restore saved session tabs if enabled
+    if (cfg.restoreTabsOnStartup && !cfg.sessionTabsInfo.empty()) {
+        for (size_t i = 0; i < cfg.sessionTabsInfo.size(); ++i) {
+            const auto& info = cfg.sessionTabsInfo[i];
+            int tabIdx = m_tabBar.AddTab(info.path, false);
+            auto& item = m_tabBar.GetTabItemRef(tabIdx);
+            item.layout = info.layout;
+            item.activePaneIndex = info.activePaneIndex;
+            item.panePaths = info.panePaths;
+            item.paneViewStates = info.paneViewStates;
+            if (item.panePaths.empty()) {
+                item.panePaths.push_back(item.path.empty() ? L"This PC" : item.path);
             }
         }
+    } else if (cfg.restoreTabsOnStartup && !cfg.sessionTabs.empty()) {
+        for (const auto& tabPath : cfg.sessionTabs) {
+            m_tabBar.AddTab(tabPath, false);
+        }
+    }
+
+    bool hasRestoredTabs = (m_tabBar.GetTabCount() > 0);
+    bool isGenericThisPC = (cmdPath == L"This PC" || cmdPath == L"此电脑" || cmdPath.find(L"::{20D04FE0") != std::wstring::npos);
+
+    if (hasRestoredTabs && isGenericThisPC) {
+        // User restored their session; Win+E / generic cold start should respect their session without adding redundant This PC tab
+        int act = std::clamp(cfg.activeTabIndex, 0, m_tabBar.GetTabCount() - 1);
+        m_currentTabIndex = -1;
+        m_tabBar.SetActiveTab(act, true);
+    } else if (!cmdPath.empty()) {
+        // Specific path requested (e.g., from an external app or Win+E when no session restored)
+        int matchIdx = -1;
+        for (int i = 0; i < m_tabBar.GetTabCount(); ++i) {
+            std::wstring tp = m_tabBar.GetTabPath(i);
+            if (_wcsicmp(tp.c_str(), cmdPath.c_str()) == 0 ||
+                (isGenericThisPC && (tp == L"This PC" || tp == L"此电脑" || tp.find(L"::{20D04FE0") != std::wstring::npos))) {
+                matchIdx = i;
+                break;
+            }
+        }
+        if (matchIdx >= 0) {
+            m_currentTabIndex = -1;
+            m_tabBar.SetActiveTab(matchIdx, true);
+        } else {
+            m_tabBar.AddTab(cmdPath, true);
+        }
+    } else {
         if (m_tabBar.GetTabCount() == 0) {
             m_tabBar.AddTab(L"This PC", true);
             if (cfg.paneLayout >= 0 && cfg.paneLayout <= 4) {
@@ -210,13 +274,14 @@ HWND MainWindow::Create(HINSTANCE hInstance, int nCmdShow, const std::wstring& i
             m_currentTabIndex = -1;
             m_tabBar.SetActiveTab(act, true);
         }
-        // Guarantee active pane is never left blank on startup
-        FileListView* activePane = m_multiPane.GetActivePane();
-        if (activePane && activePane->GetCurrentPath().empty()) {
-            std::wstring activePath = m_tabBar.GetTabPath(m_tabBar.GetActiveIndex());
-            if (activePath.empty()) activePath = L"This PC";
-            activePane->NavigateTo(activePath, false);
-        }
+    }
+
+    // Guarantee active pane is never left blank on startup
+    FileListView* activePane = m_multiPane.GetActivePane();
+    if (activePane && activePane->GetCurrentPath().empty()) {
+        std::wstring activePath = m_tabBar.GetTabPath(m_tabBar.GetActiveIndex());
+        if (activePath.empty()) activePath = L"This PC";
+        activePane->NavigateTo(activePath, false);
     }
     m_currentTabIndex = m_tabBar.GetActiveIndex();
     std::wstring activePath = m_tabBar.GetTabPath(m_tabBar.GetActiveIndex());
@@ -314,7 +379,7 @@ void MainWindow::OnSettingsApplied() {
 
     RebuildAccelerators();
     if (ShellUtils::IsExplorerReplaced()) {
-        RegisterHotKey(m_hwnd, 9001, MOD_WIN, 'E');
+        UpdateWinEHook(m_hwnd, true);
     }
     UpdateLanguageUI();
     LayoutAll();
@@ -406,9 +471,9 @@ void MainWindow::BuildMenu() {
     AppendMenuW(hEditMenu, MF_SEPARATOR, 0, nullptr);
 
     HMENU hCopyPathSubmenu = CreatePopupMenu();
-    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_PATH, isZh ? L"复制完整路径(&P)\tCtrl+Shift+C" : L"Copy Full Path(&P)\tCtrl+Shift+C");
-    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_NAME, isZh ? L"复制文件名(&N)" : L"Copy File Name(&N)");
-    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_DIR, isZh ? L"复制所在目录(&D)" : L"Copy Directory Path(&D)");
+    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_NAME, isZh ? L"复制选中文件名(&N)\tCtrl+Shift+C" : L"Copy Selected File Name(&N)\tCtrl+Shift+C");
+    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_PATH, isZh ? L"复制完整路径(&P)\tCtrl+Shift+Alt+C" : L"Copy Full Path(&P)\tCtrl+Shift+Alt+C");
+    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_DIR, isZh ? L"复制所在目录(&D)\tCtrl+Alt+C" : L"Copy Directory Path(&D)\tCtrl+Alt+C");
     AppendMenuW(hEditMenu, MF_POPUP, (UINT_PTR)hCopyPathSubmenu, isZh ? L"复制路径(&Y)" : L"Copy Path(&Y)");
     AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hEditMenu, isZh ? L"编辑(&E)" : L"Edit(&E)");
 
@@ -771,9 +836,20 @@ void MainWindow::CreateControls() {
         m_tabBar.AddTab(path, false);
     };
     m_linksBar.onOpenSplit = [this](const std::wstring& path) {
-        SetLayout(PaneLayout::DualVertical);
-        m_multiPane.GetPane(1).NavigateTo(path);
-        m_multiPane.SetActivePane(1);
+        int count = m_multiPane.GetPaneCount();
+        if (count == 1) {
+            SetLayout(PaneLayout::DualVertical, path);
+            m_multiPane.SetActivePane(1);
+        } else if (count == 2) {
+            SetLayout(PaneLayout::ThreeLeft, path);
+            m_multiPane.SetActivePane(2);
+        } else if (count == 3) {
+            SetLayout(PaneLayout::Quad, path);
+            m_multiPane.SetActivePane(3);
+        } else {
+            auto* active = m_multiPane.GetActivePane();
+            if (active) active->NavigateTo(path);
+        }
     };
 
     // Wire up preview close
@@ -874,6 +950,7 @@ void MainWindow::CreateControls() {
             } else {
                 m_multiPane.GetPane(p).ClearSelection();
             }
+            m_lastPanePaths[p] = m_multiPane.GetPane(p).GetCurrentPath();
         }
 
         m_isSwitchingTab = false;
@@ -904,6 +981,14 @@ void MainWindow::CreateControls() {
         if (act >= 0) {
             UpdateWindowTitle(m_tabBar.GetTabPath(act));
         }
+    };
+
+    m_tabBar.onLastTabClosing = [this]() -> bool {
+        if (Config::Get().closeLastTabClosesWindow) {
+            PostMessageW(m_hwnd, WM_CLOSE, 0, 0);
+            return true;
+        }
+        return false;
     };
 
     m_tabBar.onTabOrderChanged = [this]() {
@@ -949,7 +1034,7 @@ void MainWindow::CreateControls() {
             m_multiPane.GetPane(otherIdx).NavigateTo(path);
             m_multiPane.SetActivePane(otherIdx);
         } else if (act == WindowAction::Explorer) {
-            ShellExecuteW(nullptr, L"explore", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            ShellUtils::OpenInExplorer(path);
         } else if (act == WindowAction::CurrentPane) {
             FileListView* activeView = m_multiPane.GetActivePane();
             if (activeView) activeView->NavigateTo(path);
@@ -1053,6 +1138,7 @@ void MainWindow::CreateControls() {
         case GestureAction::FocusFilter:         OnCommand(ID_VIEW_FILTER_FOCUS); break;
         case GestureAction::ToggleDarkMode:      OnCommand(ID_VIEW_DARK_MODE); break;
         case GestureAction::ToggleMenuBar:       OnCommand(ID_VIEW_TOGGLE_MENUBAR); break;
+        case GestureAction::ToggleSyncNav:       OnCommand(ID_VIEW_SYNC_NAV); break;
         default: {
             int intAct = static_cast<int>(act);
             if (intAct >= ID_SCRIPT_COMMAND_START && intAct <= ID_SCRIPT_COMMAND_END) {
@@ -1133,12 +1219,61 @@ void MainWindow::CreateControls() {
                 AddToHistory(p);
                 UpdateWindowTitle(p);
             }
-            if (Config::Get().syncNav) {
-                for (int i = 0; i < m_multiPane.GetPaneCount(); ++i) {
-                    if (i != paneIdx && m_multiPane.GetPane(i).GetCurrentPath() != p) {
-                        m_multiPane.GetPane(i).NavigateTo(p, false);
+            std::wstring oldPanePath = (paneIdx >= 0 && paneIdx < 4) ? m_lastPanePaths[paneIdx] : L"";
+            if (paneIdx >= 0 && paneIdx < 4) {
+                m_lastPanePaths[paneIdx] = p;
+            }
+
+            if (Config::Get().syncNav && !m_isSyncingNav && !oldPanePath.empty() && !p.empty() &&
+                oldPanePath != L"This PC" && oldPanePath != L"此电脑" &&
+                p != L"This PC" && p != L"此电脑") {
+                m_isSyncingNav = true;
+
+                // Check relative navigation direction
+                bool isDown = false;
+                std::wstring relSub;
+                if (p.length() > oldPanePath.length() &&
+                    _wcsnicmp(p.c_str(), oldPanePath.c_str(), oldPanePath.length()) == 0) {
+                    size_t prefixLen = oldPanePath.length();
+                    if (oldPanePath.back() != L'\\' && oldPanePath.back() != L'/') {
+                        if (p[prefixLen] == L'\\' || p[prefixLen] == L'/') {
+                            isDown = true;
+                            relSub = p.substr(prefixLen + 1);
+                        }
+                    } else {
+                        isDown = true;
+                        relSub = p.substr(prefixLen);
                     }
                 }
+
+                bool isUp = false;
+                if (!isDown) {
+                    std::wstring parentOfOld = ShellUtils::GetParentPath(oldPanePath);
+                    if (!parentOfOld.empty() && _wcsicmp(parentOfOld.c_str(), p.c_str()) == 0) {
+                        isUp = true;
+                    }
+                }
+
+                for (int i = 0; i < m_multiPane.GetPaneCount(); ++i) {
+                    if (i == paneIdx) continue;
+                    std::wstring otherPath = m_multiPane.GetPane(i).GetCurrentPath();
+                    if (otherPath.empty() || otherPath == L"This PC" || otherPath == L"此电脑") continue;
+
+                    if (isDown && !relSub.empty()) {
+                        std::wstring candidate = Util::CombinePath(otherPath, relSub);
+                        if (ShellUtils::IsValidDirectory(candidate)) {
+                            m_multiPane.GetPane(i).NavigateTo(candidate, true);
+                            if (i >= 0 && i < 4) m_lastPanePaths[i] = candidate;
+                        }
+                    } else if (isUp) {
+                        std::wstring otherParent = ShellUtils::GetParentPath(otherPath);
+                        if (!otherParent.empty() && ShellUtils::IsValidDirectory(otherParent)) {
+                            m_multiPane.GetPane(i).NavigateTo(otherParent, true);
+                            if (i >= 0 && i < 4) m_lastPanePaths[i] = otherParent;
+                        }
+                    }
+                }
+                m_isSyncingNav = false;
             }
         };
 
@@ -1519,14 +1654,22 @@ void MainWindow::SetLayout(PaneLayout layout, const std::wstring& targetNewPath)
         if (initPath.empty() && !tab.path.empty()) initPath = tab.path;
         if (initPath.empty()) initPath = L"This PC";
 
+        int targetPane = (prevCount < newCount) ? (newCount - 1) : m_multiPane.GetActiveIndex();
+
         for (int p = 0; p < newCount; ++p) {
-            if (m_multiPane.GetPane(p).GetCurrentPath().empty()) {
-                std::wstring pPath = (!targetNewPath.empty() && p == newCount - 1) ? targetNewPath : initPath;
-                m_multiPane.GetPane(p).NavigateTo(pPath, false);
+            if (p == targetPane && !targetNewPath.empty()) {
+                m_multiPane.GetPane(p).NavigateTo(targetNewPath, false);
+            } else if (m_multiPane.GetPane(p).GetCurrentPath().empty()) {
+                m_multiPane.GetPane(p).NavigateTo(initPath, false);
             }
             tab.panePaths[p] = m_multiPane.GetPane(p).GetCurrentPath();
         }
-        tab.activePaneIndex = m_multiPane.GetActiveIndex();
+        m_multiPane.SetActivePane(targetPane);
+        tab.activePaneIndex = targetPane;
+        tab.paneViewStates.clear();
+        for (int p = 0; p < newCount; ++p) {
+            tab.paneViewStates.push_back(m_multiPane.GetPane(p).GetViewState());
+        }
     }
     BuildMenu();
     LayoutAll();
@@ -2804,7 +2947,7 @@ void MainWindow::OnCommand(UINT cmdId) {
         break;
     case ID_VIEW_ADDRESS_FOCUS:
     case ID_NAV_HOME:
-        SendMessageW(m_breadcrumb.GetHwnd(), WM_LBUTTONDOWN, 0, MAKELPARAM(10, 10));
+        m_breadcrumb.SwitchToEditMode();
         break;
 
     case ID_VIEW_DETAILS:
@@ -2865,20 +3008,20 @@ void MainWindow::OnCommand(UINT cmdId) {
         break;
 
     case ID_VIEW_SORT_FOLDERS_FIRST:
+        Config::Get().foldersFirst = true;
         if (activeView) {
             activeView->SetFoldersFirst(true);
         } else {
-            Config::Get().foldersFirst = true;
             Config::Get().Save();
         }
         BuildMenu();
         break;
 
     case ID_VIEW_SORT_FILES_FIRST:
+        Config::Get().foldersFirst = false;
         if (activeView) {
             activeView->SetFoldersFirst(false);
         } else {
-            Config::Get().foldersFirst = false;
             Config::Get().Save();
         }
         BuildMenu();
@@ -3012,13 +3155,13 @@ void MainWindow::OnCommand(UINT cmdId) {
         bool isZh = I18n::Get().IsChinese();
         std::wstring aboutText = isZh ?
             L"NeoMDIE - 现代化多标签多栏文件管理器\n"
-            L"版本: v1.1.1 (x64 Release)\n\n"
+            L"版本: v1.1.2 (x64 Release)\n\n"
             L"作者: Harry (https://mianao.info)\n"
             L"开源项目仓库: https://github.com/harry10086/NeoMDIE\n"
             L"致敬经典: MDIE(Multiple Document Interface Explorer)\n\n"
             L"基于 GNU General Public License v3 (GPLv3) 开源协议发布。" :
             L"NeoMDIE - Modern Native Win32 Tabbed & Multi-Pane File Manager\n"
-            L"Version: v1.1.1 (x64 Release)\n\n"
+            L"Version: v1.1.2 (x64 Release)\n\n"
             L"Author: Harry (https://mianao.info)\n"
             L"Repository: https://github.com/harry10086/NeoMDIE\n"
             L"Inspired by: MDIE(Multiple Document Interface Explorer)\n\n"
@@ -3048,7 +3191,11 @@ void MainWindow::OnCommand(UINT cmdId) {
                 BuildMenu();
             }
         } else if (cmdId >= ID_SCRIPT_COMMAND_START && cmdId <= ID_SCRIPT_COMMAND_END) {
-            bool ok = ScriptEngine::Get().ExecuteCommand(cmdId, activeView ? activeView->GetCurrentPath() : L"", activeView ? activeView->GetSelectedPaths() : std::vector<std::wstring>());
+            std::vector<std::wstring> allPanePaths;
+            for (int p = 0; p < m_multiPane.GetPaneCount(); ++p) {
+                allPanePaths.push_back(m_multiPane.GetPane(p).GetCurrentPath());
+            }
+            bool ok = ScriptEngine::Get().ExecuteCommand(cmdId, activeView ? activeView->GetCurrentPath() : L"", activeView ? activeView->GetSelectedPaths() : std::vector<std::wstring>(), allPanePaths);
             if (ok && activeView) {
                 activeView->Refresh();
             }
@@ -3164,13 +3311,33 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
                 path = L"This PC";
             }
-            if (ShellUtils::IsValidDirectory(path) || path == L"此电脑" || path == L"This PC") {
+            if (path.find(L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6") != std::wstring::npos ||
+                path.find(L"b2b4a4d1-2754-4140-a2eb-9a76d9d7cdc6") != std::wstring::npos) {
+                path = L"\\\\wsl.localhost";
+            }
+            if (PathFileExistsW(path.c_str()) && !PathIsDirectoryW(path.c_str())) {
+                wchar_t dirBuf[MAX_PATH];
+                StringCchCopyW(dirBuf, MAX_PATH, path.c_str());
+                PathRemoveFileSpecW(dirBuf);
+                path = dirBuf;
+            }
+            if (ShellUtils::IsValidDirectory(path) || path == L"此电脑" || path == L"This PC" || path.find(L"\\\\") == 0) {
                 m_tabBar.AddTab(path, true);
             }
             RestoreFromTrayOrMinimized();
             return TRUE;
         }
         return FALSE;
+    }
+    case WM_WIN_E_TRIGGERED: {
+        RestoreFromTrayOrMinimized();
+        SetForegroundWindow(m_hwnd);
+        if (Config::Get().singleInstance) {
+            m_tabBar.AddTab(L"This PC", true);
+        } else {
+            OnCommand(ID_FILE_NEW_WINDOW_CURRENT);
+        }
+        return 0;
     }
     case WM_ACTIVATE_INSTANCE: {
         RestoreFromTrayOrMinimized();
@@ -3805,7 +3972,7 @@ void MainWindow::RebuildAccelerators() {
         if (name == L"前进" || name == L"Forward") return ID_NAV_FORWARD;
         if (name == L"向上一级" || name == L"Up to Parent") return ID_NAV_UP;
         if (name == L"刷新" || name == L"Refresh") return ID_VIEW_REFRESH;
-        if (name == L"聚焦到地址栏" || name == L"Focus Address Bar") return ID_VIEW_ADDRESS_FOCUS;
+        if (name == L"聚焦到地址栏" || name == L"转到地址栏" || name == L"Focus Address Bar" || name == L"Go to Address Bar") return ID_VIEW_ADDRESS_FOCUS;
         if (name == L"聚焦到搜索过滤栏" || name == L"Focus Filter Bar") return ID_VIEW_FILTER_FOCUS;
         if (name == L"最大化/还原当前栏" || name == L"Maximize/Restore Pane") return ID_WINDOW_MAXIMIZE;
         if (name == L"单栏视图" || name == L"单栏模式" || name == L"Single Pane") return ID_VIEW_LAYOUT_1X1;
@@ -3829,12 +3996,15 @@ void MainWindow::RebuildAccelerators() {
         if (name == L"计算文件夹大小" || name == L"自动计算文件夹大小" || name == L"Calculate Folder Size") return ID_VIEW_CALC_FOLDER_SIZE;
         if (name == L"切换深色/浅色模式" || name == L"切换主题模式" || name == L"Toggle Dark Mode") return ID_VIEW_DARK_MODE;
         if (name == L"显示/隐藏传统菜单栏" || name == L"显示传统明文菜单栏" || name == L"菜单栏" || name == L"Toggle Menu Bar") return ID_VIEW_TOGGLE_MENUBAR;
+        if (name == L"多窗格同步浏览" || name == L"多窗口同步浏览" || name == L"同步浏览" || name == L"Synchronized Navigation" || name == L"Sync Navigation") return ID_VIEW_SYNC_NAV;
         if (name == L"选项与设置" || name == L"Options & Settings") return ID_TOOLS_SETTINGS;
         if (name == L"反向选择" || name == L"Invert Selection") return ID_EDIT_INVERT_SELECTION;
         if (name == L"撤销" || name == L"Undo") return ID_EDIT_UNDO;
         if (name == L"删除选中项" || name == L"删除" || name == L"Delete") return ID_EDIT_DELETE;
         if (name == L"重命名" || name == L"Rename") return ID_EDIT_RENAME;
-        if (name == L"复制当前路径" || name == L"Copy Path") return ID_EDIT_COPY_PATH;
+        if (name == L"复制当前路径" || name == L"复制完整路径" || name == L"Copy Path" || name == L"Copy Full Path") return ID_EDIT_COPY_PATH;
+        if (name == L"复制文件名" || name == L"复制选中文件名" || name == L"Copy File Name" || name == L"Copy Selected File Name") return ID_EDIT_COPY_NAME;
+        if (name == L"复制所在目录" || name == L"Copy Directory Path") return ID_EDIT_COPY_DIR;
         if (name == L"显示/隐藏侧边栏目录树" || name == L"Toggle Tree Sidebar") return ID_VIEW_TREE_TOGGLE;
         if (name == L"显示/隐藏快速预览窗格" || name == L"Toggle Preview Pane") return ID_VIEW_PREVIEW_TOGGLE;
         if (name == L"打开命令行 CMD" || name == L"Open Command Prompt CMD") return ID_TOOLS_OPEN_CMD;
@@ -3924,6 +4094,36 @@ void MainWindow::RebuildAccelerators() {
     }
     if (!hasCommand(ID_VIEW_HIDE_DOTFILES)) {
         accels.push_back({ FVIRTKEY | FCONTROL, (WORD)'H', (WORD)ID_VIEW_HIDE_DOTFILES });
+    }
+    if (!hasCommand(ID_VIEW_ADDRESS_FOCUS)) {
+        accels.push_back({ FVIRTKEY | FALT, (WORD)'D', (WORD)ID_VIEW_ADDRESS_FOCUS });
+    }
+    if (!hasCommand(ID_FILE_NEW_FOLDER)) {
+        accels.push_back({ FVIRTKEY | FCONTROL | FSHIFT, (WORD)'N', (WORD)ID_FILE_NEW_FOLDER });
+    }
+    if (!hasCommand(ID_EDIT_COPY_NAME)) {
+        accels.push_back({ FVIRTKEY | FCONTROL | FSHIFT, (WORD)'C', (WORD)ID_EDIT_COPY_NAME });
+    }
+    if (!hasCommand(ID_EDIT_COPY_PATH)) {
+        accels.push_back({ FVIRTKEY | FCONTROL | FSHIFT | FALT, (WORD)'C', (WORD)ID_EDIT_COPY_PATH });
+    }
+    if (!hasCommand(ID_EDIT_COPY_DIR)) {
+        accels.push_back({ FVIRTKEY | FCONTROL | FALT, (WORD)'C', (WORD)ID_EDIT_COPY_DIR });
+    }
+    if (!hasCommand(ID_NAV_BACK)) {
+        accels.push_back({ FVIRTKEY | FALT, (WORD)VK_LEFT, (WORD)ID_NAV_BACK });
+    }
+    if (!hasCommand(ID_NAV_FORWARD)) {
+        accels.push_back({ FVIRTKEY | FALT, (WORD)VK_RIGHT, (WORD)ID_NAV_FORWARD });
+    }
+    if (!hasCommand(ID_NAV_UP)) {
+        accels.push_back({ FVIRTKEY | FALT, (WORD)VK_UP, (WORD)ID_NAV_UP });
+    }
+    if (!hasCommand(ID_FILE_NEW_TAB)) {
+        accels.push_back({ FVIRTKEY | FCONTROL, (WORD)'T', (WORD)ID_FILE_NEW_TAB });
+    }
+    if (!hasCommand(ID_FILE_CLOSE_TAB)) {
+        accels.push_back({ FVIRTKEY | FCONTROL, (WORD)'W', (WORD)ID_FILE_CLOSE_TAB });
     }
     if (!hasCommand(IDC_BTN_MENU)) {
         accels.push_back({ FVIRTKEY | FALT, (WORD)'M', (WORD)IDC_BTN_MENU });

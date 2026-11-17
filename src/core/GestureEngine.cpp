@@ -238,6 +238,7 @@ std::wstring GestureEngine::GetActionName(GestureAction action) {
     case GestureAction::FocusFilter:      return zh ? L"聚焦到搜索过滤栏" : L"Focus Filter Bar";
     case GestureAction::ToggleDarkMode:   return zh ? L"切换深色/浅色模式" : L"Toggle Dark Mode";
     case GestureAction::ToggleMenuBar:    return zh ? L"显示/隐藏传统菜单栏" : L"Toggle Menu Bar";
+    case GestureAction::ToggleSyncNav:    return zh ? L"多窗格同步浏览" : L"Synchronized Navigation";
     default: return zh ? L"无动作" : L"None";
     }
 }

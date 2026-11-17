@@ -48,7 +48,8 @@ enum class GestureAction {
     FocusAddress = 43,
     FocusFilter = 44,
     ToggleDarkMode = 45,
-    ToggleMenuBar = 46
+    ToggleMenuBar = 46,
+    ToggleSyncNav = 47
 };
 
 class GestureEngine {
