@@ -31,16 +31,25 @@ bool PreviewHandlerHost::QueryPreviewHandlerClsid(const std::wstring& ext, CLSID
     if (ext.empty()) return false;
 
     wchar_t clsidStr[64] = { 0 };
+
+    // 1. Windows official shell association lookup (handles UserChoice, ProgIDs, per-user associations)
+    DWORD szChars = 64;
+    if (SUCCEEDED(AssocQueryStringW(0, ASSOCSTR_SHELLEXTENSION, ext.c_str(), PREVIEW_HANDLER_GUID, clsidStr, &szChars))) {
+        if (SUCCEEDED(CLSIDFromString(clsidStr, &outClsid))) {
+            return true;
+        }
+    }
+
     DWORD size = sizeof(clsidStr);
 
-    // 1. Direct extension shellex key: HKCR\<ext>\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}
+    // 2. Direct extension shellex key: HKCR\<ext>\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}
     std::wstring directKey = ext + L"\\shellex\\" + PREVIEW_HANDLER_GUID;
     if (RegGetValueW(HKEY_CLASSES_ROOT, directKey.c_str(), nullptr, RRF_RT_REG_SZ,
                      nullptr, clsidStr, &size) == ERROR_SUCCESS) {
         return SUCCEEDED(CLSIDFromString(clsidStr, &outClsid));
     }
 
-    // 2. ProgID shellex key: HKCR\<ProgID>\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}
+    // 3. ProgID shellex key: HKCR\<ProgID>\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}
     wchar_t progId[128] = { 0 };
     DWORD progIdSize = sizeof(progId);
     if (RegGetValueW(HKEY_CLASSES_ROOT, ext.c_str(), nullptr, RRF_RT_REG_SZ,
@@ -51,6 +60,14 @@ bool PreviewHandlerHost::QueryPreviewHandlerClsid(const std::wstring& ext, CLSID
                          nullptr, clsidStr, &size) == ERROR_SUCCESS) {
             return SUCCEEDED(CLSIDFromString(clsidStr, &outClsid));
         }
+    }
+
+    // 4. SystemFileAssociations: HKCR\SystemFileAssociations\<ext>\shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}
+    std::wstring sysKey = L"SystemFileAssociations\\" + ext + L"\\shellex\\" + PREVIEW_HANDLER_GUID;
+    size = sizeof(clsidStr);
+    if (RegGetValueW(HKEY_CLASSES_ROOT, sysKey.c_str(), nullptr, RRF_RT_REG_SZ,
+                     nullptr, clsidStr, &size) == ERROR_SUCCESS) {
+        return SUCCEEDED(CLSIDFromString(clsidStr, &outClsid));
     }
 
     return false;
@@ -299,6 +316,51 @@ bool PreviewHandlerHost::LoadFile(const std::wstring& filePath) {
         }
     }
 
+    // 4. Fallback: High-resolution Shell Thumbnail preview (SolidWorks .sldprt/.sldasm, AutoCAD .dwg, Photoshop .psd, etc.)
+    // Windows Explorer preview pane falls back to displaying shell thumbnails for files without a dedicated IPreviewHandler.
+    if (!m_pPreviewHandler && m_fallbackText.empty() && !m_isPdf && !m_hFallbackBitmap) {
+        IShellItemImageFactory* pFactory = nullptr;
+        if (SUCCEEDED(SHCreateItemFromParsingName(filePath.c_str(), nullptr, IID_PPV_ARGS(&pFactory))) && pFactory) {
+            SIZE targetSize = { 1024, 1024 };
+            HBITMAP hbmp = nullptr;
+            HRESULT hrThumb = pFactory->GetImage(targetSize, SIIGBF_BIGGERSIZEOK, &hbmp);
+            if (FAILED(hrThumb) || !hbmp) {
+                hrThumb = pFactory->GetImage(targetSize, 0, &hbmp);
+            }
+            pFactory->Release();
+
+            if (SUCCEEDED(hrThumb) && hbmp) {
+                BITMAP bm;
+                if (GetObject(hbmp, sizeof(bm), &bm) && bm.bmWidth > 32 && bm.bmHeight > 32) {
+                    m_hFallbackBitmap = hbmp;
+                    m_imgWidth = bm.bmWidth;
+                    m_imgHeight = bm.bmHeight;
+
+                    uint64_t fileSize = 0;
+                    WIN32_FILE_ATTRIBUTE_DATA fad;
+                    if (GetFileAttributesExW(filePath.c_str(), GetFileExInfoStandard, &fad)) {
+                        ULARGE_INTEGER uli;
+                        uli.LowPart = fad.nFileSizeLow;
+                        uli.HighPart = fad.nFileSizeHigh;
+                        fileSize = uli.QuadPart;
+                    }
+
+                    std::wstring extUpper = ext;
+                    if (!extUpper.empty() && extUpper[0] == L'.') extUpper.erase(0, 1);
+                    std::transform(extUpper.begin(), extUpper.end(), extUpper.begin(), ::towupper);
+
+                    wchar_t infoBuf[128];
+                    StringCchPrintfW(infoBuf, 128, L"%d × %d  ·  %s  ·  %s",
+                                     m_imgWidth, m_imgHeight, extUpper.c_str(), Util::FormatBytes(fileSize).c_str());
+                    m_imgInfoText = infoBuf;
+                    return true;
+                } else {
+                    DeleteObject(hbmp);
+                }
+            }
+        }
+    }
+
     return true;
 }
 
@@ -321,7 +383,8 @@ void PreviewHandlerHost::DrawFallback(HDC hdc, const RECT& rc) {
             // Keep aspect ratio
             double scaleW = (double)availW / m_imgWidth;
             double scaleH = (double)availH / m_imgHeight;
-            double scale = std::min(std::min(scaleW, scaleH), 1.0); // Don't upscale small icons excessively
+            double scale = std::min(scaleW, scaleH);
+            if (scale > 2.0) scale = 2.0;
 
             int drawW = std::max(1, (int)(m_imgWidth * scale));
             int drawH = std::max(1, (int)(m_imgHeight * scale));
@@ -335,8 +398,27 @@ void PreviewHandlerHost::DrawFallback(HDC hdc, const RECT& rc) {
             int prevMode = SetStretchBltMode(hdc, HALFTONE);
             SetBrushOrgEx(hdc, 0, 0, nullptr);
 
-            BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
-            if (!AlphaBlend(hdc, drawX, drawY, drawW, drawH, hdcMem, 0, 0, m_imgWidth, m_imgHeight, bf)) {
+            // Check if bitmap actually has non-zero alpha values
+            bool hasAlpha = false;
+            DIBSECTION ds = { 0 };
+            if (GetObject(m_hFallbackBitmap, sizeof(ds), &ds) == sizeof(ds) && ds.dsBm.bmBits && ds.dsBm.bmBitsPixel == 32) {
+                uint32_t* pPixels = (uint32_t*)ds.dsBm.bmBits;
+                int totalPixels = ds.dsBm.bmWidth * ds.dsBm.bmHeight;
+                int step = (totalPixels > 1024) ? (totalPixels / 512) : 1;
+                for (int i = 0; i < totalPixels; i += step) {
+                    if (((pPixels[i] >> 24) & 0xFF) > 0) {
+                        hasAlpha = true;
+                        break;
+                    }
+                }
+            }
+
+            if (hasAlpha) {
+                BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+                if (!AlphaBlend(hdc, drawX, drawY, drawW, drawH, hdcMem, 0, 0, m_imgWidth, m_imgHeight, bf)) {
+                    StretchBlt(hdc, drawX, drawY, drawW, drawH, hdcMem, 0, 0, m_imgWidth, m_imgHeight, SRCCOPY);
+                }
+            } else {
                 StretchBlt(hdc, drawX, drawY, drawW, drawH, hdcMem, 0, 0, m_imgWidth, m_imgHeight, SRCCOPY);
             }
 
