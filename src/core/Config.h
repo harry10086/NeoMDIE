@@ -249,7 +249,7 @@ public:
     bool showToolbarSearch = true;
     bool showStatusBar = true;
     bool allowDuplicateTabs = true;
-    int tabDoubleClickAction = 0; // 0: Close, 1: Lock, 2: Refresh, 3: Up
+    int tabDoubleClickAction = 0; // 0: Close, 1: Refresh, 2: Toggle Pin, 3: Do Nothing
     bool autoExpandTree = true;
     bool searchSubfoldersDefault = false;
 

@@ -901,11 +901,14 @@ void SettingsDialog::CreateControls(HWND hwnd) {
 
   s_hViewModeCombo = createCombo(5, marginX, y4, 340, 240);
   SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"详细信息" : L"Details"));
+  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"超大图标" : L"Extra Large Icons"));
   SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"大图标" : L"Large Icons"));
+  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"中等图标" : L"Medium Icons"));
   SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"小图标" : L"Small Icons"));
   SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"列表" : L"List"));
   SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"平铺" : L"Tiles"));
-  SendMessageW(s_hViewModeCombo, CB_SETCURSEL, std::clamp(cfg.viewMode, 0, 4), 0);
+  SendMessageW(s_hViewModeCombo, CB_ADDSTRING, 0, (LPARAM)(zh ? L"内容" : L"Content"));
+  SendMessageW(s_hViewModeCombo, CB_SETCURSEL, std::clamp(cfg.viewMode, 0, 7), 0);
   y4 += lineH + spacing * 2;
 
   createLabel(5, zh ? L"列表显示选项:" : L"List Display Options:", marginX, y4, contentW, lineH, true);

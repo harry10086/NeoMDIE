@@ -2,14 +2,77 @@
 #include "FileListView.h"
 #include "resource.h"
 #include <unordered_set>
+#include <propkey.h>
+#include <propsys.h>
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "msimg32.lib")
-#pragma comment(lib, "msimg32.lib")
+#pragma comment(lib, "propsys.lib")
 #include "Theme.h"
 #include "..\core\I18n.h"
 #include "..\core\ShellUtils.h"
 
 const UINT FileListView::WM_NOTIFY_DIR_CHANGED;
 const UINT FileListView::WM_NOTIFY_FOLDER_SIZE;
+
+static void DrawThumbnail(HDC hdc, const RECT& rcIcon, HBITMAP hbmp, bool isSelected, bool isHot, HWND hwnd) {
+    BITMAP bm;
+    if (!GetObject(hbmp, sizeof(bm), &bm) || bm.bmWidth <= 0 || bm.bmHeight <= 0) return;
+
+    int iconW = rcIcon.right - rcIcon.left;
+    int iconH = rcIcon.bottom - rcIcon.top;
+    if (iconW <= 0 || iconH <= 0) return;
+
+    // Aspect ratio fit inside rcIcon
+    int drawW = iconW;
+    int drawH = iconH;
+    if ((int64_t)bm.bmWidth * iconH > (int64_t)bm.bmHeight * iconW) {
+        drawW = iconW;
+        drawH = (int)((int64_t)bm.bmHeight * iconW / bm.bmWidth);
+    } else {
+        drawH = iconH;
+        drawW = (int)((int64_t)bm.bmWidth * iconH / bm.bmHeight);
+    }
+    if (drawW < 1) drawW = 1;
+    if (drawH < 1) drawH = 1;
+
+    int posX = rcIcon.left + (iconW - drawW) / 2;
+    int posY = rcIcon.top + (iconH - drawH) / 2;
+
+    // Erase default system icon behind thumbnail
+    HBRUSH hbrBg = isSelected ? Theme::Get().BrushSelected() : (isHot ? Theme::Get().BrushHover() : Theme::Get().BrushBackground());
+    FillRect(hdc, &rcIcon, hbrBg);
+
+    // High quality bicubic rendering via GDI+
+    Gdiplus::Graphics g(hdc);
+    g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeHighQuality);
+
+    DIBSECTION ds = { 0 };
+    if (GetObject(hbmp, sizeof(ds), &ds) == sizeof(ds) && ds.dsBm.bmBits && ds.dsBm.bmBitsPixel == 32) {
+        uint32_t* pPixels = (uint32_t*)ds.dsBm.bmBits;
+        int totalPixels = ds.dsBm.bmWidth * ds.dsBm.bmHeight;
+        bool hasNonZeroAlpha = false;
+        int step = (totalPixels > 1024) ? (totalPixels / 512) : 1;
+        for (int i = 0; i < totalPixels; i += step) {
+            BYTE a = (pPixels[i] >> 24) & 0xFF;
+            if (a > 0) {
+                hasNonZeroAlpha = true;
+                break;
+            }
+        }
+
+        if (hasNonZeroAlpha) {
+            Gdiplus::Bitmap gpBmp(ds.dsBm.bmWidth, ds.dsBm.bmHeight, ds.dsBm.bmWidthBytes, PixelFormat32bppPARGB, (BYTE*)ds.dsBm.bmBits);
+            g.DrawImage(&gpBmp, posX, posY, drawW, drawH);
+            return;
+        }
+    }
+
+    Gdiplus::Bitmap gpBmp(hbmp, nullptr);
+    g.DrawImage(&gpBmp, posX, posY, drawW, drawH);
+}
 
 static void DrawSmoothCheckmark(HDC hdc, const RECT& rcBox, HWND hwnd) {
     int iconH = Theme::Get().Scale(10, hwnd);
@@ -40,6 +103,7 @@ FileListView::FileListView() {
 
 FileListView::~FileListView() {
     SaveColumnWidths();
+    ClearThumbnails();
     if (m_hFontText) {
         DeleteObject(m_hFontText);
         m_hFontText = nullptr;
@@ -683,7 +747,7 @@ void FileListView::ApplyTheme() {
     COLORREF bg = Theme::Get().ClrBackground();
     COLORREF text = Theme::Get().ClrTextPrimary();
     ListView_SetBkColor(m_hwnd, bg);
-    ListView_SetTextBkColor(m_hwnd, bg);
+    ListView_SetTextBkColor(m_hwnd, m_viewMode == 0 ? bg : CLR_NONE);
     ListView_SetTextColor(m_hwnd, text);
 
     HWND hHeader = ListView_GetHeader(m_hwnd);
@@ -719,6 +783,7 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
 
     m_calcSize.CancelAll();
     CancelCustomIconLoader();
+    ClearThumbnails();
     m_currentPath = normalized;
 
     if (recordHistory) {
@@ -758,8 +823,28 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
             isNetworkPath = true;
         }
     }
+    bool isVirtual = ShellUtils::IsVirtualShellPath(normalized);
+    bool isSlowPath = isNetworkPath || isVirtual;
 
-    if (isNetworkPath) {
+    if (isSlowPath) {
+        std::vector<NeoShellItem> cachedItems;
+        if (isVirtual && ShellUtils::GetCachedShellNamespace(normalized, m_showHidden, cachedItems, m_hideDotFiles)) {
+            // Instant cache hit! No UI freeze, no repeated USB MTP queries
+            m_isNavLoading = false;
+            m_allItems = std::move(cachedItems);
+            SortItems();
+            UpdateHeaderSortArrow();
+            ListView_SetItemCountEx(m_hwnd, 0, 0);
+            ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+            ApplyFilter();
+            StartCustomIconLoader();
+            StartThumbnailLoader();
+            if (onPathChanged) {
+                onPathChanged(m_currentPath);
+            }
+            return true;
+        }
+
         m_isNavLoading = true;
         m_allItems.clear();
         m_filteredIndices.clear();
@@ -767,7 +852,9 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
         ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
 
         if (onStatusText) {
-            onStatusText(I18n::Get().IsChinese() ? L"正在连接网络共享目录..." : L"Connecting to network share...");
+            onStatusText(isVirtual
+                ? (I18n::Get().IsChinese() ? L"正在读取便携设备..." : L"Reading portable device...")
+                : (I18n::Get().IsChinese() ? L"正在连接网络共享目录..." : L"Connecting to network share..."));
         }
 
         if (onPathChanged) {
@@ -778,10 +865,14 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
 
         int gen = ++m_navGeneration;
         std::thread([hwnd = m_hwnd, path = normalized, showHidden = m_showHidden, hideDot = m_hideDotFiles, gen]() {
+            HRESULT hrCom = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
             std::vector<NeoShellItem> items;
             bool ok = ShellUtils::EnumerateDirectory(path, showHidden, items, hideDot);
             auto* pRes = new AsyncNavResult{ gen, path, ok, std::move(items) };
             PostMessageW(hwnd, WM_ASYNC_NAV_COMPLETE, 0, (LPARAM)pRes);
+            if (SUCCEEDED(hrCom)) {
+                CoUninitialize();
+            }
         }).detach();
 
         return true;
@@ -801,17 +892,20 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
     ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     ApplyFilter();
 
-    m_watcher.Watch(normalized, m_hwnd, WM_NOTIFY_DIR_CHANGED);
+    if (!ShellUtils::IsVirtualShellPath(normalized)) {
+        m_watcher.Watch(normalized, m_hwnd, WM_NOTIFY_DIR_CHANGED);
 
-    if (m_calcFolderSize && normalized != L"此电脑" && normalized != L"This PC") {
-        for (const auto& item : m_allItems) {
-            if (item.isFolder && !item.isDrive) {
-                m_calcSize.RequestFolderSize(item.fullPath, m_hwnd, WM_NOTIFY_FOLDER_SIZE);
+        if (m_calcFolderSize && normalized != L"此电脑" && normalized != L"This PC") {
+            for (const auto& item : m_allItems) {
+                if (item.isFolder && !item.isDrive) {
+                    m_calcSize.RequestFolderSize(item.fullPath, m_hwnd, WM_NOTIFY_FOLDER_SIZE);
+                }
             }
         }
     }
 
     StartCustomIconLoader();
+    StartThumbnailLoader();
 
     if (onPathChanged) {
         onPathChanged(m_currentPath);
@@ -826,6 +920,7 @@ void FileListView::Refresh() {
     }
     m_calcSize.CancelAll();
     CancelCustomIconLoader();
+    ClearThumbnails();
 
     bool isNetworkPath = (m_currentPath.length() >= 2 && m_currentPath[0] == L'\\' && m_currentPath[1] == L'\\');
     if (!isNetworkPath && m_currentPath.length() >= 2 && m_currentPath[1] == L':') {
@@ -834,18 +929,29 @@ void FileListView::Refresh() {
             isNetworkPath = true;
         }
     }
-    if (isNetworkPath) {
+    bool isVirtual = ShellUtils::IsVirtualShellPath(m_currentPath);
+    bool isSlowPath = isNetworkPath || isVirtual;
+    if (isSlowPath) {
+        if (isVirtual) {
+            ShellUtils::InvalidateVirtualShellCache(m_currentPath);
+        }
         m_isNavLoading = true;
         if (onStatusText) {
-            onStatusText(I18n::Get().IsChinese() ? L"正在刷新网络共享目录..." : L"Refreshing network share...");
+            onStatusText(isVirtual
+                ? (I18n::Get().IsChinese() ? L"正在刷新便携设备..." : L"Refreshing portable device...")
+                : (I18n::Get().IsChinese() ? L"正在刷新网络共享目录..." : L"Refreshing network share..."));
         }
         InvalidateRect(m_hwnd, nullptr, TRUE);
         int gen = ++m_navGeneration;
         std::thread([hwnd = m_hwnd, path = m_currentPath, showHidden = m_showHidden, hideDot = m_hideDotFiles, gen]() {
+            HRESULT hrCom = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
             std::vector<NeoShellItem> items;
             bool ok = ShellUtils::EnumerateDirectory(path, showHidden, items, hideDot);
             auto* pRes = new AsyncNavResult{ gen, path, ok, std::move(items) };
             PostMessageW(hwnd, WM_ASYNC_NAV_COMPLETE, 0, (LPARAM)pRes);
+            if (SUCCEEDED(hrCom)) {
+                CoUninitialize();
+            }
         }).detach();
         return;
     }
@@ -881,6 +987,9 @@ void FileListView::Refresh() {
             }
         }
     }
+
+    StartCustomIconLoader();
+    StartThumbnailLoader();
 }
 
 void FileListView::GoBack() {
@@ -1040,22 +1149,79 @@ void FileListView::ReSort() {
 }
 
 void FileListView::SetViewMode(int mode) {
-    m_viewMode = mode;
+    m_viewMode = std::clamp(mode, 0, 7);
     if (!m_currentPath.empty()) {
-        Config::Get().SetFolderViewMode(m_currentPath, mode);
+        Config::Get().SetFolderViewMode(m_currentPath, m_viewMode);
     }
     DWORD style = GetWindowLongW(m_hwnd, GWL_STYLE) & ~LVS_TYPEMASK;
     DWORD lvView = LV_VIEW_DETAILS;
-    switch (mode) {
-    case 0: style |= LVS_REPORT; lvView = LV_VIEW_DETAILS; break;
-    case 1: style |= LVS_ICON; lvView = LV_VIEW_ICON; break;
-    case 2: style |= LVS_SMALLICON; lvView = LV_VIEW_SMALLICON; break;
-    case 3: style |= LVS_LIST; lvView = LV_VIEW_LIST; break;
-    case 4: style |= LVS_ICON; lvView = LV_VIEW_TILE; break; // Tiles
-    default: style |= LVS_REPORT; lvView = LV_VIEW_DETAILS; break;
+    HIMAGELIST himlNormal = ShellUtils::GetSystemImageList(SHIL_LARGE);
+    HIMAGELIST himlSmall = ShellUtils::GetSystemImageList(SHIL_SMALL);
+
+    switch (m_viewMode) {
+    case 0: // Details (详细信息)
+        style |= LVS_REPORT;
+        lvView = LV_VIEW_DETAILS;
+        break;
+    case 1: // Extra Large Icons (超大图标 256x256)
+        style |= LVS_ICON | LVS_AUTOARRANGE;
+        lvView = LV_VIEW_ICON;
+        himlNormal = ShellUtils::GetSystemImageList(SHIL_JUMBO);
+        break;
+    case 2: // Large Icons (大图标 96x96)
+        style |= LVS_ICON | LVS_AUTOARRANGE;
+        lvView = LV_VIEW_ICON;
+        himlNormal = ShellUtils::GetSystemImageList(SHIL_EXTRALARGE);
+        break;
+    case 3: // Medium Icons (中等图标 48x48)
+        style |= LVS_ICON | LVS_AUTOARRANGE;
+        lvView = LV_VIEW_ICON;
+        himlNormal = ShellUtils::GetSystemImageList(SHIL_EXTRALARGE);
+        break;
+    case 4: // Small Icons (小图标 16x16)
+        style |= LVS_ICON;
+        lvView = LV_VIEW_TILE;
+        himlNormal = ShellUtils::GetSystemImageList(SHIL_SMALL);
+        break;
+    case 5: // List (列表)
+        style |= LVS_LIST;
+        lvView = LV_VIEW_LIST;
+        break;
+    case 6: // Tiles (平铺)
+        style |= LVS_ICON;
+        lvView = LV_VIEW_TILE;
+        himlNormal = ShellUtils::GetSystemImageList(SHIL_EXTRALARGE);
+        break;
+    case 7: // Content (内容)
+        style |= LVS_ICON;
+        lvView = LV_VIEW_TILE;
+        himlNormal = ShellUtils::GetSystemImageList(SHIL_LARGE);
+        break;
+    default:
+        style |= LVS_REPORT;
+        lvView = LV_VIEW_DETAILS;
+        break;
     }
+
+    ListView_SetImageList(m_hwnd, himlNormal, LVSIL_NORMAL);
+    ListView_SetImageList(m_hwnd, himlSmall, LVSIL_SMALL);
     SetWindowLongW(m_hwnd, GWL_STYLE, style);
     SendMessageW(m_hwnd, LVM_SETVIEW, lvView, 0);
+
+    if (m_viewMode == 0) {
+        ListView_SetTextBkColor(m_hwnd, Theme::Get().ClrBackground());
+    } else {
+        ListView_SetTextBkColor(m_hwnd, CLR_NONE);
+    }
+
+    ApplyViewMetrics();
+
+    if (m_viewMode == 1 || m_viewMode == 2 || m_viewMode == 3 || m_viewMode == 6 || m_viewMode == 7) {
+        StartThumbnailLoader();
+    } else {
+        CancelThumbnailLoader();
+    }
+
     UpdateHeaderSortArrow();
     UpdateHeaderCheckBox();
     InvalidateRect(m_hwnd, nullptr, TRUE);
@@ -1140,7 +1306,15 @@ void FileListView::ApplyViewMetrics() {
     lfMetric.lfHeight = -metricH;
     HFONT hNewMetricFont = CreateFontIndirectW(&lfMetric);
 
-    SendMessageW(m_hwnd, WM_SETFONT, (WPARAM)hNewMetricFont, TRUE);
+    // Set font on ListView control:
+    // IMPORTANT: Details view (0) uses m_hFontRowMetric to control row height,
+    // while all other views (Extra Large, Large, Medium, Small, List, Tiles, Content)
+    // MUST use m_hFontText so labels and filenames match Windows Explorer standard size!
+    if (m_viewMode == 0) {
+        SendMessageW(m_hwnd, WM_SETFONT, (WPARAM)hNewMetricFont, TRUE);
+    } else {
+        SendMessageW(m_hwnd, WM_SETFONT, (WPARAM)hNewTextFont, TRUE);
+    }
 
     if (m_hFontRowMetric) {
         DeleteObject(m_hFontRowMetric);
@@ -1153,17 +1327,85 @@ void FileListView::ApplyViewMetrics() {
         SendMessageW(hHeader, WM_SETFONT, (WPARAM)Theme::Get().GetUIFont(m_hwnd), TRUE);
     }
 
-    // 3. Icon spacing in Large Icon / Tile views
-    int spacingX = (density == 0) ? 72 : ((density == 2) ? 120 : 96);
-    int spacingY = (density == 0) ? 60 : ((density == 2) ? 104 : 80);
-    if (scale == 2) {
-        spacingX = (spacingX * 5) / 4;
-        spacingY = (spacingY * 5) / 4;
-    } else if (scale == 0) {
-        spacingX = (spacingX * 9) / 10;
-        spacingY = (spacingY * 9) / 10;
+    // 3. Spacing & layout metrics based on view mode (matching Windows Explorer)
+    if (m_viewMode == 1) { // Extra Large Icons (256x256 Jumbo)
+        int spX = 280;
+        int spY = 345;
+        if (scale == 2) { spX = spX * 5 / 4; spY = spY * 5 / 4; }
+        else if (scale == 0) { spX = spX * 9 / 10; spY = spY * 9 / 10; }
+        ListView_SetIconSpacing(m_hwnd, Theme::Get().Scale(spX, m_hwnd), Theme::Get().Scale(spY, m_hwnd));
+        SendMessageW(m_hwnd, LVM_ARRANGE, LVA_DEFAULT, 0);
+    } else if (m_viewMode == 2) { // Large Icons (96x96)
+        int spX = (density == 0) ? 130 : ((density == 2) ? 165 : 145);
+        int spY = (density == 0) ? 150 : ((density == 2) ? 190 : 170);
+        if (scale == 2) { spX = spX * 5 / 4; spY = spY * 5 / 4; }
+        else if (scale == 0) { spX = spX * 9 / 10; spY = spY * 9 / 10; }
+        ListView_SetIconSpacing(m_hwnd, Theme::Get().Scale(spX, m_hwnd), Theme::Get().Scale(spY, m_hwnd));
+        SendMessageW(m_hwnd, LVM_ARRANGE, LVA_DEFAULT, 0);
+    } else if (m_viewMode == 3) { // Medium Icons (48x48)
+        int spX = (density == 0) ? 110 : ((density == 2) ? 140 : 124);
+        int spY = (density == 0) ? 115 : ((density == 2) ? 145 : 130);
+        if (scale == 2) { spX = spX * 5 / 4; spY = spY * 5 / 4; }
+        else if (scale == 0) { spX = spX * 9 / 10; spY = spY * 9 / 10; }
+        ListView_SetIconSpacing(m_hwnd, Theme::Get().Scale(spX, m_hwnd), Theme::Get().Scale(spY, m_hwnd));
+        SendMessageW(m_hwnd, LVM_ARRANGE, LVA_DEFAULT, 0);
+    } else if (m_viewMode == 4) { // Small Icons (小图标 16x16)
+        int tileW = Theme::Get().Scale((density == 0) ? 220 : ((density == 2) ? 320 : 260), m_hwnd);
+        int tileH = Theme::Get().Scale((density == 0) ? 22 : ((density == 2) ? 28 : 24), m_hwnd);
+        if (scale == 2) { tileW = tileW * 5 / 4; tileH = tileH * 5 / 4; }
+        else if (scale == 0) { tileW = tileW * 9 / 10; tileH = tileH * 9 / 10; }
+        LVTILEVIEWINFO tvi = { 0 };
+        tvi.cbSize = sizeof(LVTILEVIEWINFO);
+        tvi.dwMask = LVTVIM_TILESIZE | LVTVIM_COLUMNS | LVTVIM_LABELMARGIN;
+        tvi.dwFlags = LVTVIF_FIXEDSIZE;
+        tvi.sizeTile.cx = tileW;
+        tvi.sizeTile.cy = tileH;
+        tvi.cLines = 0; // Single line, filename only without truncation!
+        tvi.rcLabelMargin.left = Theme::Get().Scale(4, m_hwnd);
+        tvi.rcLabelMargin.top = Theme::Get().Scale(2, m_hwnd);
+        tvi.rcLabelMargin.right = Theme::Get().Scale(4, m_hwnd);
+        tvi.rcLabelMargin.bottom = Theme::Get().Scale(2, m_hwnd);
+        SendMessageW(m_hwnd, LVM_SETTILEVIEWINFO, 0, (LPARAM)&tvi);
+    } else if (m_viewMode == 5) { // List (列表 16x16)
+        int colW = Theme::Get().Scale((density == 0) ? 220 : ((density == 2) ? 320 : 260), m_hwnd);
+        if (scale == 2) { colW = colW * 5 / 4; }
+        else if (scale == 0) { colW = colW * 9 / 10; }
+        ListView_SetColumnWidth(m_hwnd, 0, colW);
+    } else if (m_viewMode == 6) { // Tiles (平铺)
+        int tileW = Theme::Get().Scale((density == 0) ? 240 : ((density == 2) ? 320 : 280), m_hwnd);
+        int tileH = Theme::Get().Scale((density == 0) ? 50 : ((density == 2) ? 64 : 56), m_hwnd);
+        if (scale == 2) { tileW = tileW * 5 / 4; tileH = tileH * 5 / 4; }
+        else if (scale == 0) { tileW = tileW * 9 / 10; tileH = tileH * 9 / 10; }
+        LVTILEVIEWINFO tvi = { 0 };
+        tvi.cbSize = sizeof(LVTILEVIEWINFO);
+        tvi.dwMask = LVTVIM_TILESIZE | LVTVIM_COLUMNS | LVTVIM_LABELMARGIN;
+        tvi.dwFlags = LVTVIF_FIXEDSIZE;
+        tvi.sizeTile.cx = tileW;
+        tvi.sizeTile.cy = tileH;
+        tvi.cLines = 2; // Show 2 extra lines under title (Type and Size)
+        tvi.rcLabelMargin.left = Theme::Get().Scale(6, m_hwnd);
+        tvi.rcLabelMargin.top = Theme::Get().Scale(2, m_hwnd);
+        tvi.rcLabelMargin.right = Theme::Get().Scale(6, m_hwnd);
+        tvi.rcLabelMargin.bottom = Theme::Get().Scale(2, m_hwnd);
+        SendMessageW(m_hwnd, LVM_SETTILEVIEWINFO, 0, (LPARAM)&tvi);
+    } else if (m_viewMode == 7) { // Content (内容)
+        RECT rcClient = { 0 };
+        GetClientRect(m_hwnd, &rcClient);
+        int clientW = rcClient.right - rcClient.left;
+        int tileW = clientW - GetSystemMetrics(SM_CXVSCROLL) - Theme::Get().Scale(16, m_hwnd);
+        if (tileW < Theme::Get().Scale(300, m_hwnd)) tileW = Theme::Get().Scale(300, m_hwnd);
+        int tileH = Theme::Get().Scale((density == 0) ? 46 : ((density == 2) ? 58 : 52), m_hwnd);
+        if (scale == 2) { tileH = tileH * 5 / 4; }
+        else if (scale == 0) { tileH = tileH * 9 / 10; }
+
+        LVTILEVIEWINFO tvi = { 0 };
+        tvi.cbSize = sizeof(LVTILEVIEWINFO);
+        tvi.dwMask = LVTVIM_TILESIZE;
+        tvi.dwFlags = LVTVIF_FIXEDSIZE;
+        tvi.sizeTile.cx = tileW;
+        tvi.sizeTile.cy = tileH;
+        SendMessageW(m_hwnd, LVM_SETTILEVIEWINFO, 0, (LPARAM)&tvi);
     }
-    ListView_SetIconSpacing(m_hwnd, Theme::Get().Scale(spacingX, m_hwnd), Theme::Get().Scale(spacingY, m_hwnd));
 
     InvalidateRect(m_hwnd, nullptr, TRUE);
 }
@@ -1545,12 +1787,13 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
             break;
 
         case CMD_BG_VIEW_DETAILS: SetViewMode(0); break;
-        case CMD_BG_VIEW_LARGE:   SetViewMode(1); break;
-        case CMD_BG_VIEW_SMALL:   SetViewMode(2); break;
-        case CMD_BG_VIEW_LIST:    SetViewMode(3); break;
-        case CMD_BG_VIEW_TILES:   SetViewMode(4); break;
         case CMD_BG_VIEW_XLARGE:  SetViewMode(1); break;
-        case CMD_BG_VIEW_MEDIUM:  SetViewMode(0); break;
+        case CMD_BG_VIEW_LARGE:   SetViewMode(2); break;
+        case CMD_BG_VIEW_MEDIUM:  SetViewMode(3); break;
+        case CMD_BG_VIEW_SMALL:   SetViewMode(4); break;
+        case CMD_BG_VIEW_LIST:    SetViewMode(5); break;
+        case CMD_BG_VIEW_TILES:   SetViewMode(6); break;
+        case CMD_BG_VIEW_CONTENT: SetViewMode(7); break;
         case CMD_BG_VIEW_ITEM_CHECKBOXES:
             if (onCustomCommand) {
                 onCustomCommand(CMD_BG_VIEW_ITEM_CHECKBOXES, L"");
@@ -1798,6 +2041,127 @@ void FileListView::StartCustomIconLoader() {
     });
 }
 
+void FileListView::CancelThumbnailLoader() {
+    m_thumbNavGeneration++;
+    if (m_thumbThread.joinable()) {
+        m_thumbThread.detach();
+    }
+}
+
+void FileListView::ClearThumbnails() {
+    CancelThumbnailLoader();
+    std::lock_guard<std::mutex> lock(m_thumbMutex);
+    for (auto& pair : m_thumbnailMap) {
+        if (pair.second) {
+            DeleteObject(pair.second);
+        }
+    }
+    m_thumbnailMap.clear();
+    m_dimensionsMap.clear();
+}
+
+HBITMAP FileListView::GetThumbnail(const std::wstring& path) {
+    std::lock_guard<std::mutex> lock(m_thumbMutex);
+    auto it = m_thumbnailMap.find(path);
+    if (it != m_thumbnailMap.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+std::wstring FileListView::GetDimensions(const std::wstring& path) {
+    std::lock_guard<std::mutex> lock(m_thumbMutex);
+    auto it = m_dimensionsMap.find(path);
+    if (it != m_dimensionsMap.end()) {
+        return it->second;
+    }
+    return L"";
+}
+
+void FileListView::StartThumbnailLoader() {
+    CancelThumbnailLoader();
+
+    // Only load thumbnails for icon, tiles, and content view modes
+    if (m_viewMode != 1 && m_viewMode != 2 && m_viewMode != 3 && m_viewMode != 6 && m_viewMode != 7) {
+        return;
+    }
+
+    struct ThumbTask {
+        std::wstring fullPath;
+        bool isFolder;
+    };
+    std::vector<ThumbTask> tasks;
+    for (const auto& item : m_allItems) {
+        if (item.isDrive) continue;
+        if (ShellUtils::IsVirtualShellPath(item.fullPath) && item.isFolder) continue;
+        if (item.isFolder || ShellUtils::CanHaveThumbnail(item.ext)) {
+            // Check if already in cache
+            {
+                std::lock_guard<std::mutex> lock(m_thumbMutex);
+                if (m_thumbnailMap.count(item.fullPath) > 0) continue;
+            }
+            tasks.push_back({ item.fullPath, item.isFolder });
+        }
+    }
+
+    if (tasks.empty()) return;
+
+    int curGen = m_thumbNavGeneration.load();
+    HWND hwnd = m_hwnd;
+    int targetSize = 256;
+    bool isContentView = (m_viewMode == 7);
+
+    m_thumbThread = std::thread([hwnd, curGen, tasks = std::move(tasks), targetSize, isContentView, this]() {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        bool updatedAny = false;
+        DWORD lastNotify = GetTickCount();
+
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            if (m_thumbNavGeneration.load() != curGen) {
+                CoUninitialize();
+                return;
+            }
+
+            HBITMAP hbmp = ShellUtils::GetThumbnail(tasks[i].fullPath, targetSize);
+            if (hbmp) {
+                std::lock_guard<std::mutex> lock(m_thumbMutex);
+                m_thumbnailMap[tasks[i].fullPath] = hbmp;
+                updatedAny = true;
+            }
+
+            if (isContentView && !tasks[i].isFolder && !ShellUtils::IsVirtualShellPath(tasks[i].fullPath)) {
+                IShellItem2* pItem2 = nullptr;
+                if (SUCCEEDED(SHCreateItemFromParsingName(tasks[i].fullPath.c_str(), nullptr, IID_PPV_ARGS(&pItem2)))) {
+                    LPWSTR pszDim = nullptr;
+                    if (SUCCEEDED(pItem2->GetString(PKEY_Image_Dimensions, &pszDim)) && pszDim) {
+                        std::wstring cleanDim;
+                        for (int k = 0; pszDim[k]; ++k) {
+                            if (pszDim[k] >= 0x20 && pszDim[k] < 0x2000) {
+                                cleanDim += pszDim[k];
+                            }
+                        }
+                        CoTaskMemFree(pszDim);
+                        if (!cleanDim.empty()) {
+                            std::lock_guard<std::mutex> lock(m_thumbMutex);
+                            m_dimensionsMap[tasks[i].fullPath] = cleanDim;
+                            updatedAny = true;
+                        }
+                    }
+                    pItem2->Release();
+                }
+            }
+
+            DWORD now = GetTickCount();
+            if (updatedAny && (now - lastNotify >= 80 || i == tasks.size() - 1)) {
+                PostMessageW(hwnd, WM_NOTIFY_THUMBNAIL_BATCH, (WPARAM)curGen, 0);
+                lastNotify = now;
+                updatedAny = false;
+            }
+        }
+        CoUninitialize();
+    });
+}
+
 LRESULT CALLBACK FileListView::EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
@@ -1806,6 +2170,25 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
     FileListView* pThis = (FileListView*)dwRefData;
 
     switch (msg) {
+    case WM_SIZE: {
+        LRESULT res = DefSubclassProc(hwnd, msg, wParam, lParam);
+        if (pThis && pThis->m_viewMode == 7) {
+            RECT rcClient = { 0 };
+            GetClientRect(hwnd, &rcClient);
+            int clientW = rcClient.right - rcClient.left;
+            int tileW = clientW - GetSystemMetrics(SM_CXVSCROLL) - Theme::Get().Scale(16, hwnd);
+            if (tileW < Theme::Get().Scale(300, hwnd)) tileW = Theme::Get().Scale(300, hwnd);
+            int tileH = Theme::Get().Scale(52, hwnd);
+            LVTILEVIEWINFO tvi = { 0 };
+            tvi.cbSize = sizeof(LVTILEVIEWINFO);
+            tvi.dwMask = LVTVIM_TILESIZE;
+            tvi.dwFlags = LVTVIF_FIXEDSIZE;
+            tvi.sizeTile.cx = tileW;
+            tvi.sizeTile.cy = tileH;
+            SendMessageW(hwnd, LVM_SETTILEVIEWINFO, 0, (LPARAM)&tvi);
+        }
+        return res;
+    }
     case WM_PAINT: {
         LRESULT res = DefSubclassProc(hwnd, msg, wParam, lParam);
         if (pThis && pThis->m_isNavLoading) {
@@ -1911,6 +2294,96 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         lvhti.pt = { x, y };
         int hit = ListView_HitTest(hwnd, &lvhti);
 
+        auto isPointInBlankArea = [&](int px, int itemHit) -> bool {
+            if (itemHit < 0 || !pThis) return true;
+            if (pThis->m_viewMode == 7) { // Content view (内容)
+                RECT rcItem = { 0 };
+                ListView_GetItemRect(hwnd, itemHit, &rcItem, LVIR_BOUNDS);
+                if (itemHit >= 0 && itemHit < (int)pThis->m_filteredIndices.size()) {
+                    int idx = pThis->m_filteredIndices[itemHit];
+                    if (idx >= 0 && idx < (int)pThis->m_allItems.size()) {
+                        const auto& item = pThis->m_allItems[idx];
+                        int itemW = rcItem.right - rcItem.left;
+                        int iconX = rcItem.left + Theme::Get().Scale(16, hwnd);
+                        int col1Left = iconX + Theme::Get().Scale(32 + 12, hwnd);
+                        int col2Left = rcItem.left + itemW * 40 / 100;
+                        if (col2Left < col1Left + Theme::Get().Scale(140, hwnd)) {
+                            col2Left = col1Left + Theme::Get().Scale(140, hwnd);
+                        }
+                        int col3Left = rcItem.left + itemW * 75 / 100;
+                        if (col3Left < col2Left + Theme::Get().Scale(160, hwnd)) {
+                            col3Left = col2Left + Theme::Get().Scale(160, hwnd);
+                        }
+
+                        HDC hdc = GetDC(hwnd);
+                        HGDIOBJ oldFont = SelectObject(hdc, pThis->m_hFontText);
+                        SIZE szName = { 0 }, szCol2 = { 0 }, szCol3 = { 0 };
+                        GetTextExtentPoint32W(hdc, item.name.c_str(), (int)item.name.length(), &szName);
+                        std::wstring dateStr = Util::FormatFileTime(item.modifiedTime);
+                        std::wstring sizeStr = item.isFolder ? L"" : Util::FormatBytes(item.size);
+                        std::wstring dimStr = item.isFolder ? L"" : pThis->GetDimensions(item.fullPath);
+                        std::wstring typeStr = item.typeName.empty() ? (item.ext.empty() ? L"文件" : item.ext + L" 文件") : item.typeName;
+                        std::wstring col2Text = item.isFolder ? L"" : (L"类型: " + typeStr);
+                        GetTextExtentPoint32W(hdc, col2Text.c_str(), (int)col2Text.length(), &szCol2);
+                        if (!dimStr.empty()) {
+                            SIZE szDim = { 0 };
+                            std::wstring dimText = L"分辨率: " + dimStr;
+                            GetTextExtentPoint32W(hdc, dimText.c_str(), (int)dimText.length(), &szDim);
+                            if (szDim.cx > szCol2.cx) szCol2.cx = szDim.cx;
+                        }
+                        std::wstring col3Line1 = (item.isFolder || dimStr.empty()) ? (dateStr.empty() ? L"" : (L"修改日期: " + dateStr)) : L"";
+                        std::wstring col3Line2 = sizeStr.empty() ? L"" : (L"大小: " + sizeStr);
+                        GetTextExtentPoint32W(hdc, col3Line1.c_str(), (int)col3Line1.length(), &szCol3);
+                        SIZE szCol3L2 = { 0 };
+                        GetTextExtentPoint32W(hdc, col3Line2.c_str(), (int)col3Line2.length(), &szCol3L2);
+                        if (szCol3L2.cx > szCol3.cx) szCol3.cx = szCol3L2.cx;
+                        SelectObject(hdc, oldFont);
+                        ReleaseDC(hwnd, hdc);
+
+                        int col1TextRight = col1Left + szName.cx;
+                        int col2TextRight = col2Left + szCol2.cx;
+                        int col3TextRight = col3Left + szCol3.cx;
+
+                        if (px > col3TextRight + Theme::Get().Scale(16, hwnd)) return true;
+                        if (item.isFolder) {
+                            if (px > col1TextRight + Theme::Get().Scale(16, hwnd) && px < col3Left) return true;
+                        } else {
+                            if (px > col1TextRight + Theme::Get().Scale(16, hwnd) && px < col2Left) return true;
+                            if (px > col2TextRight + Theme::Get().Scale(16, hwnd) && px < col3Left) return true;
+                        }
+                        return false;
+                    }
+                }
+                return true;
+            } else if (pThis->m_viewMode == 0) { // Details view (详细信息)
+                HWND hHeader = ListView_GetHeader(hwnd);
+                if (hHeader) {
+                    int totalW = 0;
+                    int colCnt = Header_GetItemCount(hHeader);
+                    for (int i = 0; i < colCnt; ++i) {
+                        RECT rcCol = { 0 };
+                        Header_GetItemRect(hHeader, i, &rcCol);
+                        if (rcCol.right > totalW) totalW = rcCol.right;
+                    }
+                    if (px > totalW) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+        bool isBlank = (hit < 0) || isPointInBlankArea(x, hit);
+        if (isBlank) {
+            bool ctrl = (GetKeyState(VK_CONTROL) < 0);
+            bool shift = (GetKeyState(VK_SHIFT) < 0);
+            if (!ctrl && !shift) {
+                ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
+            }
+            SetFocus(hwnd);
+            return 0;
+        }
+
         if (Config::Get().showItemCheckBoxes && (lvhti.flags & LVHT_ONITEMSTATEICON) && hit >= 0) {
             SetFocus(hwnd);
             bool isSel = (ListView_GetItemState(hwnd, hit, LVIS_SELECTED) & LVIS_SELECTED) != 0;
@@ -1976,7 +2449,89 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         LVHITTESTINFO lvhti = { 0 };
         lvhti.pt = { x, y };
         int hit = ListView_HitTest(hwnd, &lvhti);
-        if (hit >= 0) {
+
+        auto isPointInBlankArea = [&](int px, int itemHit) -> bool {
+            if (itemHit < 0 || !pThis) return true;
+            if (pThis->m_viewMode == 7) { // Content view (内容)
+                RECT rcItem = { 0 };
+                ListView_GetItemRect(hwnd, itemHit, &rcItem, LVIR_BOUNDS);
+                if (itemHit >= 0 && itemHit < (int)pThis->m_filteredIndices.size()) {
+                    int idx = pThis->m_filteredIndices[itemHit];
+                    if (idx >= 0 && idx < (int)pThis->m_allItems.size()) {
+                        const auto& item = pThis->m_allItems[idx];
+                        int itemW = rcItem.right - rcItem.left;
+                        int iconX = rcItem.left + Theme::Get().Scale(16, hwnd);
+                        int col1Left = iconX + Theme::Get().Scale(32 + 12, hwnd);
+                        int col2Left = rcItem.left + itemW * 40 / 100;
+                        if (col2Left < col1Left + Theme::Get().Scale(140, hwnd)) {
+                            col2Left = col1Left + Theme::Get().Scale(140, hwnd);
+                        }
+                        int col3Left = rcItem.left + itemW * 75 / 100;
+                        if (col3Left < col2Left + Theme::Get().Scale(160, hwnd)) {
+                            col3Left = col2Left + Theme::Get().Scale(160, hwnd);
+                        }
+
+                        HDC hdc = GetDC(hwnd);
+                        HGDIOBJ oldFont = SelectObject(hdc, pThis->m_hFontText);
+                        SIZE szName = { 0 }, szCol2 = { 0 }, szCol3 = { 0 };
+                        GetTextExtentPoint32W(hdc, item.name.c_str(), (int)item.name.length(), &szName);
+                        std::wstring dateStr = Util::FormatFileTime(item.modifiedTime);
+                        std::wstring sizeStr = item.isFolder ? L"" : Util::FormatBytes(item.size);
+                        std::wstring dimStr = item.isFolder ? L"" : pThis->GetDimensions(item.fullPath);
+                        std::wstring typeStr = item.typeName.empty() ? (item.ext.empty() ? L"文件" : item.ext + L" 文件") : item.typeName;
+                        std::wstring col2Text = item.isFolder ? L"" : (L"类型: " + typeStr);
+                        GetTextExtentPoint32W(hdc, col2Text.c_str(), (int)col2Text.length(), &szCol2);
+                        if (!dimStr.empty()) {
+                            SIZE szDim = { 0 };
+                            std::wstring dimText = L"分辨率: " + dimStr;
+                            GetTextExtentPoint32W(hdc, dimText.c_str(), (int)dimText.length(), &szDim);
+                            if (szDim.cx > szCol2.cx) szCol2.cx = szDim.cx;
+                        }
+                        std::wstring col3Line1 = (item.isFolder || dimStr.empty()) ? (dateStr.empty() ? L"" : (L"修改日期: " + dateStr)) : L"";
+                        std::wstring col3Line2 = sizeStr.empty() ? L"" : (L"大小: " + sizeStr);
+                        GetTextExtentPoint32W(hdc, col3Line1.c_str(), (int)col3Line1.length(), &szCol3);
+                        SIZE szCol3L2 = { 0 };
+                        GetTextExtentPoint32W(hdc, col3Line2.c_str(), (int)col3Line2.length(), &szCol3L2);
+                        if (szCol3L2.cx > szCol3.cx) szCol3.cx = szCol3L2.cx;
+                        SelectObject(hdc, oldFont);
+                        ReleaseDC(hwnd, hdc);
+
+                        int col1TextRight = col1Left + szName.cx;
+                        int col2TextRight = col2Left + szCol2.cx;
+                        int col3TextRight = col3Left + szCol3.cx;
+
+                        if (px > col3TextRight + Theme::Get().Scale(16, hwnd)) return true;
+                        if (item.isFolder) {
+                            if (px > col1TextRight + Theme::Get().Scale(16, hwnd) && px < col3Left) return true;
+                        } else {
+                            if (px > col1TextRight + Theme::Get().Scale(16, hwnd) && px < col2Left) return true;
+                            if (px > col2TextRight + Theme::Get().Scale(16, hwnd) && px < col3Left) return true;
+                        }
+                        return false;
+                    }
+                }
+                return true;
+            } else if (pThis->m_viewMode == 0) { // Details view (详细信息)
+                HWND hHeader = ListView_GetHeader(hwnd);
+                if (hHeader) {
+                    int totalW = 0;
+                    int colCnt = Header_GetItemCount(hHeader);
+                    for (int i = 0; i < colCnt; ++i) {
+                        RECT rcCol = { 0 };
+                        Header_GetItemRect(hHeader, i, &rcCol);
+                        if (rcCol.right > totalW) totalW = rcCol.right;
+                    }
+                    if (px > totalW) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+        bool isBlank = (hit < 0) || isPointInBlankArea(x, hit);
+
+        if (hit >= 0 && !isBlank) {
             UINT state = ListView_GetItemState(hwnd, hit, LVIS_SELECTED);
             if (!(state & LVIS_SELECTED)) {
                 int curFocus = ListView_GetNextItem(hwnd, -1, LVNI_FOCUSED);
@@ -2164,7 +2719,7 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         break;
     }
     case WM_TIMER: {
-        if (wParam == 701 || wParam == 702) {
+        if (wParam == 701 || wParam == 702 || wParam == 703) {
             KillTimer(hwnd, wParam);
             pThis->Refresh();
             return 0;
@@ -2172,7 +2727,10 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         break;
     }
     case FileListView::WM_NOTIFY_DIR_CHANGED:
-        pThis->Refresh();
+        // Debounce directory change notifications so rapid file operations (copying/extracting)
+        // do not trigger repeated Refresh() storm
+        KillTimer(hwnd, 703);
+        SetTimer(hwnd, 703, 200, nullptr);
         return 0;
     case FileListView::WM_NOTIFY_FOLDER_SIZE:
         pThis->OnFolderSizeReady((FolderSizeResult*)lParam);
@@ -2216,6 +2774,7 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
                         }
                     }
                     pThis->StartCustomIconLoader();
+                    pThis->StartThumbnailLoader();
                 } else {
                     pThis->m_allItems.clear();
                     pThis->ApplyFilter();
@@ -2231,6 +2790,13 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
     case FileListView::WM_REFRESH_ICONS: {
         int gen = (int)wParam;
         if (gen == pThis->m_iconNavGeneration.load()) {
+            InvalidateRect(pThis->m_hwnd, nullptr, FALSE);
+        }
+        return 0;
+    }
+    case FileListView::WM_NOTIFY_THUMBNAIL_BATCH: {
+        int gen = (int)wParam;
+        if (gen == pThis->m_thumbNavGeneration.load()) {
             InvalidateRect(pThis->m_hwnd, nullptr, FALSE);
         }
         return 0;
@@ -2270,56 +2836,90 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     const auto& item = pThis->m_allItems[idx];
 
                     if (pDisp->item.mask & LVIF_TEXT) {
-                        static wchar_t s_buf[MAX_PATH * 2];
-                        s_buf[0] = L'\0';
-                        int colIdx = pDisp->item.iSubItem;
-                        if (colIdx >= 0 && colIdx < (int)pThis->m_activeColumns.size()) {
-                            ColumnId colId = pThis->m_activeColumns[colIdx];
-                            switch (colId) {
-                            case ColumnId::Name:
-                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.name.c_str());
-                                break;
-                            case ColumnId::DateModified:
-                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), Util::FormatFileTime(item.modifiedTime).c_str());
-                                break;
-                            case ColumnId::Type:
-                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.typeName.c_str());
-                                break;
-                            case ColumnId::Size:
+                        static wchar_t s_buf[8][MAX_PATH * 2];
+                        static size_t s_bufIdx = 0;
+                        wchar_t* buf = s_buf[(s_bufIdx++) & 7];
+                        buf[0] = L'\0';
+
+                        if (pThis->m_viewMode == 7) { // Content view (内容)
+                            if (pDisp->item.iSubItem == 0) {
+                                StringCchCopyW(buf, MAX_PATH * 2, item.name.c_str());
+                            } else {
+                                buf[0] = L'\0';
+                            }
+                        } else if (pThis->m_viewMode == 6) { // Tiles view (平铺)
+                            if (pDisp->item.iSubItem == 0) {
+                                StringCchCopyW(buf, MAX_PATH * 2, item.name.c_str());
+                            } else if (pDisp->item.iSubItem == 1) {
+                                // Line 2: Type
+                                StringCchCopyW(buf, MAX_PATH * 2, item.typeName.c_str());
+                            } else if (pDisp->item.iSubItem == 2) {
+                                // Line 3: Size
                                 if (item.isDrive) {
                                     uint64_t freeBytes = 0, totalBytes = 0;
                                     if (ShellUtils::GetDriveSpace(item.fullPath, freeBytes, totalBytes) && totalBytes > 0) {
-                                        StringCchPrintfW(s_buf, ARRAYSIZE(s_buf), L"%s 可用 / 共 %s",
+                                        StringCchPrintfW(buf, MAX_PATH * 2, L"%s 可用 / 共 %s",
                                                          Util::FormatBytes(freeBytes).c_str(),
                                                          Util::FormatBytes(totalBytes).c_str());
                                     }
                                 } else if (item.isFolder && !item.isSizeCalculated) {
-                                    s_buf[0] = L'\0';
+                                    buf[0] = L'\0';
                                 } else {
-                                    StringCchCopyW(s_buf, ARRAYSIZE(s_buf), Util::FormatBytes(item.size).c_str());
+                                    StringCchCopyW(buf, MAX_PATH * 2, Util::FormatBytes(item.size).c_str());
                                 }
-                                break;
-                            case ColumnId::DateCreated:
-                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), Util::FormatFileTime(item.createdTime).c_str());
-                                break;
-                            case ColumnId::Attributes:
-                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), Util::FormatAttributes(item.attributes).c_str());
-                                break;
-                            case ColumnId::Authors:
-                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.authors.c_str());
-                                break;
-                            case ColumnId::Title:
-                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.title.c_str());
-                                break;
-                            case ColumnId::Tags:
-                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.tags.c_str());
-                                break;
-                            case ColumnId::Path:
-                                StringCchCopyW(s_buf, ARRAYSIZE(s_buf), item.fullPath.c_str());
-                                break;
+                            } else {
+                                StringCchCopyW(buf, MAX_PATH * 2, item.name.c_str());
+                            }
+                        } else {
+                            int colIdx = pDisp->item.iSubItem;
+                            if (colIdx >= 0 && colIdx < (int)pThis->m_activeColumns.size()) {
+                                ColumnId colId = pThis->m_activeColumns[colIdx];
+                                switch (colId) {
+                                case ColumnId::Name:
+                                    StringCchCopyW(buf, MAX_PATH * 2, item.name.c_str());
+                                    break;
+                                case ColumnId::DateModified:
+                                    StringCchCopyW(buf, MAX_PATH * 2, Util::FormatFileTime(item.modifiedTime).c_str());
+                                    break;
+                                case ColumnId::Type:
+                                    StringCchCopyW(buf, MAX_PATH * 2, item.typeName.c_str());
+                                    break;
+                                case ColumnId::Size:
+                                    if (item.isDrive) {
+                                        uint64_t freeBytes = 0, totalBytes = 0;
+                                        if (ShellUtils::GetDriveSpace(item.fullPath, freeBytes, totalBytes) && totalBytes > 0) {
+                                            StringCchPrintfW(buf, MAX_PATH * 2, L"%s 可用 / 共 %s",
+                                                             Util::FormatBytes(freeBytes).c_str(),
+                                                             Util::FormatBytes(totalBytes).c_str());
+                                        }
+                                    } else if (item.isFolder && !item.isSizeCalculated) {
+                                        buf[0] = L'\0';
+                                    } else {
+                                        StringCchCopyW(buf, MAX_PATH * 2, Util::FormatBytes(item.size).c_str());
+                                    }
+                                    break;
+                                case ColumnId::DateCreated:
+                                    StringCchCopyW(buf, MAX_PATH * 2, Util::FormatFileTime(item.createdTime).c_str());
+                                    break;
+                                case ColumnId::Attributes:
+                                    StringCchCopyW(buf, MAX_PATH * 2, Util::FormatAttributes(item.attributes).c_str());
+                                    break;
+                                case ColumnId::Authors:
+                                    StringCchCopyW(buf, MAX_PATH * 2, item.authors.c_str());
+                                    break;
+                                case ColumnId::Title:
+                                    StringCchCopyW(buf, MAX_PATH * 2, item.title.c_str());
+                                    break;
+                                case ColumnId::Tags:
+                                    StringCchCopyW(buf, MAX_PATH * 2, item.tags.c_str());
+                                    break;
+                                case ColumnId::Path:
+                                    StringCchCopyW(buf, MAX_PATH * 2, item.fullPath.c_str());
+                                    break;
+                                }
                             }
                         }
-                        pDisp->item.pszText = s_buf;
+                        pDisp->item.pszText = buf;
                     }
 
                     if (pDisp->item.mask & LVIF_IMAGE) {
@@ -2331,6 +2931,24 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                             }
                         }
                         pDisp->item.iImage = icon;
+                    }
+                    if (pDisp->item.mask & LVIF_COLUMNS) {
+                        if (pDisp->item.puColumns) {
+                            if (pThis->m_viewMode == 7) {
+                                pDisp->item.cColumns = 0;
+                            } else if (pThis->m_viewMode == 6) {
+                                if (pDisp->item.cColumns >= 2) {
+                                    pDisp->item.puColumns[0] = 1;
+                                    pDisp->item.puColumns[1] = 2;
+                                    pDisp->item.cColumns = 2;
+                                } else if (pDisp->item.cColumns >= 1) {
+                                    pDisp->item.puColumns[0] = 1;
+                                    pDisp->item.cColumns = 1;
+                                }
+                            } else if (pThis->m_viewMode == 4) {
+                                pDisp->item.cColumns = 0;
+                            }
+                        }
                     }
                     if (Config::Get().showItemCheckBoxes && (pDisp->item.mask & LVIF_STATE)) {
                         pDisp->item.stateMask |= LVIS_STATEIMAGEMASK;
@@ -2379,11 +2997,257 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                 case CDDS_PREPAINT:
                     return CDRF_NOTIFYITEMDRAW;
                 case CDDS_ITEMPREPAINT: {
+                    if (pThis->m_viewMode == 7) { // Content view (内容) - complete custom drawing matching Explorer
+                        int row = (int)pcd->nmcd.dwItemSpec;
+                        if (row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
+                            int idx = pThis->m_filteredIndices[row];
+                            if (idx >= 0 && idx < (int)pThis->m_allItems.size()) {
+                                const auto& item = pThis->m_allItems[idx];
+                                HDC hdc = pcd->nmcd.hdc;
+                                RECT rcItem = { 0 };
+                                ListView_GetItemRect(pThis->m_hwnd, row, &rcItem, LVIR_BOUNDS);
+                                bool isSelected = (ListView_GetItemState(pThis->m_hwnd, row, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+                                bool isHot = (pcd->nmcd.uItemState & CDIS_HOT) != 0 || (ListView_GetItemState(pThis->m_hwnd, row, LVIS_DROPHILITED) & LVIS_DROPHILITED) != 0;
+
+                                // 1. Item background (hover, selected, or default background)
+                                HBRUSH hbrBg = isSelected ? Theme::Get().BrushSelected() : (isHot ? Theme::Get().BrushHover() : Theme::Get().BrushBackground());
+                                FillRect(hdc, &rcItem, hbrBg);
+
+                                // 2. Subtle horizontal divider line across the entire row
+                                COLORREF gridClr = Theme::Get().IsDarkMode() ? RGB(45, 47, 52) : RGB(235, 238, 242);
+                                HPEN hPen = CreatePen(PS_SOLID, 1, gridClr);
+                                HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+                                MoveToEx(hdc, rcItem.left, rcItem.bottom - 1, nullptr);
+                                LineTo(hdc, rcItem.right, rcItem.bottom - 1);
+                                SelectObject(hdc, hOldPen);
+                                DeleteObject(hPen);
+
+                                // 3. Icon / Thumbnail (32x32)
+                                int iconSize = Theme::Get().Scale(32, pThis->m_hwnd);
+                                int iconX = rcItem.left + Theme::Get().Scale(16, pThis->m_hwnd);
+                                int iconY = rcItem.top + (rcItem.bottom - rcItem.top - iconSize) / 2;
+                                RECT rcIcon = { iconX, iconY, iconX + iconSize, iconY + iconSize };
+
+                                HBITMAP hThumb = pThis->GetThumbnail(item.fullPath);
+                                if (hThumb) {
+                                    DrawThumbnail(hdc, rcIcon, hThumb, isSelected, isHot, pThis->m_hwnd);
+                                } else {
+                                    int customIcon = ShellUtils::GetCustomPathIcon(item.fullPath);
+                                    int iconIdx = (customIcon >= 0) ? customIcon : item.iconIndex;
+                                    HIMAGELIST himl = ShellUtils::GetSystemImageList(SHIL_LARGE);
+                                    ImageList_DrawEx(himl, iconIdx, hdc, iconX, iconY, iconSize, iconSize, CLR_NONE, CLR_NONE, ILD_TRANSPARENT);
+                                }
+
+                                // Ghosting if cut or hidden
+                                bool isCut = ShellUtils::IsPathCut(item.fullPath);
+                                bool isHidden = (item.attributes & FILE_ATTRIBUTE_HIDDEN) != 0;
+                                if (isCut || isHidden) {
+                                    COLORREF bgClr = isSelected ? Theme::Get().ClrSelected() : Theme::Get().ClrBackground();
+                                    BYTE alpha = isCut ? 140 : 120;
+                                    ShellUtils::BlendRectWithColor(hdc, rcIcon, bgClr, alpha);
+                                }
+
+                                // 4. Column positions strictly matching Explorer standards:
+                                // Column 1 starts after icon; Column 2 starts at ~40%; Column 3 starts at ~75%
+                                int itemW = rcItem.right - rcItem.left;
+                                int col1Left = iconX + iconSize + Theme::Get().Scale(12, pThis->m_hwnd);
+                                int col2Left = rcItem.left + itemW * 40 / 100;
+                                if (col2Left < col1Left + Theme::Get().Scale(140, pThis->m_hwnd)) {
+                                    col2Left = col1Left + Theme::Get().Scale(140, pThis->m_hwnd);
+                                }
+                                int col3Left = rcItem.left + itemW * 75 / 100;
+                                if (col3Left < col2Left + Theme::Get().Scale(160, pThis->m_hwnd)) {
+                                    col3Left = col2Left + Theme::Get().Scale(160, pThis->m_hwnd);
+                                }
+
+                                int col1Right = col2Left - Theme::Get().Scale(16, pThis->m_hwnd);
+                                int col2Right = col3Left - Theme::Get().Scale(16, pThis->m_hwnd);
+                                int col3Right = rcItem.right - Theme::Get().Scale(16, pThis->m_hwnd);
+
+                                // Two-line text grid: Line 1 (top) and Line 2 (bottom)
+                                int lineH = Theme::Get().Scale(16, pThis->m_hwnd);
+                                int gap = Theme::Get().Scale(2, pThis->m_hwnd);
+                                int totalTextH = lineH * 2 + gap;
+                                int textTop = rcItem.top + (rcItem.bottom - rcItem.top - totalTextH) / 2;
+                                int line1Top = textTop;
+                                int line1Bottom = textTop + lineH;
+                                int line2Top = textTop + lineH + gap;
+                                int line2Bottom = textTop + totalTextH;
+
+                                SetBkMode(hdc, TRANSPARENT);
+                                HGDIOBJ oldFont = SelectObject(hdc, pThis->m_hFontText);
+
+                                // Column 1: Folder name or File name (strictly on Line 1, aligned with Col 2 & Col 3)
+                                RECT rcName = { col1Left, line1Top, col1Right, line1Bottom };
+                                SetTextColor(hdc, Theme::Get().ClrTextPrimary());
+                                DrawTextW(hdc, item.name.c_str(), -1, &rcName, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+                                // Column 2 & Column 3 data strings
+                                std::wstring dateStr = Util::FormatFileTime(item.modifiedTime);
+                                std::wstring sizeStr = item.isFolder ? L"" : Util::FormatBytes(item.size);
+                                std::wstring dimStr = item.isFolder ? L"" : pThis->GetDimensions(item.fullPath);
+
+                                SetTextColor(hdc, Theme::Get().ClrTextSecondary());
+                                if (item.isFolder) {
+                                    // Folder:
+                                    // Col 2: blank
+                                    // Col 3: Line 1: 修改日期 (vertically aligned with folder name on Line 1)
+                                    if (!dateStr.empty()) {
+                                        std::wstring col3Line1 = L"修改日期: " + dateStr;
+                                        RECT rcCol3L1 = { col3Left, line1Top, col3Right, line1Bottom };
+                                        DrawTextW(hdc, col3Line1.c_str(), -1, &rcCol3L1, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                                    }
+                                } else {
+                                    // File:
+                                    // Col 2 Line 1: 类型: ...
+                                    std::wstring typeStr = item.typeName.empty() ? (item.ext.empty() ? L"文件" : item.ext + L" 文件") : item.typeName;
+                                    std::wstring col2Line1 = L"类型: " + typeStr;
+                                    RECT rcCol2L1 = { col2Left, line1Top, col2Right, line1Bottom };
+                                    DrawTextW(hdc, col2Line1.c_str(), -1, &rcCol2L1, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+                                    // Col 2 Line 2: 分辨率: ... (if image with dimensions)
+                                    if (!dimStr.empty()) {
+                                        std::wstring col2Line2 = L"分辨率: " + dimStr;
+                                        RECT rcCol2L2 = { col2Left, line2Top, col2Right, line2Bottom };
+                                        DrawTextW(hdc, col2Line2.c_str(), -1, &rcCol2L2, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                                    }
+
+                                    // Col 3:
+                                    // Line 1: 修改日期: ... (for regular files without image dimensions)
+                                    std::wstring col3Line1 = dimStr.empty() ? (dateStr.empty() ? L"" : (L"修改日期: " + dateStr)) : L"";
+                                    if (!col3Line1.empty()) {
+                                        RECT rcCol3L1 = { col3Left, line1Top, col3Right, line1Bottom };
+                                        DrawTextW(hdc, col3Line1.c_str(), -1, &rcCol3L1, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                                    }
+
+                                    // Line 2: 大小: ... (strictly on Line 2, aligned with Col 2 Line 2)
+                                    if (!sizeStr.empty()) {
+                                        std::wstring col3Line2 = L"大小: " + sizeStr;
+                                        RECT rcCol3L2 = { col3Left, line2Top, col3Right, line2Bottom };
+                                        DrawTextW(hdc, col3Line2.c_str(), -1, &rcCol3L2, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+                                    }
+                                }
+
+                                SelectObject(hdc, oldFont);
+                                return CDRF_SKIPDEFAULT;
+                            }
+                        }
+                    }
+
+                    if (pThis->m_viewMode == 1 || pThis->m_viewMode == 2 || pThis->m_viewMode == 3) {
+                        // Extra Large, Large, Medium icon views: custom draw item with multi-line wrapped text
+                        int row = (int)pcd->nmcd.dwItemSpec;
+                        if (row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
+                            int idx = pThis->m_filteredIndices[row];
+                            if (idx >= 0 && idx < (int)pThis->m_allItems.size()) {
+                                const auto& item = pThis->m_allItems[idx];
+                                HDC hdc = pcd->nmcd.hdc;
+                                RECT rcBounds = { 0 };
+                                ListView_GetItemRect(pThis->m_hwnd, row, &rcBounds, LVIR_BOUNDS);
+                                bool isSelected = (ListView_GetItemState(pThis->m_hwnd, row, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+                                bool isHot = (pcd->nmcd.uItemState & CDIS_HOT) != 0 || (ListView_GetItemState(pThis->m_hwnd, row, LVIS_DROPHILITED) & LVIS_DROPHILITED) != 0;
+
+                                // Full grid cell rect from icon spacing (LVIR_BOUNDS in SysListView32 has hardcoded height)
+                                DWORD sp = (DWORD)SendMessageW(pThis->m_hwnd, LVM_GETITEMSPACING, FALSE, 0);
+                                int spX = LOWORD(sp);
+                                int spY = HIWORD(sp);
+                                int cellW = (spX > 0) ? spX : (rcBounds.right - rcBounds.left);
+                                int cellH = (spY > 0) ? spY : (rcBounds.bottom - rcBounds.top);
+                                RECT rcCell = { rcBounds.left, rcBounds.top, rcBounds.left + cellW, rcBounds.top + cellH };
+
+                                // 1. Icon layout
+                                int iconDim = (pThis->m_viewMode == 1) ? Theme::Get().Scale(256, pThis->m_hwnd)
+                                            : ((pThis->m_viewMode == 2) ? Theme::Get().Scale(96, pThis->m_hwnd)
+                                            : Theme::Get().Scale(48, pThis->m_hwnd));
+                                int iconX = rcCell.left + (cellW - iconDim) / 2;
+                                int iconY = rcCell.top + Theme::Get().Scale(6, pThis->m_hwnd);
+                                RECT rcIcon = { iconX, iconY, iconX + iconDim, iconY + iconDim };
+
+                                // 2. Label rect spanning below icon down to bottom of cell
+                                RECT rcLabel;
+                                rcLabel.left = rcCell.left + Theme::Get().Scale(4, pThis->m_hwnd);
+                                rcLabel.right = rcCell.right - Theme::Get().Scale(4, pThis->m_hwnd);
+                                rcLabel.top = rcIcon.bottom + Theme::Get().Scale(4, pThis->m_hwnd);
+                                rcLabel.bottom = rcCell.bottom - Theme::Get().Scale(4, pThis->m_hwnd);
+
+                                // 3. Selection / hover background snugly enclosing icon and text
+                                if (isSelected || isHot) {
+                                    RECT rcCalc = rcLabel;
+                                    HGDIOBJ tmpFont = SelectObject(hdc, pThis->m_hFontText);
+                                    DrawTextW(hdc, item.name.c_str(), -1, &rcCalc, DT_CENTER | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX | DT_CALCRECT);
+                                    SelectObject(hdc, tmpFont);
+                                    int textBottom = rcLabel.top + (rcCalc.bottom - rcCalc.top) + Theme::Get().Scale(4, pThis->m_hwnd);
+                                    if (textBottom > rcCell.bottom) textBottom = rcCell.bottom;
+                                    RECT rcHl = { rcCell.left + 2, rcCell.top + 2, rcCell.right - 2, textBottom };
+                                    HBRUSH hbr = isSelected ? Theme::Get().BrushSelected() : Theme::Get().BrushHover();
+                                    FillRect(hdc, &rcHl, hbr);
+                                }
+
+                                // 4. Draw thumbnail or system icon
+                                HBITMAP hThumb = pThis->GetThumbnail(item.fullPath);
+                                if (hThumb) {
+                                    DrawThumbnail(hdc, rcIcon, hThumb, isSelected, isHot, pThis->m_hwnd);
+                                } else {
+                                    int customIcon = ShellUtils::GetCustomPathIcon(item.fullPath);
+                                    int iconIdx = (customIcon >= 0) ? customIcon : item.iconIndex;
+                                    HIMAGELIST himl = (pThis->m_viewMode == 1) ? ShellUtils::GetSystemImageList(SHIL_JUMBO)
+                                                    : ShellUtils::GetSystemImageList(SHIL_EXTRALARGE);
+                                    int drawDim = (pThis->m_viewMode == 1) ? iconDim : Theme::Get().Scale(48, pThis->m_hwnd);
+                                    int drawX = rcIcon.left + (iconDim - drawDim) / 2;
+                                    int drawY = rcIcon.top + (iconDim - drawDim) / 2;
+                                    ImageList_DrawEx(himl, iconIdx, hdc, drawX, drawY, drawDim, drawDim, CLR_NONE, CLR_NONE, ILD_TRANSPARENT);
+                                }
+
+                                // Ghosting if cut or hidden
+                                bool isCut = ShellUtils::IsPathCut(item.fullPath);
+                                bool isHidden = (item.attributes & FILE_ATTRIBUTE_HIDDEN) != 0;
+                                if (isCut || isHidden) {
+                                    COLORREF bgClr = isSelected ? Theme::Get().ClrSelected() : Theme::Get().ClrBackground();
+                                    BYTE alpha = isCut ? 140 : 120;
+                                    ShellUtils::BlendRectWithColor(hdc, rcIcon, bgClr, alpha);
+                                }
+
+                                // 5. Multi-line auto-wrapped filename
+                                SetBkMode(hdc, TRANSPARENT);
+                                SetTextColor(hdc, Theme::Get().ClrTextPrimary());
+                                HGDIOBJ oldFont = SelectObject(hdc, pThis->m_hFontText);
+                                DrawTextW(hdc, item.name.c_str(), -1, &rcLabel,
+                                          DT_CENTER | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX | DT_END_ELLIPSIS);
+                                SelectObject(hdc, oldFont);
+
+                                return CDRF_SKIPDEFAULT;
+                            }
+                        }
+                    }
+
+                    if (pThis->m_viewMode != 0) {
+                        pcd->clrTextBk = CLR_NONE;
+                        pcd->clrText = Theme::Get().ClrTextPrimary();
+                        return CDRF_NOTIFYPOSTPAINT;
+                    }
                     return CDRF_NOTIFYSUBITEMDRAW | CDRF_NOTIFYPOSTPAINT;
                 }
                 case CDDS_ITEMPOSTPAINT: {
                     int row = (int)pcd->nmcd.dwItemSpec;
                     bool isSelected = (row >= 0 && (ListView_GetItemState(pThis->m_hwnd, row, LVIS_SELECTED) & LVIS_SELECTED) != 0);
+                    bool isHot = (pcd->nmcd.uItemState & CDIS_HOT) != 0 || (row >= 0 && (ListView_GetItemState(pThis->m_hwnd, row, LVIS_DROPHILITED) & LVIS_DROPHILITED) != 0);
+
+                    // Thumbnail custom rendering in tiles view
+                    if (pThis->m_viewMode == 6) {
+                        if (row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
+                            int idx = pThis->m_filteredIndices[row];
+                            if (idx >= 0 && idx < (int)pThis->m_allItems.size()) {
+                                const auto& item = pThis->m_allItems[idx];
+                                HBITMAP hThumb = pThis->GetThumbnail(item.fullPath);
+                                if (hThumb) {
+                                    RECT rcIcon = { 0 };
+                                    if (ListView_GetItemRect(pThis->m_hwnd, row, &rcIcon, LVIR_ICON)) {
+                                        DrawThumbnail(pcd->nmcd.hdc, rcIcon, hThumb, isSelected, isHot, pThis->m_hwnd);
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // 1. Cut items and Hidden items ghosting effect (icon虚化淡化)
                     // Windows Explorer standard: only items with FILE_ATTRIBUTE_HIDDEN are dimmed; dotfiles without hidden attr remain normal
@@ -2403,8 +3267,8 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                         }
                     }
 
-                    // 2. Grid lines - subtle horizontal dividers only
-                    if (Config::Get().showGridLines && row >= 0) {
+                    // 2. Grid lines - subtle horizontal dividers only (Details view only)
+                    if (Config::Get().showGridLines && pThis->m_viewMode == 0 && row >= 0) {
                         RECT rcItem;
                         ListView_GetItemRect(pThis->m_hwnd, row, &rcItem, LVIR_BOUNDS);
                         COLORREF gridClr = Theme::Get().IsDarkMode() ? RGB(45, 47, 52) : RGB(235, 238, 242);
@@ -2416,8 +3280,8 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                         DeleteObject(hPen);
                     }
 
-                    // 3. Item checkbox custom rendering (unified rounded box with dark-grey background in dark mode)
-                    if (Config::Get().showItemCheckBoxes && row >= 0) {
+                    // 3. Item checkbox custom rendering (Details view only)
+                    if (Config::Get().showItemCheckBoxes && pThis->m_viewMode == 0 && row >= 0) {
                         RECT rcIcon = { 0 };
                         RECT rcItem = { 0 };
                         if (ListView_GetItemRect(pThis->m_hwnd, row, &rcIcon, LVIR_ICON) &&
@@ -2461,6 +3325,8 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                 case CDDS_SUBITEM | CDDS_ITEMPREPAINT: {
                     int row = (int)pcd->nmcd.dwItemSpec;
                     bool isSelected = (pcd->nmcd.uItemState & CDIS_SELECTED) != 0;
+
+                    pcd->clrTextBk = CLR_NONE;
 
                     bool isCut = false;
                     bool isHidden = false;
@@ -2603,7 +3469,8 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
         break;
     }
     case FileListView::WM_NOTIFY_DIR_CHANGED:
-        pThis->Refresh();
+        KillTimer(pThis->m_hwnd, 703);
+        SetTimer(pThis->m_hwnd, 703, 200, nullptr);
         break;
 
     case FileListView::WM_NOTIFY_FOLDER_SIZE:
@@ -2649,6 +3516,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                         }
                     }
                     pThis->StartCustomIconLoader();
+                    pThis->StartThumbnailLoader();
                 } else {
                     pThis->m_allItems.clear();
                     pThis->ApplyFilter();
@@ -2664,6 +3532,13 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
     case FileListView::WM_REFRESH_ICONS: {
         int gen = (int)wParam;
         if (gen == pThis->m_iconNavGeneration.load()) {
+            InvalidateRect(pThis->m_hwnd, nullptr, FALSE);
+        }
+        return 0;
+    }
+    case FileListView::WM_NOTIFY_THUMBNAIL_BATCH: {
+        int gen = (int)wParam;
+        if (gen == pThis->m_thumbNavGeneration.load()) {
             InvalidateRect(pThis->m_hwnd, nullptr, FALSE);
         }
         return 0;
@@ -2696,7 +3571,7 @@ void FileListView::StartDragDrop(int itemIndex) {
 
     std::vector<std::wstring> validPaths;
     for (const auto& p : sel) {
-        if (PathFileExistsW(p.c_str())) {
+        if (PathFileExistsW(p.c_str()) || ShellUtils::IsVirtualShellPath(p)) {
             validPaths.push_back(p);
         }
     }

@@ -520,14 +520,21 @@ void MainWindow::BuildMenu() {
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_LIST, isZh ? L"列表(&L)" : L"List(&L)");
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_DETAILS, isZh ? L"详细信息(&D)" : L"Details(&D)");
     AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_TILES, isZh ? L"平铺(&S)" : L"Tiles(&S)");
+    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_CONTENT, isZh ? L"内容(&C)" : L"Content(&C)");
     int curVm = activeView ? activeView->GetViewMode() : Config::Get().viewMode;
     UINT activeVmId = ID_VIEW_DETAILS;
-    if (curVm == 0) activeVmId = ID_VIEW_DETAILS;
-    else if (curVm == 1) activeVmId = ID_VIEW_ICONS_LARGE;
-    else if (curVm == 2) activeVmId = ID_VIEW_ICONS_SMALL;
-    else if (curVm == 3) activeVmId = ID_VIEW_LIST;
-    else if (curVm == 4) activeVmId = ID_VIEW_TILES;
-    CheckMenuRadioItem(hViewStyleSubmenu, ID_VIEW_DETAILS, ID_VIEW_ICONS_MEDIUM, activeVmId, MF_BYCOMMAND);
+    switch (curVm) {
+    case 0: activeVmId = ID_VIEW_DETAILS; break;
+    case 1: activeVmId = ID_VIEW_ICONS_XLARGE; break;
+    case 2: activeVmId = ID_VIEW_ICONS_LARGE; break;
+    case 3: activeVmId = ID_VIEW_ICONS_MEDIUM; break;
+    case 4: activeVmId = ID_VIEW_ICONS_SMALL; break;
+    case 5: activeVmId = ID_VIEW_LIST; break;
+    case 6: activeVmId = ID_VIEW_TILES; break;
+    case 7: activeVmId = ID_VIEW_CONTENT; break;
+    default: activeVmId = ID_VIEW_DETAILS; break;
+    }
+    CheckMenuRadioItem(hViewStyleSubmenu, ID_VIEW_DETAILS, ID_VIEW_CONTENT, activeVmId, MF_BYCOMMAND);
     AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hViewStyleSubmenu, isZh ? L"视图样式(&V)" : L"View Mode(&V)");
 
     // 排列图标 (I)
@@ -2952,33 +2959,42 @@ void MainWindow::OnCommand(UINT cmdId) {
 
     case ID_VIEW_DETAILS:
         Config::Get().viewMode = 0;
-        activeView->SetViewMode(0);
+        if (activeView) activeView->SetViewMode(0);
+        BuildMenu();
+        break;
+    case ID_VIEW_ICONS_XLARGE:
+        Config::Get().viewMode = 1;
+        if (activeView) activeView->SetViewMode(1);
         BuildMenu();
         break;
     case ID_VIEW_ICONS_LARGE:
-    case ID_VIEW_ICONS_XLARGE:
-        Config::Get().viewMode = 1;
-        activeView->SetViewMode(1);
+        Config::Get().viewMode = 2;
+        if (activeView) activeView->SetViewMode(2);
         BuildMenu();
         break;
     case ID_VIEW_ICONS_MEDIUM:
-        Config::Get().viewMode = 0;
-        activeView->SetViewMode(0);
+        Config::Get().viewMode = 3;
+        if (activeView) activeView->SetViewMode(3);
         BuildMenu();
         break;
     case ID_VIEW_ICONS_SMALL:
-        Config::Get().viewMode = 2;
-        activeView->SetViewMode(2);
+        Config::Get().viewMode = 4;
+        if (activeView) activeView->SetViewMode(4);
         BuildMenu();
         break;
     case ID_VIEW_LIST:
-        Config::Get().viewMode = 3;
-        activeView->SetViewMode(3);
+        Config::Get().viewMode = 5;
+        if (activeView) activeView->SetViewMode(5);
         BuildMenu();
         break;
     case ID_VIEW_TILES:
-        Config::Get().viewMode = 4;
-        activeView->SetViewMode(4);
+        Config::Get().viewMode = 6;
+        if (activeView) activeView->SetViewMode(6);
+        BuildMenu();
+        break;
+    case ID_VIEW_CONTENT:
+        Config::Get().viewMode = 7;
+        if (activeView) activeView->SetViewMode(7);
         BuildMenu();
         break;
 
@@ -3155,13 +3171,13 @@ void MainWindow::OnCommand(UINT cmdId) {
         bool isZh = I18n::Get().IsChinese();
         std::wstring aboutText = isZh ?
             L"NeoMDIE - 现代化多标签多栏文件管理器\n"
-            L"版本: v1.1.2 (x64 Release)\n\n"
+            L"版本: v1.1.3 (x64 Release)\n\n"
             L"作者: Harry (https://mianao.info)\n"
             L"开源项目仓库: https://github.com/harry10086/NeoMDIE\n"
             L"致敬经典: MDIE(Multiple Document Interface Explorer)\n\n"
             L"基于 GNU General Public License v3 (GPLv3) 开源协议发布。" :
             L"NeoMDIE - Modern Native Win32 Tabbed & Multi-Pane File Manager\n"
-            L"Version: v1.1.2 (x64 Release)\n\n"
+            L"Version: v1.1.3 (x64 Release)\n\n"
             L"Author: Harry (https://mianao.info)\n"
             L"Repository: https://github.com/harry10086/NeoMDIE\n"
             L"Inspired by: MDIE(Multiple Document Interface Explorer)\n\n"
@@ -3303,10 +3319,9 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             while (!path.empty() && (path.back() == L'"' || path.back() == L' ')) path.pop_back();
             while (!path.empty() && path.front() == L'"') path.erase(path.begin());
             if (path.length() == 2 && path[1] == L':') path += L"\\";
-            if (path.find(L"645FF040-5081-101B-9F08-00AA002F954E") != std::wstring::npos ||
-                path.find(L"RecycleBinFolder") != std::wstring::npos) {
-                ShellExecuteW(nullptr, L"open", L"explorer.exe", L"::{645FF040-5081-101B-9F08-00AA002F954E}", nullptr, SW_SHOWNORMAL);
-                return 0;
+            if (ShellUtils::IsSystemSettingsOrControlPanel(path)) {
+                ShellExecuteW(nullptr, L"open", L"explorer.exe", path.c_str(), nullptr, SW_SHOWNORMAL);
+                return TRUE;
             }
             if (path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
                 path = L"This PC";
@@ -3321,11 +3336,15 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                 PathRemoveFileSpecW(dirBuf);
                 path = dirBuf;
             }
-            if (ShellUtils::IsValidDirectory(path) || path == L"此电脑" || path == L"This PC" || path.find(L"\\\\") == 0) {
+            if (ShellUtils::IsValidDirectory(path) || path == L"此电脑" || path == L"This PC" || path.find(L"\\\\") == 0 ||
+                ShellUtils::IsVirtualShellPath(path)) {
                 m_tabBar.AddTab(path, true);
+                RestoreFromTrayOrMinimized();
+                return TRUE;
+            } else {
+                ShellExecuteW(nullptr, L"open", L"explorer.exe", path.c_str(), nullptr, SW_SHOWNORMAL);
+                return TRUE;
             }
-            RestoreFromTrayOrMinimized();
-            return TRUE;
         }
         return FALSE;
     }
@@ -3979,6 +3998,14 @@ void MainWindow::RebuildAccelerators() {
         if (name == L"垂直双栏" || name == L"左右双栏" || name == L"Dual Vertical Panes") return ID_VIEW_LAYOUT_1X2;
         if (name == L"水平双栏" || name == L"上下双栏" || name == L"Dual Horizontal Panes") return ID_VIEW_LAYOUT_2X1;
         if (name == L"四分栏网格" || name == L"四分栏模式" || name == L"Quad Panes") return ID_VIEW_LAYOUT_2X2;
+        if (name == L"超大图标" || name == L"Extra Large Icons") return ID_VIEW_ICONS_XLARGE;
+        if (name == L"大图标" || name == L"Large Icons") return ID_VIEW_ICONS_LARGE;
+        if (name == L"中等图标" || name == L"Medium Icons") return ID_VIEW_ICONS_MEDIUM;
+        if (name == L"小图标" || name == L"Small Icons") return ID_VIEW_ICONS_SMALL;
+        if (name == L"列表" || name == L"List") return ID_VIEW_LIST;
+        if (name == L"详细信息" || name == L"Details") return ID_VIEW_DETAILS;
+        if (name == L"平铺" || name == L"Tiles") return ID_VIEW_TILES;
+        if (name == L"内容" || name == L"Content") return ID_VIEW_CONTENT;
         if (name == L"滚动到列表顶部" || name == L"Scroll to Top") return ID_SCROLL_TOP;
         if (name == L"滚动到列表底部" || name == L"Scroll to Bottom") return ID_SCROLL_BOTTOM;
         if (name == L"向上翻页" || name == L"Page Up") return ID_SCROLL_PAGEUP;

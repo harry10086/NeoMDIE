@@ -24,10 +24,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
     // Parse command line folder argument early
     std::wstring folderArg;
+    std::wstring rawArg;
     int nArgs = 0;
     LPWSTR* szArglist = CommandLineToArgvW(GetCommandLineW(), &nArgs);
     if (szArglist && nArgs > 1) {
-        std::wstring rawArg;
         for (int i = 1; i < nArgs; ++i) {
             std::wstring a = szArglist[i];
             while (!a.empty() && (a.front() == L' ' || a.front() == L'"')) a.erase(a.begin());
@@ -70,12 +70,33 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     while (!folderArg.empty() && (folderArg.back() == L'"' || folderArg.back() == L' ')) folderArg.pop_back();
     while (!folderArg.empty() && folderArg.front() == L'"') folderArg.erase(folderArg.begin());
     if (folderArg.length() == 2 && folderArg[1] == L':') folderArg += L"\\";
-    if (folderArg.find(L"645FF040-5081-101B-9F08-00AA002F954E") != std::wstring::npos ||
-        folderArg.find(L"RecycleBinFolder") != std::wstring::npos) {
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", L"::{645FF040-5081-101B-9F08-00AA002F954E}", nullptr, SW_SHOWNORMAL);
+
+    // Forward system settings, Control Panel applets, and non-file-manager invocations to system explorer
+    if (ShellUtils::IsSystemSettingsOrControlPanel(rawArg) ||
+        ShellUtils::IsSystemSettingsOrControlPanel(folderArg) ||
+        (lpCmdLine && ShellUtils::IsSystemSettingsOrControlPanel(lpCmdLine))) {
+        std::wstring forwardCmd = (lpCmdLine && wcslen(lpCmdLine) > 0) ? lpCmdLine : rawArg;
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", forwardCmd.c_str(), nullptr, SW_SHOWNORMAL);
         OleUninitialize();
         return 0;
     }
+
+    if (!rawArg.empty()) {
+        bool isDir = PathIsDirectoryW(rawArg.c_str()) != FALSE;
+        bool isFile = (!isDir && PathFileExistsW(rawArg.c_str()) != FALSE);
+        bool isSupported = (rawArg == L"This PC" || rawArg == L"此电脑" ||
+                            rawArg.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos ||
+                            rawArg.find(L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6") != std::wstring::npos ||
+                            rawArg.find(L"\\\\") == 0 ||
+                            ShellUtils::IsVirtualShellPath(rawArg));
+        if (!isDir && !isFile && !isSupported) {
+            std::wstring forwardCmd = (lpCmdLine && wcslen(lpCmdLine) > 0) ? lpCmdLine : rawArg;
+            ShellExecuteW(nullptr, L"open", L"explorer.exe", forwardCmd.c_str(), nullptr, SW_SHOWNORMAL);
+            OleUninitialize();
+            return 0;
+        }
+    }
+
     if (folderArg.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
         folderArg = L"This PC";
     }

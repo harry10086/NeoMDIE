@@ -49,8 +49,7 @@ public:
   const std::wstring &GetFilterQuery() const { return m_filterQuery; }
   void SearchRecursive(const std::wstring &rootDir, const std::wstring &query,
                        bool matchCase);
-  void SetViewMode(int mode); // 0: Details, 1: Large Icons, 2: Small Icons, 3:
-                              // List, 4: Tiles
+  void SetViewMode(int mode); // 0: Details, 1: Extra Large, 2: Large, 3: Medium, 4: Small, 5: List, 6: Tiles, 7: Content
   int GetViewMode() const { return m_viewMode; }
   void SetShowHidden(bool show);
   void SetHideDotFiles(bool hide);
@@ -184,10 +183,22 @@ private:
   void StartCustomIconLoader();
   void CancelCustomIconLoader();
 
+  std::atomic<int> m_thumbNavGeneration{0};
+  std::thread m_thumbThread;
+  std::mutex m_thumbMutex;
+  std::unordered_map<std::wstring, HBITMAP> m_thumbnailMap;
+  std::unordered_map<std::wstring, std::wstring> m_dimensionsMap;
+  void StartThumbnailLoader();
+  void CancelThumbnailLoader();
+  void ClearThumbnails();
+  HBITMAP GetThumbnail(const std::wstring& path);
+  std::wstring GetDimensions(const std::wstring& path);
+
   static const UINT WM_NOTIFY_DIR_CHANGED = WM_APP + 101;
   static const UINT WM_NOTIFY_FOLDER_SIZE = WM_APP + 102;
   static const UINT WM_SEARCH_BATCH = WM_APP + 103;
   static const UINT WM_SEARCH_COMPLETE = WM_APP + 104;
   static const UINT WM_ASYNC_NAV_COMPLETE = WM_APP + 105;
   static const UINT WM_REFRESH_ICONS = WM_APP + 106;
+  static const UINT WM_NOTIFY_THUMBNAIL_BATCH = WM_APP + 107;
 };

@@ -16,15 +16,16 @@ enum NeoMDIECommand {
     CMD_NEOMDIE_UNPIN_QUICKACCESS = 0x710C,
     CMD_NEOMDIE_RESET_QUICKACCESS = 0x710D,
 
-    // Background view modes
+    // Background view modes (contiguous 0x7110 - 0x7117)
     CMD_BG_VIEW_DETAILS      = 0x7110,
-    CMD_BG_VIEW_LARGE        = 0x7111,
-    CMD_BG_VIEW_XLARGE       = 0x7112,
+    CMD_BG_VIEW_XLARGE       = 0x7111,
+    CMD_BG_VIEW_LARGE        = 0x7112,
     CMD_BG_VIEW_MEDIUM       = 0x7113,
     CMD_BG_VIEW_SMALL        = 0x7114,
     CMD_BG_VIEW_LIST         = 0x7115,
     CMD_BG_VIEW_TILES        = 0x7116,
-    CMD_BG_VIEW_ITEM_CHECKBOXES = 0x7117,
+    CMD_BG_VIEW_CONTENT      = 0x7117,
+    CMD_BG_VIEW_ITEM_CHECKBOXES = 0x7118,
 
     // Background sort by
     CMD_BG_SORT_NAME         = 0x7120,
@@ -74,7 +75,8 @@ struct ShellNewItem {
 
 namespace ShellUtils {
     void Initialize();
-    HIMAGELIST GetSystemImageList(bool large);
+    HIMAGELIST GetSystemImageList(int shilType);
+    HIMAGELIST GetSystemImageList(bool large = false);
 
     // ShellNew template management
     const std::vector<ShellNewItem>& GetShellNewItems();
@@ -89,10 +91,24 @@ namespace ShellUtils {
     int GetCustomPathIcon(const std::wstring& path);
     std::wstring GetItemTypeName(const std::wstring& path, DWORD attr);
 
+    // Shell Thumbnail extraction (supports images, videos, media folders with album art, PDFs, etc.)
+    HBITMAP GetThumbnail(const std::wstring& path, int size = 256);
+    bool CanHaveThumbnail(const std::wstring& ext);
+
     bool IsWslPath(const std::wstring& path);
+    bool IsVirtualShellPath(const std::wstring& path);
     bool IsValidDirectory(const std::wstring& path);
     int GetLinuxIconIndex();
     std::vector<NeoShellItem> EnumerateWslDistros();
+
+    std::wstring PidlToHex(PCIDLIST_ABSOLUTE pidl);
+    PIDLIST_ABSOLUTE HexToPidl(const std::wstring& hex);
+    IShellItem* CreateShellItemFromPathOrPidl(const std::wstring& path);
+    bool EnumerateShellNamespace(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems, bool hideDotFiles = false);
+    bool GetCachedShellNamespace(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems, bool hideDotFiles = false);
+    void InvalidateVirtualShellCache(const std::wstring& path = L"");
+    std::wstring GetVirtualItemDisplayName(const std::wstring& path, bool fullPath = false);
+    bool IsSystemSettingsOrControlPanel(const std::wstring& arg);
 
     bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems, bool hideDotFiles = false);
     void EnumerateDrives(std::vector<NeoShellItem>& outDrives);

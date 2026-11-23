@@ -8,6 +8,9 @@ FileSystemWatcher::~FileSystemWatcher() {
 }
 
 void FileSystemWatcher::Watch(const std::wstring& directory, HWND notifyWnd, UINT notifyMsg) {
+    if (m_running && m_currentDir == directory && m_notifyWnd == notifyWnd) {
+        return;
+    }
     Stop();
 
     if (directory.empty() || directory == L"此电脑" || directory == L"This PC" ||
@@ -15,6 +18,8 @@ void FileSystemWatcher::Watch(const std::wstring& directory, HWND notifyWnd, UIN
         return;
     }
 
+    m_currentDir = directory;
+    m_notifyWnd = notifyWnd;
     m_running = true;
     m_hStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     HANDLE hStop = m_hStopEvent;
@@ -27,6 +32,8 @@ void FileSystemWatcher::Watch(const std::wstring& directory, HWND notifyWnd, UIN
 void FileSystemWatcher::Stop() {
     if (m_running) {
         m_running = false;
+        m_currentDir.clear();
+        m_notifyWnd = nullptr;
         if (m_hStopEvent) {
             SetEvent(m_hStopEvent);
             m_hStopEvent = nullptr;

@@ -35,6 +35,7 @@ STDMETHODIMP_(ULONG) DropTarget::Release() {
 bool DropTarget::QueryDropFiles(IDataObject* pDataObj, std::vector<std::wstring>& outFiles) {
     if (!pDataObj) return false;
 
+    // 1. Try standard physical files (CF_HDROP)
     FORMATETC fmt = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
     STGMEDIUM med;
     if (SUCCEEDED(pDataObj->GetData(&fmt, &med))) {
@@ -50,16 +51,47 @@ bool DropTarget::QueryDropFiles(IDataObject* pDataObj, std::vector<std::wstring>
             GlobalUnlock(med.hGlobal);
         }
         ReleaseStgMedium(&med);
-        return !outFiles.empty();
+        if (!outFiles.empty()) return true;
     }
+
+    // 2. Try Shell IDList (CFSTR_SHELLIDLIST for MTP Android devices & Shell virtual objects)
+    static UINT s_uFmtShellIDList = RegisterClipboardFormatW(CFSTR_SHELLIDLIST);
+    FORMATETC fmtIdList = { (CLIPFORMAT)s_uFmtShellIDList, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+    if (SUCCEEDED(pDataObj->GetData(&fmtIdList, &med))) {
+        CIDA* pCida = (CIDA*)GlobalLock(med.hGlobal);
+        if (pCida) {
+            PCIDLIST_ABSOLUTE pidlFolder = (PCIDLIST_ABSOLUTE)((BYTE*)pCida + pCida->aoffset[0]);
+            for (UINT i = 0; i < pCida->cidl; ++i) {
+                PCUIDLIST_RELATIVE pidlChild = (PCUIDLIST_RELATIVE)((BYTE*)pCida + pCida->aoffset[i + 1]);
+                PIDLIST_ABSOLUTE pidlAbs = ILCombine(pidlFolder, pidlChild);
+                if (pidlAbs) {
+                    wchar_t buf[MAX_PATH];
+                    if (SHGetPathFromIDListW(pidlAbs, buf) && buf[0] != L'\0') {
+                        outFiles.push_back(buf);
+                    } else {
+                        outFiles.push_back(ShellUtils::PidlToHex(pidlAbs));
+                    }
+                    ILFree(pidlAbs);
+                }
+            }
+            GlobalUnlock(med.hGlobal);
+        }
+        ReleaseStgMedium(&med);
+        if (!outFiles.empty()) return true;
+    }
+
     return false;
 }
 
 static bool HasVirtualDropFiles(IDataObject* pDataObj) {
     if (!pDataObj) return false;
+    static UINT s_uFmtShellIDList = RegisterClipboardFormatW(CFSTR_SHELLIDLIST);
+    FORMATETC fmt = { (CLIPFORMAT)s_uFmtShellIDList, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+    if (SUCCEEDED(pDataObj->QueryGetData(&fmt))) return true;
+
     static UINT s_uFmtDescriptorW = RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW);
     static UINT s_uFmtDescriptorA = RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORA);
-    FORMATETC fmt = { (CLIPFORMAT)s_uFmtDescriptorW, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+    fmt.cfFormat = (CLIPFORMAT)s_uFmtDescriptorW;
     if (SUCCEEDED(pDataObj->QueryGetData(&fmt))) return true;
     fmt.cfFormat = (CLIPFORMAT)s_uFmtDescriptorA;
     if (SUCCEEDED(pDataObj->QueryGetData(&fmt))) return true;
@@ -208,8 +240,8 @@ STDMETHODIMP DropTarget::Drop(IDataObject* pDataObj, DWORD grfKeyState, POINTL p
         bool isSub = false;
         std::wstring targetDir = m_targetDirCallback ? m_targetDirCallback(ptScreen, isSub) : L"";
         if (!targetDir.empty()) {
-            IShellItem* psiDest = nullptr;
-            if (SUCCEEDED(SHCreateItemFromParsingName(targetDir.c_str(), nullptr, IID_PPV_ARGS(&psiDest))) && psiDest) {
+            IShellItem* psiDest = ShellUtils::CreateShellItemFromPathOrPidl(targetDir);
+            if (psiDest) {
                 IDropTarget* pShellDropTarget = nullptr;
                 if (SUCCEEDED(psiDest->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&pShellDropTarget))) && pShellDropTarget) {
                     DWORD dwEffect = DROPEFFECT_COPY;

@@ -5,6 +5,11 @@
 #include <set>
 #include <unordered_set>
 #include <mutex>
+#include <commoncontrols.h>
+#include <propkey.h>
+#include <propsys.h>
+#include <knownfolders.h>
+#pragma comment(lib, "propsys.lib")
 #pragma comment(lib, "msimg32.lib")
 
 #ifndef FOFX_ADDUNDORECORD
@@ -15,6 +20,8 @@ namespace ShellUtils {
 
 static HIMAGELIST s_himlSmall = nullptr;
 static HIMAGELIST s_himlLarge = nullptr;
+static HIMAGELIST s_himlExtraLarge = nullptr;
+static HIMAGELIST s_himlJumbo = nullptr;
 
 static void SanitizeRegistryShellVerb() {
     const wchar_t* shellParents[] = {
@@ -439,9 +446,34 @@ void Initialize() {
         }
     }
 
-    SHFILEINFOW sfi = { 0 };
-    s_himlSmall = (HIMAGELIST)SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
-    s_himlLarge = (HIMAGELIST)SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_LARGEICON);
+    // Query system image lists via SHGetImageList (supports 256x256 Jumbo, 48x48 ExtraLarge, 32x32 Large, 16x16 Small)
+    IImageList* piml = nullptr;
+    if (SUCCEEDED(SHGetImageList(SHIL_SMALL, IID_PPV_ARGS(&piml))) && piml) {
+        s_himlSmall = (HIMAGELIST)piml;
+    }
+    piml = nullptr;
+    if (SUCCEEDED(SHGetImageList(SHIL_LARGE, IID_PPV_ARGS(&piml))) && piml) {
+        s_himlLarge = (HIMAGELIST)piml;
+    }
+    piml = nullptr;
+    if (SUCCEEDED(SHGetImageList(SHIL_EXTRALARGE, IID_PPV_ARGS(&piml))) && piml) {
+        s_himlExtraLarge = (HIMAGELIST)piml;
+    }
+    piml = nullptr;
+    if (SUCCEEDED(SHGetImageList(SHIL_JUMBO, IID_PPV_ARGS(&piml))) && piml) {
+        s_himlJumbo = (HIMAGELIST)piml;
+    }
+
+    if (!s_himlSmall) {
+        SHFILEINFOW sfi = { 0 };
+        s_himlSmall = (HIMAGELIST)SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
+    }
+    if (!s_himlLarge) {
+        SHFILEINFOW sfi = { 0 };
+        s_himlLarge = (HIMAGELIST)SHGetFileInfoW(L"C:\\", 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | SHGFI_LARGEICON);
+    }
+    if (!s_himlExtraLarge) s_himlExtraLarge = s_himlLarge;
+    if (!s_himlJumbo) s_himlJumbo = s_himlExtraLarge;
 
     // Warm up ShellNew registry items and Shell background context menu in background
     std::thread([]() {
@@ -466,11 +498,21 @@ void Initialize() {
     }).detach();
 }
 
-HIMAGELIST GetSystemImageList(bool large) {
+HIMAGELIST GetSystemImageList(int shilType) {
     if (!s_himlSmall || !s_himlLarge) {
         Initialize();
     }
-    return large ? s_himlLarge : s_himlSmall;
+    switch (shilType) {
+    case SHIL_SMALL:      return s_himlSmall;
+    case SHIL_LARGE:      return s_himlLarge;
+    case SHIL_EXTRALARGE: return s_himlExtraLarge ? s_himlExtraLarge : s_himlLarge;
+    case SHIL_JUMBO:      return s_himlJumbo ? s_himlJumbo : (s_himlExtraLarge ? s_himlExtraLarge : s_himlLarge);
+    default:              return s_himlSmall;
+    }
+}
+
+HIMAGELIST GetSystemImageList(bool large) {
+    return GetSystemImageList(large ? SHIL_LARGE : SHIL_SMALL);
 }
 
 static int s_defaultFolderIcon = -1;
@@ -503,6 +545,12 @@ static int ExtractCustomIcon(const std::wstring& filePath, int iconIndex = 0) {
         if (hLarge && s_himlLarge) {
             int largeIdx = ImageList_ReplaceIcon(s_himlLarge, -1, hLarge);
             if (resultIcon < 0) resultIcon = largeIdx;
+        }
+        if (hLarge && s_himlExtraLarge && s_himlExtraLarge != s_himlLarge) {
+            ImageList_ReplaceIcon(s_himlExtraLarge, -1, hLarge);
+        }
+        if (hLarge && s_himlJumbo && s_himlJumbo != s_himlLarge && s_himlJumbo != s_himlExtraLarge) {
+            ImageList_ReplaceIcon(s_himlJumbo, -1, hLarge);
         }
     }
     if (hSmall) DestroyIcon(hSmall);
@@ -731,6 +779,46 @@ std::wstring GetItemTypeName(const std::wstring& path, DWORD attr) {
     return typeName;
 }
 
+bool CanHaveThumbnail(const std::wstring& ext) {
+    if (ext.empty()) return false;
+    static const std::unordered_set<std::wstring> s_thumbExts = {
+        L".jpg", L".jpeg", L".png", L".bmp", L".gif", L".webp",
+        L".tif", L".tiff", L".ico", L".heic", L".avif", L".svg",
+        L".raw", L".cr2", L".nef", L".arw", L".dng",
+        L".mp4", L".mkv", L".avi", L".mov", L".wmv", L".flv",
+        L".m4v", L".webm", L".ts", L".rmvb", L".mpg", L".mpeg",
+        L".pdf", L".psd", L".ai"
+    };
+    std::wstring lower = ext;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
+    return s_thumbExts.count(lower) > 0;
+}
+
+HBITMAP GetThumbnail(const std::wstring& path, int size) {
+    if (path.empty()) return nullptr;
+    IShellItemImageFactory* pFactory = nullptr;
+    HRESULT hr = E_FAIL;
+    if (IsVirtualShellPath(path)) {
+        PIDLIST_ABSOLUTE pidl = HexToPidl(path);
+        if (pidl) {
+            hr = SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&pFactory));
+            ILFree(pidl);
+        }
+    } else {
+        hr = SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&pFactory));
+    }
+    if (FAILED(hr) || !pFactory) return nullptr;
+
+    SIZE sz = { size, size };
+    HBITMAP hbmp = nullptr;
+    hr = pFactory->GetImage(sz, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &hbmp);
+    pFactory->Release();
+    if (SUCCEEDED(hr) && hbmp) {
+        return hbmp;
+    }
+    return nullptr;
+}
+
 void ClearDriveIconCache() {
     std::lock_guard<std::mutex> lock(s_iconCacheMutex);
     s_driveIconCache.clear();
@@ -788,7 +876,353 @@ void EnumerateDrives(std::vector<NeoShellItem>& outDrives) {
         pDrive += wcslen(pDrive) + 1;
     }
 
+    // Also enumerate Portable Devices / MTP / Shell virtual devices under This PC
+    IShellItem* pComputer = nullptr;
+    HRESULT hrComp = SHGetKnownFolderItem(FOLDERID_ComputerFolder, KF_FLAG_DEFAULT, NULL, IID_PPV_ARGS(&pComputer));
+    if (FAILED(hrComp)) {
+        hrComp = SHCreateItemFromParsingName(L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", NULL, IID_PPV_ARGS(&pComputer));
+    }
+    if (SUCCEEDED(hrComp) && pComputer) {
+        IEnumShellItems* pEnum = nullptr;
+        if (SUCCEEDED(pComputer->BindToHandler(NULL, BHID_EnumItems, IID_PPV_ARGS(&pEnum))) && pEnum) {
+            IShellItem* pItem = nullptr;
+            ULONG fetched = 0;
+            while (pEnum->Next(1, &pItem, &fetched) == S_OK && pItem) {
+                LPWSTR pszFsPath = nullptr;
+                HRESULT hrFs = pItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFsPath);
+                if (SUCCEEDED(hrFs) && pszFsPath) {
+                    bool alreadyHave = false;
+                    for (const auto& existing : outDrives) {
+                        if (_wcsnicmp(existing.fullPath.c_str(), pszFsPath, 2) == 0) {
+                            alreadyHave = true;
+                            break;
+                        }
+                    }
+                    CoTaskMemFree(pszFsPath);
+                    if (alreadyHave) {
+                        pItem->Release();
+                        continue;
+                    }
+                }
+
+                PIDLIST_ABSOLUTE pidl = nullptr;
+                if (SUCCEEDED(SHGetIDListFromObject(pItem, &pidl)) && pidl) {
+                    LPWSTR pszName = nullptr;
+                    pItem->GetDisplayName(SIGDN_NORMALDISPLAY, &pszName);
+                    std::wstring devName = (pszName && pszName[0]) ? pszName : L"";
+                    if (pszName) CoTaskMemFree(pszName);
+
+                    SFGAOF attrs = 0;
+                    pItem->GetAttributes(SFGAO_FOLDER | SFGAO_STORAGE | SFGAO_STREAM, &attrs);
+                    bool isFolder = (attrs & (SFGAO_FOLDER | SFGAO_STORAGE)) != 0;
+
+                    if (isFolder && !devName.empty() && devName != L"Desktop" && devName != L"桌面") {
+                        SHFILEINFOW sfi = { 0 };
+                        SHGetFileInfoW((LPCWSTR)pidl, 0, &sfi, sizeof(sfi), SHGFI_PIDL | SHGFI_SYSICONINDEX | SHGFI_TYPENAME);
+
+                        NeoShellItem devItem;
+                        devItem.name = devName;
+                        devItem.fullPath = PidlToHex(pidl);
+                        devItem.isFolder = true;
+                        devItem.isDrive = false;
+                        devItem.attributes = FILE_ATTRIBUTE_DIRECTORY;
+                        devItem.typeName = (sfi.szTypeName[0] != L'\0') ? sfi.szTypeName : I18n::Get().T(StringId::DriveRemovable);
+                        devItem.iconIndex = sfi.iIcon;
+                        devItem.size = 0;
+
+                        bool dup = false;
+                        for (const auto& ex : outDrives) {
+                            if (ex.name == devItem.name || ex.fullPath == devItem.fullPath) {
+                                dup = true;
+                                break;
+                            }
+                        }
+                        if (!dup) {
+                            outDrives.push_back(devItem);
+                        }
+                    }
+                    ILFree(pidl);
+                }
+                pItem->Release();
+            }
+            pEnum->Release();
+        }
+        pComputer->Release();
+    }
+
     SetErrorMode(oldErrMode);
+}
+
+bool IsVirtualShellPath(const std::wstring& path) {
+    if (path.empty()) return false;
+    if (path.rfind(L"shell:pidl:", 0) == 0) return true;
+    if (path.rfind(L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\", 0) == 0) return true;
+    return false;
+}
+
+std::wstring PidlToHex(PCIDLIST_ABSOLUTE pidl) {
+    if (!pidl) return L"";
+    UINT cb = ILGetSize(pidl);
+    const BYTE* p = (const BYTE*)pidl;
+    std::wstring hex = L"shell:pidl:";
+    const wchar_t digits[] = L"0123456789ABCDEF";
+    hex.reserve(11 + cb * 2);
+    for (UINT i = 0; i < cb; ++i) {
+        hex += digits[(p[i] >> 4) & 0x0F];
+        hex += digits[p[i] & 0x0F];
+    }
+    return hex;
+}
+
+PIDLIST_ABSOLUTE HexToPidl(const std::wstring& hex) {
+    const std::wstring prefix = L"shell:pidl:";
+    if (hex.rfind(prefix, 0) != 0) {
+        if (hex.rfind(L"::{", 0) == 0) {
+            PIDLIST_ABSOLUTE pidl = nullptr;
+            if (SUCCEEDED(SHParseDisplayName(hex.c_str(), NULL, &pidl, 0, NULL)) && pidl) {
+                return pidl;
+            }
+        }
+        return nullptr;
+    }
+    size_t hexLen = hex.length() - prefix.length();
+    if (hexLen == 0 || hexLen % 2 != 0) return nullptr;
+    size_t byteCount = hexLen / 2;
+    BYTE* pBytes = (BYTE*)CoTaskMemAlloc(byteCount);
+    if (!pBytes) return nullptr;
+
+    auto hexVal = [](wchar_t c) -> int {
+        if (c >= L'0' && c <= L'9') return c - L'0';
+        if (c >= L'A' && c <= L'F') return c - L'A' + 10;
+        if (c >= L'a' && c <= L'f') return c - L'a' + 10;
+        return 0;
+    };
+
+    const wchar_t* p = hex.c_str() + prefix.length();
+    for (size_t i = 0; i < byteCount; ++i) {
+        pBytes[i] = (BYTE)((hexVal(p[i * 2]) << 4) | hexVal(p[i * 2 + 1]));
+    }
+    return (PIDLIST_ABSOLUTE)pBytes;
+}
+
+IShellItem* CreateShellItemFromPathOrPidl(const std::wstring& path) {
+    if (path.empty()) return nullptr;
+    if (IsVirtualShellPath(path)) {
+        PIDLIST_ABSOLUTE pidl = HexToPidl(path);
+        if (pidl) {
+            IShellItem* psi = nullptr;
+            SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&psi));
+            ILFree(pidl);
+            return psi;
+        }
+    }
+    IShellItem* psi = nullptr;
+    std::wstring norm = Util::NormalizePath(path);
+    if (SUCCEEDED(SHCreateItemFromParsingName(norm.c_str(), nullptr, IID_PPV_ARGS(&psi))) && psi) {
+        return psi;
+    }
+    return nullptr;
+}
+
+struct ShellNamespaceCacheEntry {
+    DWORD tickCount = 0;
+    bool showHidden = false;
+    bool hideDotFiles = false;
+    std::vector<NeoShellItem> items;
+};
+static std::mutex s_shellCacheMutex;
+static std::unordered_map<std::wstring, ShellNamespaceCacheEntry> s_shellNamespaceCache;
+
+bool GetCachedShellNamespace(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems, bool hideDotFiles) {
+    std::lock_guard<std::mutex> lock(s_shellCacheMutex);
+    auto it = s_shellNamespaceCache.find(path);
+    if (it != s_shellNamespaceCache.end()) {
+        DWORD now = GetTickCount();
+        if (now - it->second.tickCount < 20000 &&
+            it->second.showHidden == showHidden &&
+            it->second.hideDotFiles == hideDotFiles) {
+            outItems = it->second.items;
+            return true;
+        }
+    }
+    return false;
+}
+
+void InvalidateVirtualShellCache(const std::wstring& path) {
+    std::lock_guard<std::mutex> lock(s_shellCacheMutex);
+    if (path.empty()) {
+        s_shellNamespaceCache.clear();
+    } else {
+        s_shellNamespaceCache.erase(path);
+    }
+}
+
+bool EnumerateShellNamespace(const std::wstring& path, bool showHidden, std::vector<NeoShellItem>& outItems, bool hideDotFiles) {
+    if (GetCachedShellNamespace(path, showHidden, outItems, hideDotFiles)) {
+        return true;
+    }
+
+    PIDLIST_ABSOLUTE pidl = HexToPidl(path);
+    if (!pidl) return false;
+
+    IShellItem* pFolderItem = nullptr;
+    HRESULT hr = SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&pFolderItem));
+    ILFree(pidl);
+    if (FAILED(hr) || !pFolderItem) return false;
+
+    IEnumShellItems* pEnum = nullptr;
+    hr = pFolderItem->BindToHandler(NULL, BHID_EnumItems, IID_PPV_ARGS(&pEnum));
+    if (FAILED(hr) || !pEnum) {
+        pFolderItem->Release();
+        return false;
+    }
+
+    std::vector<NeoShellItem> folders;
+    std::vector<NeoShellItem> files;
+
+    IShellItem* pChild = nullptr;
+    ULONG fetched = 0;
+    while (pEnum->Next(1, &pChild, &fetched) == S_OK && pChild) {
+        LPWSTR pName = nullptr;
+        pChild->GetDisplayName(SIGDN_NORMALDISPLAY, &pName);
+        std::wstring nameStr = pName ? pName : L"";
+        if (pName) CoTaskMemFree(pName);
+
+        if (nameStr.empty()) {
+            pChild->Release();
+            continue;
+        }
+
+        if (hideDotFiles && nameStr[0] == L'.' && !showHidden) {
+            pChild->Release();
+            continue;
+        }
+
+        SFGAOF attrs = 0;
+        pChild->GetAttributes(SFGAO_FOLDER | SFGAO_STORAGE | SFGAO_HIDDEN, &attrs);
+        bool isFolder = (attrs & (SFGAO_FOLDER | SFGAO_STORAGE)) != 0;
+        bool isHidden = (attrs & SFGAO_HIDDEN) != 0;
+
+        if (isHidden && !showHidden) {
+            pChild->Release();
+            continue;
+        }
+
+        PIDLIST_ABSOLUTE childPidl = nullptr;
+        if (SUCCEEDED(SHGetIDListFromObject(pChild, &childPidl)) && childPidl) {
+            SHFILEINFOW sfi = { 0 };
+            SHGetFileInfoW((LPCWSTR)childPidl, 0, &sfi, sizeof(sfi), SHGFI_PIDL | SHGFI_SYSICONINDEX | SHGFI_TYPENAME);
+
+            NeoShellItem item;
+            item.name = nameStr;
+            item.fullPath = PidlToHex(childPidl);
+            item.isFolder = isFolder;
+            item.attributes = isFolder ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+            if (isHidden) item.attributes |= FILE_ATTRIBUTE_HIDDEN;
+            item.iconIndex = sfi.iIcon;
+            item.typeName = (sfi.szTypeName[0] != L'\0') ? sfi.szTypeName : (isFolder ? I18n::Get().T(StringId::Folder) : L"文件");
+
+            const wchar_t* pExt = PathFindExtensionW(nameStr.c_str());
+            item.ext = pExt ? pExt : L"";
+
+            if (!isFolder) {
+                IShellItem2* pItem2 = nullptr;
+                if (SUCCEEDED(pChild->QueryInterface(IID_PPV_ARGS(&pItem2))) && pItem2) {
+                    ULONGLONG sizeVal = 0;
+                    if (SUCCEEDED(pItem2->GetUInt64(PKEY_Size, &sizeVal))) {
+                        item.size = sizeVal;
+                        item.isSizeCalculated = true;
+                    }
+                    FILETIME ftMod = { 0 };
+                    if (SUCCEEDED(pItem2->GetFileTime(PKEY_DateModified, &ftMod))) {
+                        item.modifiedTime = ftMod;
+                    }
+                    FILETIME ftCreate = { 0 };
+                    if (SUCCEEDED(pItem2->GetFileTime(PKEY_DateCreated, &ftCreate))) {
+                        item.createdTime = ftCreate;
+                    }
+                    pItem2->Release();
+                }
+            } else {
+                IShellItem2* pItem2 = nullptr;
+                if (SUCCEEDED(pChild->QueryInterface(IID_PPV_ARGS(&pItem2))) && pItem2) {
+                    FILETIME ftMod = { 0 };
+                    if (SUCCEEDED(pItem2->GetFileTime(PKEY_DateModified, &ftMod))) {
+                        item.modifiedTime = ftMod;
+                    }
+                    pItem2->Release();
+                }
+            }
+
+            if (isFolder) {
+                folders.push_back(std::move(item));
+            } else {
+                files.push_back(std::move(item));
+            }
+            ILFree(childPidl);
+        }
+        pChild->Release();
+    }
+
+    pEnum->Release();
+    pFolderItem->Release();
+
+    outItems.reserve(folders.size() + files.size());
+    outItems.insert(outItems.end(), folders.begin(), folders.end());
+    outItems.insert(outItems.end(), files.begin(), files.end());
+
+    {
+        std::lock_guard<std::mutex> lock(s_shellCacheMutex);
+        ShellNamespaceCacheEntry entry;
+        entry.tickCount = GetTickCount();
+        entry.showHidden = showHidden;
+        entry.hideDotFiles = hideDotFiles;
+        entry.items = outItems;
+        s_shellNamespaceCache[path] = std::move(entry);
+    }
+    return true;
+}
+
+std::wstring GetVirtualItemDisplayName(const std::wstring& path, bool fullPath) {
+    PIDLIST_ABSOLUTE pidl = HexToPidl(path);
+    if (!pidl) return path;
+
+    IShellItem* pItem = nullptr;
+    HRESULT hr = SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&pItem));
+    ILFree(pidl);
+    if (FAILED(hr) || !pItem) return path;
+
+    std::wstring result;
+    if (fullPath) {
+        std::vector<std::wstring> segments;
+        IShellItem* pCur = pItem;
+        pCur->AddRef();
+        while (pCur) {
+            LPWSTR pName = nullptr;
+            pCur->GetDisplayName(SIGDN_NORMALDISPLAY, &pName);
+            if (pName) {
+                segments.push_back(pName);
+                CoTaskMemFree(pName);
+            }
+            IShellItem* pParent = nullptr;
+            HRESULT hrParent = pCur->GetParent(&pParent);
+            pCur->Release();
+            pCur = SUCCEEDED(hrParent) ? pParent : nullptr;
+        }
+        for (int i = (int)segments.size() - 1; i >= 0; --i) {
+            if (segments[i] == L"Desktop" || segments[i] == L"桌面") continue;
+            if (!result.empty()) result += L"\\";
+            result += segments[i];
+        }
+    } else {
+        LPWSTR pName = nullptr;
+        if (SUCCEEDED(pItem->GetDisplayName(SIGDN_NORMALDISPLAY, &pName)) && pName) {
+            result = pName;
+            CoTaskMemFree(pName);
+        }
+    }
+    pItem->Release();
+    return result.empty() ? path : result;
 }
 
 bool IsWslPath(const std::wstring& path) {
@@ -810,7 +1244,10 @@ bool IsWslPath(const std::wstring& path) {
 
 bool IsValidDirectory(const std::wstring& path) {
     if (path.empty()) return false;
-    if (path == L"This PC" || path == L"此电脑" || path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
+    if (path == L"This PC" || path == L"此电脑" || _wcsicmp(path.c_str(), L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") == 0) {
+        return true;
+    }
+    if (IsVirtualShellPath(path)) {
         return true;
     }
     if (IsWslPath(path)) {
@@ -943,6 +1380,11 @@ bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<N
         return true;
     }
 
+    // Check if it's virtual shell namespace (MTP Android device, storage, etc.)
+    if (IsVirtualShellPath(path)) {
+        return EnumerateShellNamespace(path, showHidden, outItems, hideDotFiles);
+    }
+
     // Check if it's Linux virtual root
     std::wstring normPath = Util::NormalizePath(path);
     if (_wcsicmp(normPath.c_str(), L"\\\\wsl.localhost") == 0 ||
@@ -1018,12 +1460,42 @@ bool EnumerateDirectory(const std::wstring& path, bool showHidden, std::vector<N
 }
 
 bool OpenItem(HWND hwnd, const std::wstring& path) {
+    if (IsVirtualShellPath(path)) {
+        PIDLIST_ABSOLUTE pidl = HexToPidl(path);
+        if (pidl) {
+            SHELLEXECUTEINFOW sei = { sizeof(sei) };
+            sei.cbSize = sizeof(sei);
+            sei.fMask = SEE_MASK_IDLIST;
+            sei.hwnd = hwnd;
+            sei.lpIDList = pidl;
+            sei.nShow = SW_SHOWNORMAL;
+            BOOL ok = ShellExecuteExW(&sei);
+            ILFree(pidl);
+            return ok != FALSE;
+        }
+    }
     HINSTANCE hInst = ShellExecuteW(hwnd, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     return (INT_PTR)hInst > 32;
 }
 
 bool ShowItemProperties(HWND hwnd, const std::wstring& path) {
     if (path.empty()) return false;
+
+    if (IsVirtualShellPath(path)) {
+        PIDLIST_ABSOLUTE pidl = HexToPidl(path);
+        if (pidl) {
+            SHELLEXECUTEINFOW sei = { sizeof(sei) };
+            sei.cbSize = sizeof(sei);
+            sei.fMask = SEE_MASK_IDLIST | SEE_MASK_INVOKEIDLIST;
+            sei.hwnd = hwnd;
+            sei.lpVerb = L"properties";
+            sei.lpIDList = pidl;
+            sei.nShow = SW_SHOWNORMAL;
+            BOOL ok = ShellExecuteExW(&sei);
+            ILFree(pidl);
+            return ok != FALSE;
+        }
+    }
 
     // 1. Special handling for "This PC" / Computer
     if (path == L"This PC" || path == L"此电脑" || path == L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") {
@@ -1361,14 +1833,21 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_LIST, isZh ? L"列表(&L)" : L"List(&L)");
     AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_DETAILS, isZh ? L"详细信息(&D)" : L"Details(&D)");
     AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_TILES, isZh ? L"平铺(&S)" : L"Tiles(&S)");
+    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_CONTENT, isZh ? L"内容(&C)" : L"Content(&C)");
 
     int checkViewCmd = CMD_BG_VIEW_DETAILS;
-    if (currentViewMode == 0) checkViewCmd = CMD_BG_VIEW_DETAILS;
-    else if (currentViewMode == 1) checkViewCmd = CMD_BG_VIEW_LARGE;
-    else if (currentViewMode == 2) checkViewCmd = CMD_BG_VIEW_SMALL;
-    else if (currentViewMode == 3) checkViewCmd = CMD_BG_VIEW_LIST;
-    else if (currentViewMode == 4) checkViewCmd = CMD_BG_VIEW_TILES;
-    CheckMenuRadioItem(hSubView, CMD_BG_VIEW_DETAILS, CMD_BG_VIEW_TILES, checkViewCmd, MF_BYCOMMAND);
+    switch (currentViewMode) {
+    case 0: checkViewCmd = CMD_BG_VIEW_DETAILS; break;
+    case 1: checkViewCmd = CMD_BG_VIEW_XLARGE; break;
+    case 2: checkViewCmd = CMD_BG_VIEW_LARGE; break;
+    case 3: checkViewCmd = CMD_BG_VIEW_MEDIUM; break;
+    case 4: checkViewCmd = CMD_BG_VIEW_SMALL; break;
+    case 5: checkViewCmd = CMD_BG_VIEW_LIST; break;
+    case 6: checkViewCmd = CMD_BG_VIEW_TILES; break;
+    case 7: checkViewCmd = CMD_BG_VIEW_CONTENT; break;
+    default: checkViewCmd = CMD_BG_VIEW_DETAILS; break;
+    }
+    CheckMenuRadioItem(hSubView, CMD_BG_VIEW_DETAILS, CMD_BG_VIEW_CONTENT, checkViewCmd, MF_BYCOMMAND);
     AppendMenuW(hSubView, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hSubView, MF_STRING | (Config::Get().showItemCheckBoxes ? MF_CHECKED : MF_UNCHECKED),
                 CMD_BG_VIEW_ITEM_CHECKBOXES, isZh ? L"项目复选框(&X)" : L"Item check boxes(&X)");
@@ -1582,8 +2061,39 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     return true;
 }
 
+IDataObject* CreateFileDataObject(HWND hwnd, const std::wstring& currentDir, const std::vector<std::wstring>& paths);
+
 bool CopyFilesToClipboard(HWND hwnd, const std::vector<std::wstring>& paths, bool isCut) {
     if (paths.empty()) return false;
+
+    // Check if any path is a virtual shell path (such as MTP Android device)
+    bool hasVirtual = false;
+    for (const auto& p : paths) {
+        if (IsVirtualShellPath(p)) {
+            hasVirtual = true;
+            break;
+        }
+    }
+
+    if (hasVirtual) {
+        IDataObject* pDataObj = CreateFileDataObject(hwnd, L"", paths);
+        if (pDataObj) {
+            UINT uDropEffect = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+            FORMATETC fmt = { (CLIPFORMAT)uDropEffect, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+            STGMEDIUM med = { TYMED_HGLOBAL };
+            med.hGlobal = GlobalAlloc(GHND | GMEM_SHARE, sizeof(DWORD));
+            if (med.hGlobal) {
+                DWORD* pdwEffect = (DWORD*)GlobalLock(med.hGlobal);
+                *pdwEffect = isCut ? DROPEFFECT_MOVE : DROPEFFECT_COPY;
+                GlobalUnlock(med.hGlobal);
+                pDataObj->SetData(&fmt, &med, TRUE);
+            }
+            HRESULT hr = OleSetClipboard(pDataObj);
+            pDataObj->Release();
+            return SUCCEEDED(hr);
+        }
+    }
+
     if (!OpenClipboard(hwnd)) return false;
     EmptyClipboard();
 
@@ -1740,7 +2250,7 @@ void BlendRectWithColor(HDC hdc, const RECT& rc, COLORREF clr, BYTE alpha) {
 
 bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vector<std::wstring>& srcFiles, bool isMove) {
     if (destDir.empty() || srcFiles.empty()) return false;
-    if (!PathFileExistsW(destDir.c_str())) return false;
+    if (!IsValidDirectory(destDir)) return false;
 
     // Launch dedicated background STA thread to execute operations asynchronously so UI is never frozen
     std::thread([hwndOwner, destDir, srcFiles, isMove]() {
@@ -1755,7 +2265,15 @@ bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vec
         std::vector<std::wstring> diffDirFiles;
         std::vector<std::wstring> changedSrcDirs;
 
+        bool destIsVirtual = IsVirtualShellPath(destDir);
+
         for (const auto& src : srcFiles) {
+            bool srcIsVirtual = IsVirtualShellPath(src);
+            if (destIsVirtual || srcIsVirtual) {
+                diffDirFiles.push_back(src);
+                continue;
+            }
+
             std::wstring normSrc = Util::NormalizePath(src);
             wchar_t sDir[MAX_PATH];
             StringCchCopyW(sDir, MAX_PATH, normSrc.c_str());
@@ -1783,18 +2301,17 @@ bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vec
         bool anySuccess = false;
 
         // 1. 同目录复制：使用 FOF_RENAMEONCOLLISION 自动生成副本
-        // SetOwnerWindow(nullptr) 让系统进度对话框独立存在，不模态禁用 NeoMDIE 进程
         if (!sameDirFiles.empty()) {
             IFileOperation* pfoSame = nullptr;
             if (SUCCEEDED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pfoSame)))) {
                 pfoSame->SetOperationFlags(FOF_ALLOWUNDO | FOFX_ADDUNDORECORD | FOF_NOCONFIRMMKDIR | FOF_RENAMEONCOLLISION);
                 pfoSame->SetOwnerWindow(nullptr);
 
-                IShellItem* psiDest = nullptr;
-                if (SUCCEEDED(SHCreateItemFromParsingName(normDest.c_str(), nullptr, IID_PPV_ARGS(&psiDest)))) {
+                IShellItem* psiDest = CreateShellItemFromPathOrPidl(destDir);
+                if (psiDest) {
                     for (const auto& s : sameDirFiles) {
-                        IShellItem* psiSrc = nullptr;
-                        if (SUCCEEDED(SHCreateItemFromParsingName(s.c_str(), nullptr, IID_PPV_ARGS(&psiSrc)))) {
+                        IShellItem* psiSrc = CreateShellItemFromPathOrPidl(s);
+                        if (psiSrc) {
                             pfoSame->CopyItem(psiSrc, psiDest, nullptr, nullptr);
                             psiSrc->Release();
                         }
@@ -1809,19 +2326,18 @@ bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vec
             }
         }
 
-        // 2. 跨目录复制或跨目录移动：不加 FOF_RENAMEONCOLLISION，发生文件名冲突时弹出系统标准提示框（替换/跳过）
-        // SetOwnerWindow(nullptr) 同样避免主窗口被系统锁定
+        // 2. 跨目录复制或跨目录移动（支持本地磁盘与 Android/MTP 便携设备互拷）
         if (!diffDirFiles.empty()) {
             IFileOperation* pfoDiff = nullptr;
             if (SUCCEEDED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pfoDiff)))) {
                 pfoDiff->SetOperationFlags(FOF_ALLOWUNDO | FOFX_ADDUNDORECORD | FOF_NOCONFIRMMKDIR);
                 pfoDiff->SetOwnerWindow(nullptr);
 
-                IShellItem* psiDest = nullptr;
-                if (SUCCEEDED(SHCreateItemFromParsingName(normDest.c_str(), nullptr, IID_PPV_ARGS(&psiDest)))) {
+                IShellItem* psiDest = CreateShellItemFromPathOrPidl(destDir);
+                if (psiDest) {
                     for (const auto& s : diffDirFiles) {
-                        IShellItem* psiSrc = nullptr;
-                        if (SUCCEEDED(SHCreateItemFromParsingName(s.c_str(), nullptr, IID_PPV_ARGS(&psiSrc)))) {
+                        IShellItem* psiSrc = CreateShellItemFromPathOrPidl(s);
+                        if (psiSrc) {
                             if (isMove) {
                                 pfoDiff->MoveItem(psiSrc, psiDest, nullptr, nullptr);
                             } else {
@@ -1841,18 +2357,24 @@ bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vec
         }
 
         if (anySuccess) {
-            if (isMove && !diffDirFiles.empty()) {
-                std::vector<std::pair<std::wstring, std::wstring>> moves;
-                for (const auto& s : diffDirFiles) {
-                    moves.push_back({ s, normDest + L"\\" + PathFindFileNameW(s.c_str()) });
+            if (!destIsVirtual) {
+                if (isMove && !diffDirFiles.empty()) {
+                    std::vector<std::pair<std::wstring, std::wstring>> moves;
+                    for (const auto& s : diffDirFiles) {
+                        if (!IsVirtualShellPath(s)) {
+                            moves.push_back({ s, normDest + L"\\" + PathFindFileNameW(s.c_str()) });
+                        }
+                    }
+                    if (!moves.empty()) RecordMove(moves);
+                } else if (!isMove && !diffDirFiles.empty()) {
+                    std::vector<std::wstring> copied;
+                    for (const auto& s : diffDirFiles) {
+                        if (!IsVirtualShellPath(s)) {
+                            copied.push_back(normDest + L"\\" + PathFindFileNameW(s.c_str()));
+                        }
+                    }
+                    if (!copied.empty()) RecordCopy(copied);
                 }
-                RecordMove(moves);
-            } else if (!isMove && !diffDirFiles.empty()) {
-                std::vector<std::wstring> copied;
-                for (const auto& s : diffDirFiles) {
-                    copied.push_back(normDest + L"\\" + PathFindFileNameW(s.c_str()));
-                }
-                RecordCopy(copied);
             }
             if (isMove) {
                 if (OpenClipboard(nullptr)) {
@@ -1860,7 +2382,9 @@ bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vec
                     CloseClipboard();
                 }
             }
-            SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, normDest.c_str(), nullptr);
+            if (!destIsVirtual) {
+                SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, normDest.c_str(), nullptr);
+            }
             for (const auto& sd : changedSrcDirs) {
                 SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, sd.c_str(), nullptr);
             }
@@ -1878,11 +2402,10 @@ bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vec
 }
 
 bool PasteFilesFromClipboard(HWND hwnd, const std::wstring& destDir) {
-    if (destDir.empty() || !PathFileExistsW(destDir.c_str())) return false;
+    if (destDir.empty() || !IsValidDirectory(destDir)) return false;
 
-    // 1. If standard physical files (CF_HDROP) are on the clipboard,
-    // prefer IFileOperation for synchronous/asynchronous execution, native progress dialog, and full undo support (Ctrl+Z)
-    if (IsClipboardFormatAvailable(CF_HDROP)) {
+    // 1. If target is physical directory and standard CF_HDROP is available
+    if (!IsVirtualShellPath(destDir) && IsClipboardFormatAvailable(CF_HDROP)) {
         if (OpenClipboard(hwnd)) {
             HDROP hDrop = (HDROP)GetClipboardData(CF_HDROP);
             if (hDrop) {
@@ -1916,35 +2439,71 @@ bool PasteFilesFromClipboard(HWND hwnd, const std::wstring& destDir) {
         }
     }
 
-    // 2. Virtual remote streams (UU远程, 向日葵, ToDesk, Windows远程桌面 RDP, VMware, Outlook attachments)
-    // Handle via native Windows Shell IDropTarget from OleGetClipboard
-    IDataObject* pDataObj = nullptr;
-    if (SUCCEEDED(OleGetClipboard(&pDataObj)) && pDataObj) {
-        IShellItem* psiDest = nullptr;
-        if (SUCCEEDED(SHCreateItemFromParsingName(destDir.c_str(), nullptr, IID_PPV_ARGS(&psiDest))) && psiDest) {
-            IDropTarget* pDropTarget = nullptr;
-            if (SUCCEEDED(psiDest->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&pDropTarget))) && pDropTarget) {
-                POINTL pt = { 0, 0 };
-                DWORD dwEffect = DROPEFFECT_COPY | DROPEFFECT_MOVE;
-                if (SUCCEEDED(pDropTarget->DragEnter(pDataObj, MK_LBUTTON, pt, &dwEffect)) && dwEffect != DROPEFFECT_NONE) {
-                    HRESULT hrDrop = pDropTarget->Drop(pDataObj, 0, pt, &dwEffect);
-                    pDropTarget->Release();
-                    psiDest->Release();
-                    pDataObj->Release();
-                    if (SUCCEEDED(hrDrop)) {
-                        return true;
+    // 2. Shell IDList / Virtual Shell objects (Android MTP devices, remote streams, etc.)
+    // Launch dedicated background STA thread to execute operations asynchronously so UI is never frozen
+    std::thread([hwnd, destDir]() {
+        HRESULT hrCom = OleInitialize(nullptr);
+        IDataObject* pDataObj = nullptr;
+        if (SUCCEEDED(OleGetClipboard(&pDataObj)) && pDataObj) {
+            IShellItem* psiDest = CreateShellItemFromPathOrPidl(destDir);
+            if (psiDest) {
+                bool isMove = false;
+                UINT uDropEffect = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+                FORMATETC fmtEffect = { (CLIPFORMAT)uDropEffect, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+                STGMEDIUM medEffect = { 0 };
+                if (SUCCEEDED(pDataObj->GetData(&fmtEffect, &medEffect))) {
+                    DWORD* pdwEffect = (DWORD*)GlobalLock(medEffect.hGlobal);
+                    if (pdwEffect && (*pdwEffect & DROPEFFECT_MOVE)) {
+                        isMove = true;
                     }
-                } else {
-                    pDropTarget->DragLeave();
-                    pDropTarget->Release();
+                    GlobalUnlock(medEffect.hGlobal);
+                    ReleaseStgMedium(&medEffect);
                 }
-            }
-            psiDest->Release();
-        }
-        pDataObj->Release();
-    }
 
-    return false;
+                bool operationDone = false;
+                IFileOperation* pfo = nullptr;
+                if (SUCCEEDED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pfo)))) {
+                    pfo->SetOperationFlags(FOF_ALLOWUNDO | FOFX_ADDUNDORECORD | FOF_NOCONFIRMMKDIR);
+                    pfo->SetOwnerWindow(hwnd);
+                    HRESULT hrAction = isMove ? pfo->MoveItems(pDataObj, psiDest) : pfo->CopyItems(pDataObj, psiDest);
+                    if (SUCCEEDED(hrAction) && SUCCEEDED(pfo->PerformOperations())) {
+                        operationDone = true;
+                    }
+                    pfo->Release();
+                }
+
+                if (!operationDone) {
+                    IDropTarget* pDropTarget = nullptr;
+                    if (SUCCEEDED(psiDest->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&pDropTarget))) && pDropTarget) {
+                        POINTL pt = { 0, 0 };
+                        DWORD dwEffect = isMove ? DROPEFFECT_MOVE : DROPEFFECT_COPY;
+                        if (SUCCEEDED(pDropTarget->DragEnter(pDataObj, MK_LBUTTON, pt, &dwEffect)) && dwEffect != DROPEFFECT_NONE) {
+                            HRESULT hrDrop = pDropTarget->Drop(pDataObj, 0, pt, &dwEffect);
+                            if (SUCCEEDED(hrDrop)) {
+                                operationDone = true;
+                            }
+                        } else {
+                            pDropTarget->DragLeave();
+                        }
+                        pDropTarget->Release();
+                    }
+                }
+                psiDest->Release();
+            }
+            pDataObj->Release();
+        }
+        OleUninitialize();
+
+        if (hwnd && IsWindow(hwnd)) {
+            HWND hRoot = GetAncestor(hwnd, GA_ROOT);
+            if (hRoot && IsWindow(hRoot)) {
+                PostMessageW(hRoot, WM_COMMAND, MAKEWPARAM(ID_VIEW_REFRESH, 0), 0);
+            }
+            PostMessageW(hwnd, WM_COMMAND, MAKEWPARAM(ID_VIEW_REFRESH, 0), 0);
+        }
+    }).detach();
+
+    return true;
 }
 
 bool PasteShortcut(HWND hwnd, const std::wstring& destDir) {
@@ -2242,6 +2801,42 @@ void CopyToClipboard(const std::wstring& text) {
 }
 
 std::wstring GetParentPath(const std::wstring& path) {
+    if (IsVirtualShellPath(path)) {
+        PIDLIST_ABSOLUTE pidl = HexToPidl(path);
+        if (pidl) {
+            IShellItem* pItem = nullptr;
+            if (SUCCEEDED(SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&pItem))) && pItem) {
+                IShellItem* pParent = nullptr;
+                HRESULT hrParent = pItem->GetParent(&pParent);
+                pItem->Release();
+                if (SUCCEEDED(hrParent) && pParent) {
+                    LPWSTR pszName = nullptr;
+                    pParent->GetDisplayName(SIGDN_NORMALDISPLAY, &pszName);
+                    std::wstring parentName = pszName ? pszName : L"";
+                    if (pszName) CoTaskMemFree(pszName);
+
+                    if (parentName == L"Desktop" || parentName == L"桌面" || parentName == L"This PC" || parentName == L"此电脑") {
+                        pParent->Release();
+                        ILFree(pidl);
+                        return L"This PC";
+                    }
+
+                    PIDLIST_ABSOLUTE parentPidl = nullptr;
+                    if (SUCCEEDED(SHGetIDListFromObject(pParent, &parentPidl)) && parentPidl) {
+                        std::wstring res = PidlToHex(parentPidl);
+                        ILFree(parentPidl);
+                        pParent->Release();
+                        ILFree(pidl);
+                        return res;
+                    }
+                    pParent->Release();
+                }
+            }
+            ILFree(pidl);
+        }
+        return L"This PC";
+    }
+
     std::wstring norm = Util::NormalizePath(path);
     if (norm.empty() || norm == L"此电脑" || norm == L"This PC") {
         return L"This PC";
@@ -2269,6 +2864,9 @@ std::wstring GetParentPath(const std::wstring& path) {
 }
 
 std::wstring GetDisplayName(const std::wstring& path) {
+    if (IsVirtualShellPath(path)) {
+        return GetVirtualItemDisplayName(path, false);
+    }
     if (path.empty() || path == L"此电脑" || path == L"This PC" || path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
         return I18n::Get().T(StringId::ThisPC);
     }
@@ -2481,7 +3079,12 @@ IDataObject* CreateFileDataObject(HWND hwnd, const std::wstring& currentDir, con
     std::vector<PIDLIST_ABSOLUTE> pidls;
     for (const auto& p : paths) {
         PIDLIST_ABSOLUTE pidl = nullptr;
-        if (SUCCEEDED(SHParseDisplayName(p.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
+        if (IsVirtualShellPath(p)) {
+            pidl = HexToPidl(p);
+        } else {
+            SHParseDisplayName(p.c_str(), nullptr, &pidl, 0, nullptr);
+        }
+        if (pidl) {
             pidls.push_back(pidl);
         }
     }
@@ -2490,7 +3093,9 @@ IDataObject* CreateFileDataObject(HWND hwnd, const std::wstring& currentDir, con
     if (!pidls.empty()) {
         IShellItemArray* pArray = nullptr;
         if (SUCCEEDED(SHCreateShellItemArrayFromIDLists((UINT)pidls.size(), (PCIDLIST_ABSOLUTE_ARRAY)pidls.data(), &pArray)) && pArray) {
-            pArray->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&pDataObj));
+            if (FAILED(pArray->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&pDataObj))) || !pDataObj) {
+                pArray->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&pDataObj));
+            }
             pArray->Release();
         }
         for (auto pidl : pidls) {
@@ -2623,24 +3228,80 @@ static bool CreateLauncherScript(const std::wstring& scriptPath, const std::wstr
     return false;
 }
 
+bool IsSystemSettingsOrControlPanel(const std::wstring& arg) {
+    if (arg.empty()) return false;
+
+    // 1. Control Panel CPL files, rundll invocations, or Windows Firewall components
+    if (StrStrIW(arg.c_str(), L".cpl") ||
+        StrStrIW(arg.c_str(), L"Control_RunDLL") ||
+        StrStrIW(arg.c_str(), L"Microsoft.WindowsFirewall") ||
+        StrStrIW(arg.c_str(), L"FirewallControlPanel")) {
+        return true;
+    }
+
+    // 2. Shell virtual namespaces: shell:::{...} or :::{...} or ::{...}
+    if (_wcsnicmp(arg.c_str(), L"shell:::", 8) == 0 ||
+        _wcsnicmp(arg.c_str(), L":::{", 4) == 0 ||
+        _wcsnicmp(arg.c_str(), L"::{", 3) == 0) {
+        // Exclude "This PC" / My Computer GUID: {20D04FE0-3AEA-1069-A2D8-08002B30309D}
+        if (StrStrIW(arg.c_str(), L"20D04FE0-3AEA-1069-A2D8-08002B30309D")) {
+            return false;
+        }
+        // Exclude WSL Linux GUID: {B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}
+        if (StrStrIW(arg.c_str(), L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6")) {
+            return false;
+        }
+        // Exclude internal PIDL virtual paths: shell:pidl:
+        if (arg.find(L"shell:pidl:") != std::wstring::npos) {
+            return false;
+        }
+        // All other GUID-based shell namespaces are system settings/control panels/recycle bin
+        return true;
+    }
+
+    // 3. Named system shell special folders (e.g. shell:ControlPanelFolder, shell:System, shell:PrintersFolder)
+    if (_wcsnicmp(arg.c_str(), L"shell:", 6) == 0) {
+        if (_wcsnicmp(arg.c_str(), L"shell:pidl:", 11) == 0) {
+            return false;
+        }
+        return true;
+    }
+
+    // 4. Known system control panel and settings GUIDs
+    static const wchar_t* s_systemGuids[] = {
+        L"4026492F-2F69-46B8-B9BF-5654FC07E423", // Windows Defender Firewall
+        L"645FF040-5081-101B-9F08-00AA002F954E", // Recycle Bin
+        L"21EC2020-3AEA-1069-A2DD-08002B30309D", // All Control Panel Items
+        L"26EE0668-A00A-44D7-9371-BEB064C98683", // Control Panel
+        L"7007ACC7-3202-11D1-AAD2-00805FC1270E", // Network Connections
+        L"7B81BE6A-CE2B-4676-A29E-EB907A5126C5", // Programs and Features
+        L"D20EA4E1-3957-11D2-A40B-0C5020524153", // Windows Tools
+        L"ED834ED6-4B5A-4BFE-8F11-A626DCB6A921", // Personalization
+        L"BB06C0E4-D293-4F75-8A90-CB05B6477EEE", // System
+        L"96AE8D80-A222-4879-97AF-BD65E52C3713"  // Security and Maintenance
+    };
+    for (const auto* guid : s_systemGuids) {
+        if (StrStrIW(arg.c_str(), guid)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool SetExplorerReplaced(bool enable) {
     // Windows 10 and 11 delegate directory/folder clicks through DelegateExecute COM handlers.
     // To cleanly override Windows Explorer per-user without requiring Administrator/UAC elevation:
-    // 1. Override HKCU\Software\Classes\Directory\shell\open\command & explore\command
-    // 2. Override HKCU\Software\Classes\Folder\shell\open\command & explore\command
-    // 3. Override HKCU\Software\Classes\Drive\shell\open\command & explore\command
-    // 4. Override HKCU\Software\Classes\CLSID\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\shell\open & explore
-    // 5. Set (Default) = "open" on Directory\shell, Folder\shell, Drive\shell
-    // 6. Set DelegateExecute = "" (empty string) to suppress Explorer's internal COM delegate!
+    // 1. Override HKCU\Software\Classes\Directory\shell\open\command & explore\command (file system directories)
+    // 2. Override HKCU\Software\Classes\Drive\shell\open\command & explore\command (disk drives)
+    // 3. Override HKCU\Software\Classes\CLSID\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\shell\open & explore (Explorer shortcuts & Win+E)
+    // NOTE: We deliberately do NOT override HKCU\Software\Classes\Folder so system settings, Control Panel
+    // applets (e.g. Windows Firewall), and virtual system folders are NOT intercepted!
     const wchar_t* openCmdKeys[] = {
         L"Software\\Classes\\Directory\\shell\\open\\command",
         L"Software\\Classes\\Directory\\shell\\explore\\command",
         L"Software\\Classes\\Directory\\shell\\opennewwindow\\command",
         L"Software\\Classes\\Directory\\shell\\opennewtab\\command",
-        L"Software\\Classes\\Folder\\shell\\open\\command",
-        L"Software\\Classes\\Folder\\shell\\explore\\command",
-        L"Software\\Classes\\Folder\\shell\\opennewwindow\\command",
-        L"Software\\Classes\\Folder\\shell\\opennewtab\\command",
         L"Software\\Classes\\Drive\\shell\\open\\command",
         L"Software\\Classes\\Drive\\shell\\explore\\command",
         L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\open\\command",
@@ -2651,9 +3312,11 @@ bool SetExplorerReplaced(bool enable) {
 
     const wchar_t* shellParents[] = {
         L"Software\\Classes\\Directory\\shell",
-        L"Software\\Classes\\Folder\\shell",
         L"Software\\Classes\\Drive\\shell"
     };
+
+    // Always clean up any legacy Folder\shell hooks so system settings/firewall are never trapped
+    RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\Classes\\Folder\\shell");
 
     if (enable) {
         wchar_t exePath[MAX_PATH];
@@ -2841,7 +3504,7 @@ void CheckForUpdates(HWND hwndParent) {
         std::wstring wTagName = Util::Utf8ToWide(tagName);
         std::wstring wHtmlUrl = Util::Utf8ToWide(htmlUrl);
 
-        const std::wstring currentVer = L"v1.1.2";
+        const std::wstring currentVer = L"v1.1.3";
         if (!wTagName.empty() && wTagName != currentVer) {
             std::wstring msg = isZh
                 ? (L"发现 NeoMDIE 新版本: " + wTagName + L" (当前版本: " + currentVer + L")\n\n下载路径与发布页面:\n" + wHtmlUrl + L"\n\n是否立即前往 GitHub 下载更新？")

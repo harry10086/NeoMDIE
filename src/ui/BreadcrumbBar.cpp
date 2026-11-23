@@ -55,11 +55,63 @@ void BreadcrumbBar::SetPath(const std::wstring& path) {
 
 void BreadcrumbBar::ParseSegments() {
     m_segments.clear();
-    if (m_currentPath.empty() || m_currentPath == L"此电脑" || m_currentPath == L"This PC" || m_currentPath.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
+    if (m_currentPath.empty() || m_currentPath == L"此电脑" || m_currentPath == L"This PC" ||
+        _wcsicmp(m_currentPath.c_str(), L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") == 0) {
         BreadcrumbSegment seg;
         seg.name = I18n::Get().T(StringId::ThisPC);
         seg.targetPath = L"This PC";
         m_segments.push_back(seg);
+        return;
+    }
+
+    if (ShellUtils::IsVirtualShellPath(m_currentPath)) {
+        // Start with This PC
+        BreadcrumbSegment root;
+        root.name = I18n::Get().T(StringId::ThisPC);
+        root.targetPath = L"This PC";
+        m_segments.push_back(root);
+
+        PIDLIST_ABSOLUTE pidl = ShellUtils::HexToPidl(m_currentPath);
+        if (pidl) {
+            IShellItem* pItem = nullptr;
+            if (SUCCEEDED(SHCreateItemFromIDList(pidl, IID_PPV_ARGS(&pItem))) && pItem) {
+                struct Ancestor {
+                    std::wstring name;
+                    std::wstring targetPath;
+                };
+                std::vector<Ancestor> chain;
+                IShellItem* pCur = pItem;
+                pCur->AddRef();
+                while (pCur) {
+                    LPWSTR pName = nullptr;
+                    pCur->GetDisplayName(SIGDN_NORMALDISPLAY, &pName);
+                    std::wstring nameStr = pName ? pName : L"";
+                    if (pName) CoTaskMemFree(pName);
+
+                    PIDLIST_ABSOLUTE curPidl = nullptr;
+                    if (SUCCEEDED(SHGetIDListFromObject(pCur, &curPidl)) && curPidl) {
+                        chain.push_back({ nameStr, ShellUtils::PidlToHex(curPidl) });
+                        ILFree(curPidl);
+                    }
+
+                    IShellItem* pParent = nullptr;
+                    HRESULT hrParent = pCur->GetParent(&pParent);
+                    pCur->Release();
+                    pCur = SUCCEEDED(hrParent) ? pParent : nullptr;
+                }
+
+                for (int i = (int)chain.size() - 1; i >= 0; --i) {
+                    if (chain[i].name == L"Desktop" || chain[i].name == L"桌面") continue;
+                    if (chain[i].name == L"This PC" || chain[i].name == L"此电脑") continue;
+                    BreadcrumbSegment seg;
+                    seg.name = chain[i].name;
+                    seg.targetPath = chain[i].targetPath;
+                    m_segments.push_back(seg);
+                }
+                pItem->Release();
+            }
+            ILFree(pidl);
+        }
         return;
     }
 
@@ -174,7 +226,11 @@ void BreadcrumbBar::UpdateLayout(int x, int y, int width, int height) {
 
 void BreadcrumbBar::SwitchToEditMode() {
     m_editMode = true;
-    SetWindowTextW(m_hwndEdit, m_currentPath.c_str());
+    std::wstring displayText = m_currentPath;
+    if (ShellUtils::IsVirtualShellPath(m_currentPath)) {
+        displayText = ShellUtils::GetVirtualItemDisplayName(m_currentPath, true);
+    }
+    SetWindowTextW(m_hwndEdit, displayText.c_str());
     SendMessageW(m_hwndEdit, WM_SETFONT, (WPARAM)Theme::Get().GetUIFont(m_hwnd), TRUE);
 
     RECT rc;

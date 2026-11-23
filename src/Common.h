@@ -177,7 +177,11 @@ namespace Util {
 
     inline std::wstring NormalizePath(const std::wstring& path) {
         if (path.empty()) return path;
-        if (path.find(L"20D04FE0-3AEA-1069-A2D8-08002B30309D") != std::wstring::npos) {
+        if (path.rfind(L"shell:pidl:", 0) == 0) {
+            return path;
+        }
+        if (_wcsicmp(path.c_str(), L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}") == 0 ||
+            _wcsicmp(path.c_str(), L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\") == 0) {
             return L"This PC";
         }
         if (path.find(L"B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6") != std::wstring::npos ||

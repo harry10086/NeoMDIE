@@ -536,6 +536,37 @@ void DirectoryTree::PopulateChildren(HTREEITEM hParent,
     return;
   }
 
+  if (ShellUtils::IsVirtualShellPath(folderPath)) {
+    std::vector<NeoShellItem> items;
+    ShellUtils::EnumerateShellNamespace(folderPath, Config::Get().showHidden, items, Config::Get().hideDotFiles && !Config::Get().showHidden);
+    for (const auto &item : items) {
+      if (!item.isFolder) continue;
+      TVINSERTSTRUCTW tvis = {0};
+      tvis.hParent = hParent;
+      tvis.hInsertAfter = TVI_LAST;
+      tvis.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE |
+                       TVIF_CHILDREN | TVIF_PARAM;
+      tvis.item.pszText = (LPWSTR)item.name.c_str();
+      tvis.item.iImage = item.iconIndex;
+      tvis.item.iSelectedImage = item.iconIndex;
+      tvis.item.cChildren = 1;
+
+      TreeNodeData *pData = new TreeNodeData{item.fullPath, false, false};
+      m_nodeDataList.push_back(pData);
+      tvis.item.lParam = (LPARAM)pData;
+
+      HTREEITEM hItem = TreeView_InsertItem(m_hwnd, &tvis);
+
+      TVINSERTSTRUCTW dummy = {0};
+      dummy.hParent = hItem;
+      dummy.item.mask = TVIF_TEXT;
+      dummy.item.pszText = (LPWSTR)L"";
+      TreeView_InsertItem(m_hwnd, &dummy);
+    }
+    SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
+    return;
+  }
+
   std::wstring search = Util::CombinePath(folderPath, L"*");
   WIN32_FIND_DATAW fd;
   HANDLE hFind = FindFirstFileExW(search.c_str(), FindExInfoBasic, &fd,

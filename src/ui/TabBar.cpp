@@ -1,4 +1,5 @@
 #include "TabBar.h"
+#include "resource.h"
 #include "..\core\Config.h"
 #include "..\core\DropTarget.h"
 #include "..\core\I18n.h"
@@ -28,6 +29,7 @@ HWND TabBar::Create(HWND hwndParent, int id) {
   HINSTANCE hInst = GetModuleHandleW(nullptr);
   WNDCLASSEXW wc = {sizeof(wc)};
   if (!GetClassInfoExW(hInst, TABBAR_CLASS, &wc)) {
+    wc.style = CS_DBLCLKS;
     wc.lpfnWndProc = TabBar::WndProc;
     wc.hInstance = hInst;
     wc.lpszClassName = TABBAR_CLASS;
@@ -1409,25 +1411,54 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
 
   case WM_LBUTTONDBLCLK: {
     POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-    if (!Config::Get().showMenuBar) {
-      bool onTab = false;
-      for (const auto& t : m_tabs) {
-        if (PtInRect(&t.rc, pt)) { onTab = true; break; }
-      }
-      if (!onTab && !PtInRect(&m_rcNewTab, pt) && !PtInRect(&m_rcMinBtn, pt) && !PtInRect(&m_rcMaxBtn, pt) && !PtInRect(&m_rcCloseBtn, pt)) {
-        ShowWindow(m_hwndParent, IsZoomed(m_hwndParent) ? SW_RESTORE : SW_MAXIMIZE);
-        return 0;
-      }
-    }
-    bool onTab = false;
+
+    // 1. Check if clicked directly on a tab
+    int clickedTabIndex = -1;
     for (size_t i = 0; i < m_tabs.size(); ++i) {
       if (PtInRect(&m_tabs[i].rc, pt)) {
-        onTab = true;
+        clickedTabIndex = (int)i;
         break;
       }
     }
-    if (!onTab && onNewTabRequested) {
-      onNewTabRequested();
+
+    if (clickedTabIndex >= 0) {
+      m_dragging = false;
+      m_dragStarted = false;
+      m_dragIndex = -1;
+      if (GetCapture() == hwnd) {
+        ReleaseCapture();
+      }
+
+      int action = Config::Get().tabDoubleClickAction;
+      switch (action) {
+      case 0: // 关闭该标签页 (Close Tab)
+        CloseTab(clickedTabIndex);
+        break;
+      case 1: // 刷新该标签页 (Refresh Tab)
+        if (clickedTabIndex != m_activeIndex) {
+          SetActiveTab(clickedTabIndex);
+        }
+        PostMessageW(GetAncestor(hwnd, GA_ROOT), WM_COMMAND, MAKEWPARAM(ID_VIEW_REFRESH, 0), 0);
+        break;
+      case 2: // 锁定/解锁标签页 (Toggle Pin Tab)
+        TogglePinTab(clickedTabIndex);
+        break;
+      case 3: // 无动作 (Do Nothing)
+      default:
+        break;
+      }
+      return 0;
+    }
+
+    // 2. Double click on empty space or non-tab area
+    if (!PtInRect(&m_rcNewTab, pt) && !PtInRect(&m_rcMinBtn, pt) && !PtInRect(&m_rcMaxBtn, pt) && !PtInRect(&m_rcCloseBtn, pt)) {
+      if (!Config::Get().showMenuBar) {
+        ShowWindow(m_hwndParent, IsZoomed(m_hwndParent) ? SW_RESTORE : SW_MAXIMIZE);
+        return 0;
+      } else if (onNewTabRequested) {
+        onNewTabRequested();
+        return 0;
+      }
     }
     return 0;
   }
