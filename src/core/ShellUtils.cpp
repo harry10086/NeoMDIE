@@ -3307,12 +3307,17 @@ bool SetExplorerReplaced(bool enable) {
         L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\open\\command",
         L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\explore\\command",
         L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\opennewwindow\\command",
-        L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\opennewtab\\command"
+        L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\opennewtab\\command",
+        L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\open\\command",
+        L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\explore\\command",
+        L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\opennewwindow\\command",
+        L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\opennewtab\\command"
     };
 
     const wchar_t* shellParents[] = {
         L"Software\\Classes\\Directory\\shell",
-        L"Software\\Classes\\Drive\\shell"
+        L"Software\\Classes\\Drive\\shell",
+        L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell"
     };
 
     // Always clean up any legacy Folder\shell hooks so system settings/firewall are never trapped
@@ -3385,6 +3390,16 @@ bool SetExplorerReplaced(bool enable) {
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell\\opennewtab");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}\\shell");
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{5220cb21-c88d-4a0b-ae93-18f2e6469ced}");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\open\\command");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\open");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\explore\\command");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\explore");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\opennewwindow\\command");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\opennewwindow");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\opennewtab\\command");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell\\opennewtab");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\shell");
+        RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\CLSID\\{20D04FE0-3AEA-1069-A2D8-08002B30309D}");
 
         // Clean up legacy open_NeoMDIE if present
         RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Directory\\shell\\open_NeoMDIE\\command");

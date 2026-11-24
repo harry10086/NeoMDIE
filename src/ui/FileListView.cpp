@@ -711,7 +711,11 @@ LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     std::wstring displayText = text;
 
                     bool hasSort = (hdi.fmt & (HDF_SORTUP | HDF_SORTDOWN)) != 0;
-                    int sortArrowSpace = hasSort ? Theme::Get().Scale(14, hwnd) : 0;
+                    int gap = Theme::Get().Scale(11, hwnd);  // Clear breathing room between column title and sort chevron
+                    int halfW = Theme::Get().Scale(4, hwnd); // Chevron half width
+                    int halfH = Theme::Get().Scale(3, hwnd); // Chevron half height
+                    int sortArrowSpace = hasSort ? (gap + halfW * 2 + Theme::Get().Scale(4, hwnd)) : 0;
+
                     RECT rcDrawText = rcText;
                     if (hasSort && !(hdi.fmt & HDF_RIGHT)) {
                         rcDrawText.right -= sortArrowSpace;
@@ -731,18 +735,16 @@ LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wP
 
                         int arrowCenterX = 0;
                         if (hdi.fmt & HDF_RIGHT) {
-                            arrowCenterX = rcText.right - szText.cx - Theme::Get().Scale(8, hwnd);
+                            arrowCenterX = rcText.right - szText.cx - gap - halfW;
                         } else if (hdi.fmt & HDF_CENTER) {
                             int textLeft = rcDrawText.left + (rcDrawText.right - rcDrawText.left - szText.cx) / 2;
-                            arrowCenterX = textLeft + szText.cx + Theme::Get().Scale(8, hwnd);
+                            arrowCenterX = textLeft + szText.cx + gap + halfW;
                         } else {
                             int textRight = (std::min)(rcDrawText.left + szText.cx, rcDrawText.right);
-                            arrowCenterX = textRight + Theme::Get().Scale(8, hwnd);
+                            arrowCenterX = textRight + gap + halfW;
                         }
 
                         int arrowCenterY = rcItem.top + (rcItem.bottom - rcItem.top) / 2;
-                        int halfW = Theme::Get().Scale(4, hwnd);
-                        int halfH = Theme::Get().Scale(3, hwnd);
 
                         if (arrowCenterX - halfW >= rcItem.left && arrowCenterX + halfW <= rcItem.right - 2) {
                             Gdiplus::Graphics g(memDC);

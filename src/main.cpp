@@ -142,6 +142,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         Theme::Get().SetDarkMode(true);
     }
     ShellUtils::Initialize();
+    if (ShellUtils::IsExplorerReplaced()) {
+        ShellUtils::SetExplorerReplaced(true);
+    }
 
     // 7. Create Main Window
     MainWindow mainWin;
