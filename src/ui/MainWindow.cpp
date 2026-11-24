@@ -327,6 +327,7 @@ void MainWindow::ApplyTheme() {
     InvalidateRect(m_filterBar.GetHwnd(), nullptr, TRUE);
     InvalidateRect(m_breadcrumb.GetHwnd(), nullptr, TRUE);
     InvalidateRect(m_hwnd, nullptr, TRUE);
+    if (m_hwndStatusBar) InvalidateRect(m_hwndStatusBar, nullptr, TRUE);
     DrawMenuBar(m_hwnd);
 }
 
@@ -821,11 +822,88 @@ void MainWindow::CreateControls() {
     ShowWindow(m_preview.GetHwnd(), m_previewVisible ? SW_SHOW : SW_HIDE);
 
     // 8. Status Bar
+    static auto StatusBarSubclassProc = [](HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) -> LRESULT {
+        switch (msg) {
+        case WM_ERASEBKGND:
+            return 1;
+        case SB_SETTEXTW:
+        case SB_SETTEXTA: {
+            LRESULT lr = DefSubclassProc(hwnd, msg, wParam, lParam);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return lr;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rcClient;
+            GetClientRect(hwnd, &rcClient);
+            if (rcClient.right <= 0 || rcClient.bottom <= 0) {
+                EndPaint(hwnd, &ps);
+                return 0;
+            }
+
+            HDC memDC = CreateCompatibleDC(hdc);
+            HBITMAP memBM = CreateCompatibleBitmap(hdc, rcClient.right, rcClient.bottom);
+            HGDIOBJ oldBM = SelectObject(memDC, memBM);
+
+            bool isDark = Theme::Get().IsDarkMode();
+            HBRUSH hbrBg = isDark ? Theme::Get().BrushSurface() : CreateSolidBrush(RGB(246, 246, 248));
+            FillRect(memDC, &rcClient, hbrBg);
+            if (!isDark) DeleteObject(hbrBg);
+
+            // Top separator border line
+            HPEN hPenBorder = CreatePen(PS_SOLID, 1, isDark ? Theme::Get().ClrBorder() : RGB(225, 227, 230));
+            HGDIOBJ oldPen = SelectObject(memDC, hPenBorder);
+            MoveToEx(memDC, 0, 0, nullptr);
+            LineTo(memDC, rcClient.right, 0);
+            SelectObject(memDC, oldPen);
+            DeleteObject(hPenBorder);
+
+            HFONT hFont = Theme::Get().GetUIFont(hwnd);
+            HGDIOBJ oldFont = SelectObject(memDC, hFont);
+            SetBkMode(memDC, TRANSPARENT);
+            SetTextColor(memDC, isDark ? Theme::Get().ClrTextSecondary() : RGB(70, 70, 70));
+
+            int partCount = (int)SendMessageW(hwnd, SB_GETPARTS, 0, 0);
+            if (partCount <= 0) partCount = 1;
+
+            for (int i = 0; i < partCount; ++i) {
+                RECT rcPart = { 0 };
+                SendMessageW(hwnd, SB_GETRECT, i, (LPARAM)&rcPart);
+                if (rcPart.right <= 0 || rcPart.bottom <= 0) {
+                    rcPart = rcClient;
+                }
+
+                wchar_t text[512] = { 0 };
+                SendMessageW(hwnd, SB_GETTEXTW, i, (LPARAM)text);
+
+                if (text[0] != L'\0') {
+                    RECT rcText = rcPart;
+                    rcText.left += Theme::Get().Scale(10, hwnd);
+                    rcText.right -= Theme::Get().Scale(10, hwnd);
+                    DrawTextW(memDC, text, -1, &rcText, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+                }
+            }
+
+            SelectObject(memDC, oldFont);
+
+            BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, memDC, 0, 0, SRCCOPY);
+            SelectObject(memDC, oldBM);
+            DeleteObject(memBM);
+            DeleteDC(memDC);
+
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        }
+        return DefSubclassProc(hwnd, msg, wParam, lParam);
+    };
+
     m_hwndStatusBar = CreateStatusWindowW(
         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
         I18n::Get().T(StringId::StatusReady), m_hwnd, 106
     );
-    Theme::Get().ApplyToWindow(m_hwndStatusBar);
+    SetWindowSubclass(m_hwndStatusBar, StatusBarSubclassProc, 1, 0);
     SendMessageW(m_hwndStatusBar, WM_SETFONT, (WPARAM)Theme::Get().GetUIFont(m_hwnd), TRUE);
 
     int parts[] = { -1 };
@@ -3171,13 +3249,13 @@ void MainWindow::OnCommand(UINT cmdId) {
         bool isZh = I18n::Get().IsChinese();
         std::wstring aboutText = isZh ?
             L"NeoMDIE - 现代化多标签多栏文件管理器\n"
-            L"版本: v1.1.3 (x64 Release)\n\n"
+            L"版本: v1.1.4 (x64 Release)\n\n"
             L"作者: Harry (https://mianao.info)\n"
             L"开源项目仓库: https://github.com/harry10086/NeoMDIE\n"
             L"致敬经典: MDIE(Multiple Document Interface Explorer)\n\n"
             L"基于 GNU General Public License v3 (GPLv3) 开源协议发布。" :
             L"NeoMDIE - Modern Native Win32 Tabbed & Multi-Pane File Manager\n"
-            L"Version: v1.1.3 (x64 Release)\n\n"
+            L"Version: v1.1.4 (x64 Release)\n\n"
             L"Author: Harry (https://mianao.info)\n"
             L"Repository: https://github.com/harry10086/NeoMDIE\n"
             L"Inspired by: MDIE(Multiple Document Interface Explorer)\n\n"

@@ -79,8 +79,9 @@ static void DrawSmoothCheckmark(HDC hdc, const RECT& rcBox, HWND hwnd) {
     LOGFONTW lf = { 0 };
     lf.lfHeight = -iconH;
     lf.lfWeight = FW_BOLD;
+    lf.lfCharSet = DEFAULT_CHARSET;
     lf.lfQuality = CLEARTYPE_QUALITY;
-    StringCchCopyW(lf.lfFaceName, LF_FACESIZE, L"Segoe Fluent Icons");
+    StringCchCopyW(lf.lfFaceName, LF_FACESIZE, Theme::Get().GetIconFontFace());
     HFONT hFont = CreateFontIndirectW(&lf);
     HGDIOBJ oldFont = SelectObject(hdc, hFont);
 
@@ -604,6 +605,13 @@ LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wP
         if (pThis) pThis->SaveColumnWidths();
         return res;
     }
+    if (msg == WM_SETFONT) {
+        HFONT hFontArg = (HFONT)wParam;
+        if (pThis && (hFontArg == pThis->m_hFontRowMetric || hFontArg == nullptr)) {
+            wParam = (WPARAM)Theme::Get().GetUIFont(hwnd);
+        }
+        return DefSubclassProc(hwnd, msg, wParam, lParam);
+    }
     if (msg == WM_RBUTTONUP || msg == WM_CONTEXTMENU) {
         POINT pt;
         GetCursorPos(&pt);
@@ -611,7 +619,7 @@ LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wP
         return 0;
     }
 
-    bool customHeader = Theme::Get().IsDarkMode() || Config::Get().showItemCheckBoxes;
+    bool customHeader = true; // Always custom-draw header for consistent fonts, alignment, and borders
     if (customHeader) {
         if (msg == WM_ERASEBKGND) return 1;
         if (msg == WM_PAINT) {
@@ -629,8 +637,7 @@ LRESULT CALLBACK FileListView::HeaderSubclassProc(HWND hwnd, UINT msg, WPARAM wP
             FillRect(memDC, &rcClient, hbrBg);
             if (!isDark) DeleteObject(hbrBg);
 
-            HFONT hFont = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
-            if (!hFont) hFont = Theme::Get().GetUIFont(hwnd);
+            HFONT hFont = Theme::Get().GetUIFont(hwnd);
             HGDIOBJ oldFont = SelectObject(memDC, hFont);
             SetBkMode(memDC, TRANSPARENT);
             SetTextColor(memDC, isDark ? Theme::Get().ClrTextPrimary() : RGB(30, 30, 30));

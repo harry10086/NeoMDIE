@@ -55,6 +55,7 @@ public:
     HFONT GetUIFont(HWND hwnd = nullptr);
     HFONT GetUIFontBold(HWND hwnd = nullptr);
     HFONT GetIconFont(int pixelHeight, HWND hwnd = nullptr);
+    const wchar_t* GetIconFontFace();
 
 private:
     Theme();

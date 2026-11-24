@@ -1,5 +1,6 @@
 #include "Theme.h"
 #include "..\core\Config.h"
+#include "..\core\I18n.h"
 #include <gdiplus.h>
 #pragma comment(lib, "gdiplus.lib")
 
@@ -206,14 +207,23 @@ HFONT Theme::GetUIFont(HWND hwnd) {
         int fontSize = -MulDiv(9, currentDpi, 72);
 
         LOGFONTW lf = { 0 };
-        if (SystemParametersInfoW(SPI_GETICONTITLELOGFONT, sizeof(LOGFONTW), &lf, 0)) {
-            lf.lfHeight = fontSize;
-            lf.lfWeight = FW_NORMAL;
-            lf.lfQuality = CLEARTYPE_QUALITY;
+        lf.lfHeight = fontSize;
+        lf.lfWeight = FW_NORMAL;
+        lf.lfCharSet = DEFAULT_CHARSET;
+        lf.lfOutPrecision = OUT_DEFAULT_PRECIS;
+        lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
+        lf.lfQuality = CLEARTYPE_QUALITY;
+        lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
+
+        NONCLIENTMETRICSW ncm = { sizeof(NONCLIENTMETRICSW) };
+        if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0) && ncm.lfMessageFont.lfFaceName[0] != L'\0') {
+            StringCchCopyW(lf.lfFaceName, LF_FACESIZE, ncm.lfMessageFont.lfFaceName);
         } else {
-            lf.lfHeight = fontSize;
-            lf.lfWeight = FW_NORMAL;
-            lf.lfQuality = CLEARTYPE_QUALITY;
+            StringCchCopyW(lf.lfFaceName, LF_FACESIZE, I18n::Get().IsChinese() ? L"Microsoft YaHei UI" : L"Segoe UI");
+        }
+
+        // Upgrade legacy Microsoft YaHei to Microsoft YaHei UI for clean, crisp rendering without stroke artifacts
+        if (_wcsicmp(lf.lfFaceName, L"Microsoft YaHei") == 0 || _wcsicmp(lf.lfFaceName, L"微软雅黑") == 0) {
             StringCchCopyW(lf.lfFaceName, LF_FACESIZE, L"Microsoft YaHei UI");
         }
 
@@ -230,14 +240,45 @@ HFONT Theme::GetUIFontBold(HWND hwnd) {
     return m_fontUIBold;
 }
 
+const wchar_t* Theme::GetIconFontFace() {
+    static std::wstring s_iconFace;
+    if (!s_iconFace.empty()) return s_iconFace.c_str();
+
+    auto checkFont = [](const wchar_t* name) -> bool {
+        LOGFONTW lf = { 0 };
+        lf.lfCharSet = DEFAULT_CHARSET;
+        StringCchCopyW(lf.lfFaceName, LF_FACESIZE, name);
+        HDC hdc = GetDC(nullptr);
+        bool found = false;
+        EnumFontFamiliesExW(hdc, &lf, [](const LOGFONTW* lpelfe, const TEXTMETRICW*, DWORD, LPARAM lParam) -> int {
+            bool* pFound = (bool*)lParam;
+            *pFound = true;
+            return 0; // Found match, stop enumeration
+        }, (LPARAM)&found, 0);
+        ReleaseDC(nullptr, hdc);
+        return found;
+    };
+
+    if (checkFont(L"Segoe Fluent Icons")) {
+        s_iconFace = L"Segoe Fluent Icons";
+    } else if (checkFont(L"Segoe MDL2 Assets")) {
+        s_iconFace = L"Segoe MDL2 Assets";
+    } else if (checkFont(L"Segoe UI Symbol")) {
+        s_iconFace = L"Segoe UI Symbol";
+    } else {
+        s_iconFace = L"Segoe MDL2 Assets";
+    }
+    return s_iconFace.c_str();
+}
+
 HFONT Theme::GetIconFont(int pixelHeight, HWND hwnd) {
     int scaledH = Scale(pixelHeight, hwnd);
     LOGFONTW lf = { 0 };
     lf.lfHeight = -scaledH;
     lf.lfWeight = FW_NORMAL;
+    lf.lfCharSet = DEFAULT_CHARSET;
     lf.lfQuality = CLEARTYPE_QUALITY;
-    // Prefer Windows 11 Fluent icons, fallback to Win10 Segoe MDL2 Assets, then Segoe UI Symbol
-    StringCchCopyW(lf.lfFaceName, LF_FACESIZE, L"Segoe Fluent Icons");
+    StringCchCopyW(lf.lfFaceName, LF_FACESIZE, GetIconFontFace());
     HFONT hFont = CreateFontIndirectW(&lf);
     return hFont;
 }

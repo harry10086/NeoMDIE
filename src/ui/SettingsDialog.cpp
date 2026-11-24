@@ -568,8 +568,7 @@ static LRESULT CALLBACK SettingsHeaderSubclassProc(HWND hwnd, UINT msg, WPARAM w
 
             FillRect(memDC, &rcClient, Theme::Get().BrushSurface());
 
-            HFONT hFont = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
-            if (!hFont) hFont = Theme::Get().GetUIFont(hwnd);
+            HFONT hFont = Theme::Get().GetUIFont(hwnd);
             HGDIOBJ oldFont = SelectObject(memDC, hFont);
             SetBkMode(memDC, TRANSPARENT);
             SetTextColor(memDC, Theme::Get().ClrTextPrimary());
