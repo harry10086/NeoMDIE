@@ -429,6 +429,14 @@ void FileListView::RebuildColumns() {
         ListView_InsertColumn(m_hwnd, (int)i, &lvc);
     }
 
+    if (m_viewMode == 5) {
+        ListView_EnsureVisible(m_hwnd, 0, FALSE);
+        int hPos = GetScrollPos(m_hwnd, SB_HORZ);
+        if (hPos > 0) {
+            ListView_Scroll(m_hwnd, -hPos, 0);
+        }
+    }
+
     UpdateHeaderSortArrow();
     UpdateHeaderCheckBox();
     InvalidateRect(m_hwnd, nullptr, TRUE);
@@ -915,7 +923,8 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
             if (m_hasPendingRestore) {
                 RestoreViewState(m_pendingRestoreState);
                 m_hasPendingRestore = false;
-            } else if (!m_pendingSelectPath.empty()) {
+            }
+            if (!m_pendingSelectPath.empty()) {
                 std::wstring target = m_pendingSelectPath;
                 m_pendingSelectPath.clear();
                 SelectItemByPath(target);
@@ -977,7 +986,8 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
     if (m_hasPendingRestore) {
         RestoreViewState(m_pendingRestoreState);
         m_hasPendingRestore = false;
-    } else if (!m_pendingSelectPath.empty()) {
+    }
+    if (!m_pendingSelectPath.empty()) {
         std::wstring target = m_pendingSelectPath;
         m_pendingSelectPath.clear();
         SelectItemByPath(target);
@@ -1114,8 +1124,20 @@ void FileListView::GoUp() {
         m_historyStates[m_historyIndex] = GetViewState();
     }
 
+    // Check if parent path was recorded previously in history
+    std::wstring normParent = Util::NormalizePath(parent);
+    const PaneViewState* pFoundState = nullptr;
+    PaneViewState foundState;
+    for (int i = m_historyIndex - 1; i >= 0; --i) {
+        if (i < (int)m_history.size() && Util::NormalizePath(m_history[i]) == normParent) {
+            foundState = m_historyStates[i];
+            pFoundState = &foundState;
+            break;
+        }
+    }
+
     m_pendingSelectPath = prevFolder;
-    NavigateTo(parent, true);
+    NavigateTo(parent, true, pFoundState);
 }
 
 void FileListView::SetFilter(const std::wstring& query, bool subfolders, bool matchCase) {
@@ -1327,6 +1349,14 @@ void FileListView::SetViewMode(int mode) {
         StartThumbnailLoader();
     } else {
         CancelThumbnailLoader();
+    }
+
+    if (m_viewMode == 5) {
+        ListView_EnsureVisible(m_hwnd, 0, FALSE);
+        int hPos = GetScrollPos(m_hwnd, SB_HORZ);
+        if (hPos > 0) {
+            ListView_Scroll(m_hwnd, -hPos, 0);
+        }
     }
 
     UpdateHeaderSortArrow();
@@ -1690,11 +1720,12 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
     int totalCount = (int)m_filteredIndices.size();
     if (totalCount > 0) {
         targetTopRow = std::clamp(targetTopRow, 0, totalCount - 1);
-        if (targetTopRow > 0) {
-            ListView_EnsureVisible(m_hwnd, totalCount - 1, FALSE);
-            ListView_EnsureVisible(m_hwnd, targetTopRow, FALSE);
+        if (m_viewMode == 0) {
+            // Details view (vertical report scrolling)
+            if (targetTopRow > 0) {
+                ListView_EnsureVisible(m_hwnd, totalCount - 1, FALSE);
+                ListView_EnsureVisible(m_hwnd, targetTopRow, FALSE);
 
-            if (m_viewMode == 0) {
                 int currentTop = ListView_GetTopIndex(m_hwnd);
                 int delta = targetTopRow - currentTop;
                 if (delta != 0) {
@@ -1706,11 +1737,29 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
                         }
                     }
                 }
+            } else if (focusedRow >= 0) {
+                ListView_EnsureVisible(m_hwnd, focusedRow, FALSE);
+            } else {
+                ListView_EnsureVisible(m_hwnd, 0, FALSE);
             }
-        } else if (focusedRow >= 0) {
-            ListView_EnsureVisible(m_hwnd, focusedRow, FALSE);
+        } else if (m_viewMode == 5) {
+            // List view (horizontal multi-column scrolling):
+            // Reset horizontal scroll to origin, then ensure target/focused row is visible without overshooting
+            int hPos = GetScrollPos(m_hwnd, SB_HORZ);
+            if (hPos > 0) {
+                ListView_Scroll(m_hwnd, -hPos, 0);
+            }
+            int rowToEnsure = (focusedRow >= 0) ? focusedRow : ((targetTopRow > 0) ? targetTopRow : 0);
+            ListView_EnsureVisible(m_hwnd, rowToEnsure, FALSE);
         } else {
-            ListView_EnsureVisible(m_hwnd, 0, FALSE);
+            // Icon / Tile views
+            if (focusedRow >= 0) {
+                ListView_EnsureVisible(m_hwnd, focusedRow, FALSE);
+            } else if (targetTopRow > 0) {
+                ListView_EnsureVisible(m_hwnd, targetTopRow, FALSE);
+            } else {
+                ListView_EnsureVisible(m_hwnd, 0, FALSE);
+            }
         }
     }
 
@@ -2112,9 +2161,6 @@ void FileListView::SelectItemByPath(const std::wstring& path) {
         ListView_SetItemState(m_hwnd, targetRow, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
         int totalCount = (int)m_filteredIndices.size();
         if (totalCount > 0) {
-            int contextRow = (std::min)(targetRow + 4, totalCount - 1);
-            ListView_EnsureVisible(m_hwnd, contextRow, FALSE);
-            ListView_EnsureVisible(m_hwnd, (std::max)(0, targetRow - 4), FALSE);
             ListView_EnsureVisible(m_hwnd, targetRow, FALSE);
         }
     }
@@ -2918,7 +2964,8 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
                     if (pThis->m_hasPendingRestore) {
                         pThis->RestoreViewState(pThis->m_pendingRestoreState);
                         pThis->m_hasPendingRestore = false;
-                    } else if (!pThis->m_pendingSelectPath.empty()) {
+                    }
+                    if (!pThis->m_pendingSelectPath.empty()) {
                         std::wstring target = pThis->m_pendingSelectPath;
                         pThis->m_pendingSelectPath.clear();
                         pThis->SelectItemByPath(target);
@@ -3668,7 +3715,8 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     if (pThis->m_hasPendingRestore) {
                         pThis->RestoreViewState(pThis->m_pendingRestoreState);
                         pThis->m_hasPendingRestore = false;
-                    } else if (!pThis->m_pendingSelectPath.empty()) {
+                    }
+                    if (!pThis->m_pendingSelectPath.empty()) {
                         std::wstring target = pThis->m_pendingSelectPath;
                         pThis->m_pendingSelectPath.clear();
                         pThis->SelectItemByPath(target);
