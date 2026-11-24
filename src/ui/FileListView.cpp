@@ -2360,15 +2360,41 @@ void FileListView::StartThumbnailLoader() {
 }
 
 LRESULT CALLBACK FileListView::EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    FileListView* pThis = (FileListView*)dwRefData;
+    if (msg == WM_WINDOWPOSCHANGING && pThis) {
+        if (pThis->m_viewMode == 1 || pThis->m_viewMode == 2 || pThis->m_viewMode == 3) {
+            WINDOWPOS* pwp = (WINDOWPOS*)lParam;
+            int sel = ListView_GetNextItem(pThis->m_hwnd, -1, LVNI_FOCUSED);
+            if (sel >= 0) {
+                RECT rcB = { 0 };
+                if (ListView_GetItemRect(pThis->m_hwnd, sel, &rcB, LVIR_BOUNDS)) {
+                    DWORD sp = (DWORD)SendMessageW(pThis->m_hwnd, LVM_GETITEMSPACING, FALSE, 0);
+                    int spX = LOWORD(sp);
+                    int cellW = (spX > 0) ? spX : (rcB.right - rcB.left);
+                    int iconDim = (pThis->m_viewMode == 1) ? Theme::Get().Scale(256, pThis->m_hwnd)
+                                : ((pThis->m_viewMode == 2) ? Theme::Get().Scale(96, pThis->m_hwnd)
+                                : Theme::Get().Scale(48, pThis->m_hwnd));
+                    int editY = rcB.top + Theme::Get().Scale(6, pThis->m_hwnd) + iconDim + Theme::Get().Scale(4, pThis->m_hwnd);
+                    int editX = rcB.left + Theme::Get().Scale(4, pThis->m_hwnd);
+                    int editW = cellW - Theme::Get().Scale(8, pThis->m_hwnd);
+                    int editH = Theme::Get().Scale(24, pThis->m_hwnd);
+
+                    pwp->x = editX;
+                    pwp->y = editY;
+                    pwp->cx = editW;
+                    pwp->cy = editH;
+                    pwp->flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
+                }
+            }
+        }
+    } else if (msg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, FileListView::EditSubclassProc, uIdSubclass);
+    }
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
 int FileListView::HitTestItem(int x, int y) {
     if (!m_hwnd) return -1;
-    LVHITTESTINFO lvhti = { 0 };
-    lvhti.pt = { x, y };
-    int hit = ListView_HitTest(m_hwnd, &lvhti);
-    if (hit >= 0) return hit;
 
     if (m_viewMode == 1 || m_viewMode == 2 || m_viewMode == 3) {
         DWORD sp = (DWORD)SendMessageW(m_hwnd, LVM_GETITEMSPACING, FALSE, 0);
@@ -2382,11 +2408,51 @@ int FileListView::HitTestItem(int x, int y) {
             if (!ListView_GetItemRect(m_hwnd, i, &rcB, LVIR_BOUNDS)) continue;
             if (y >= rcB.top && y < rcB.top + spY &&
                 x >= rcB.left && x < rcB.left + spX) {
-                return i;
+                // (x, y) is inside cell i's tile. Check if it hit the actual icon or label.
+                int iconDim = (m_viewMode == 1) ? Theme::Get().Scale(256, m_hwnd)
+                            : ((m_viewMode == 2) ? Theme::Get().Scale(96, m_hwnd)
+                            : Theme::Get().Scale(48, m_hwnd));
+                int iconX = rcB.left + (spX - iconDim) / 2;
+                int iconY = rcB.top + Theme::Get().Scale(6, m_hwnd);
+                int margin = Theme::Get().Scale(4, m_hwnd);
+
+                // 1. Icon area hit test
+                if (x >= iconX - margin && x <= iconX + iconDim + margin &&
+                    y >= iconY - margin && y <= iconY + iconDim + margin) {
+                    return i;
+                }
+
+                // 2. Label area hit test
+                int labelTop = iconY + iconDim + Theme::Get().Scale(4, m_hwnd);
+                if (y >= labelTop) {
+                    int idx = m_filteredIndices[i];
+                    if (idx >= 0 && idx < (int)m_allItems.size()) {
+                        HDC hdc = GetDC(m_hwnd);
+                        HGDIOBJ oldFont = SelectObject(hdc, m_hFontText);
+                        RECT rcCalc = { rcB.left + Theme::Get().Scale(4, m_hwnd), labelTop,
+                                        rcB.left + spX - Theme::Get().Scale(4, m_hwnd), rcB.top + spY };
+                        DrawTextW(hdc, m_allItems[idx].name.c_str(), -1, &rcCalc,
+                                  DT_CENTER | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX | DT_CALCRECT);
+                        SelectObject(hdc, oldFont);
+                        ReleaseDC(m_hwnd, hdc);
+
+                        int textBottom = labelTop + (rcCalc.bottom - rcCalc.top) + margin;
+                        if (y <= textBottom && x >= rcCalc.left - margin && x <= rcCalc.right + margin) {
+                            return i;
+                        }
+                    }
+                }
+
+                // Clicked within cell grid boundaries, but in the blank gap between icons or below label!
+                return -1;
             }
         }
+        return -1;
     }
-    return -1;
+
+    LVHITTESTINFO lvhti = { 0 };
+    lvhti.pt = { x, y };
+    return ListView_HitTest(m_hwnd, &lvhti);
 }
 
 void FileListView::InvalidateItemCell(int itemIndex) {
@@ -3319,6 +3385,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                 }
                 HWND hEdit = ListView_GetEditControl(pThis->m_hwnd);
                 if (hEdit) {
+                    SetWindowSubclass(hEdit, FileListView::EditSubclassProc, 1, (DWORD_PTR)pThis);
                     SendMessageW(hEdit, WM_SETFONT, (WPARAM)pThis->m_hFontText, TRUE);
 
                     if (pThis->m_viewMode == 1 || pThis->m_viewMode == 2 || pThis->m_viewMode == 3) {
@@ -3565,9 +3632,11 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                                 } else {
                                     int customIcon = ShellUtils::GetCustomPathIcon(item.fullPath);
                                     int iconIdx = (customIcon >= 0) ? customIcon : item.iconIndex;
-                                    HIMAGELIST himl = (pThis->m_viewMode == 1) ? ShellUtils::GetSystemImageList(SHIL_JUMBO)
+                                    HIMAGELIST himl = (pThis->m_viewMode == 1 || pThis->m_viewMode == 2)
+                                                    ? ShellUtils::GetSystemImageList(SHIL_JUMBO)
                                                     : ShellUtils::GetSystemImageList(SHIL_EXTRALARGE);
-                                    int drawDim = (pThis->m_viewMode == 1) ? iconDim : Theme::Get().Scale(48, pThis->m_hwnd);
+                                    int drawDim = (pThis->m_viewMode == 1 || pThis->m_viewMode == 2)
+                                                ? iconDim : Theme::Get().Scale(48, pThis->m_hwnd);
                                     int drawX = rcIcon.left + (iconDim - drawDim) / 2;
                                     int drawY = rcIcon.top + (iconDim - drawDim) / 2;
                                     ImageList_DrawEx(himl, iconIdx, hdc, drawX, drawY, drawDim, drawDim, CLR_NONE, CLR_NONE, ILD_TRANSPARENT);

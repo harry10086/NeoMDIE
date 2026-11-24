@@ -559,6 +559,11 @@ static int ExtractCustomIcon(const std::wstring& filePath, int iconIndex = 0) {
 }
 
 static int GetShortcutIconIndex(const std::wstring& lnkPath) {
+    SHFILEINFOW sfi = { 0 };
+    if (SHGetFileInfoW(lnkPath.c_str(), 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX) != 0 && sfi.iIcon >= 0) {
+        return sfi.iIcon;
+    }
+
     SHFILEINFOW sfiGeneric = { 0 };
     SHGetFileInfoW(L"dummy.lnk", FILE_ATTRIBUTE_NORMAL, &sfiGeneric, sizeof(sfiGeneric),
                    SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES);
@@ -580,16 +585,26 @@ static int GetShortcutIconIndex(const std::wstring& lnkPath) {
         int iconIdx = 0;
         if (SUCCEEDED(psl->GetIconLocation(iconPath, MAX_PATH, &iconIdx)) && iconPath[0]) {
             if (PathFileExistsW(iconPath)) {
-                int extracted = ExtractCustomIcon(iconPath, iconIdx);
-                if (extracted >= 0) resultIcon = extracted;
+                SHFILEINFOW sfiLoc = { 0 };
+                if (SHGetFileInfoW(iconPath, 0, &sfiLoc, sizeof(sfiLoc), SHGFI_SYSICONINDEX) != 0 && sfiLoc.iIcon >= 0) {
+                    resultIcon = sfiLoc.iIcon;
+                } else {
+                    int extracted = ExtractCustomIcon(iconPath, iconIdx);
+                    if (extracted >= 0) resultIcon = extracted;
+                }
             }
         } else {
             wchar_t targetPath[MAX_PATH] = { 0 };
             WIN32_FIND_DATAW wfd = { 0 };
             if (SUCCEEDED(psl->GetPath(targetPath, MAX_PATH, &wfd, SLGP_UNCPRIORITY)) && targetPath[0]) {
                 if (PathFileExistsW(targetPath)) {
-                    int extracted = ExtractCustomIcon(targetPath, 0);
-                    if (extracted >= 0) resultIcon = extracted;
+                    SHFILEINFOW sfiTgt = { 0 };
+                    if (SHGetFileInfoW(targetPath, 0, &sfiTgt, sizeof(sfiTgt), SHGFI_SYSICONINDEX) != 0 && sfiTgt.iIcon >= 0) {
+                        resultIcon = sfiTgt.iIcon;
+                    } else {
+                        int extracted = ExtractCustomIcon(targetPath, 0);
+                        if (extracted >= 0) resultIcon = extracted;
+                    }
                 }
             }
         }
@@ -742,6 +757,12 @@ int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder, bool f
             return scIcon;
         }
     } else if (isCustomFile && !path.empty() && !isNetwork && PathFileExistsW(path.c_str())) {
+        SHFILEINFOW sfiCustom = { 0 };
+        if (SHGetFileInfoW(path.c_str(), 0, &sfiCustom, sizeof(sfiCustom), SHGFI_SYSICONINDEX) != 0 && sfiCustom.iIcon >= 0) {
+            std::lock_guard<std::mutex> lock(s_iconCacheMutex);
+            s_customPathIconCache[path] = sfiCustom.iIcon;
+            return sfiCustom.iIcon;
+        }
         int extracted = ExtractCustomIcon(path, 0);
         if (extracted >= 0) {
             std::lock_guard<std::mutex> lock(s_iconCacheMutex);
