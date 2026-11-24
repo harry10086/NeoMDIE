@@ -2289,15 +2289,15 @@ void FileListView::StartThumbnailLoader() {
     };
     std::vector<ThumbTask> tasks;
     for (const auto& item : m_allItems) {
-        if (item.isDrive) continue;
-        if (ShellUtils::IsVirtualShellPath(item.fullPath) && item.isFolder) continue;
-        if (item.isFolder || ShellUtils::CanHaveThumbnail(item.ext)) {
+        if (item.isDrive || item.isFolder) continue; // Folders must always use system folder icons, never load thumbnails!
+        if (ShellUtils::IsVirtualShellPath(item.fullPath)) continue;
+        if (ShellUtils::CanHaveThumbnail(item.ext)) {
             // Check if already in cache
             {
                 std::lock_guard<std::mutex> lock(m_thumbMutex);
                 if (m_thumbnailMap.count(item.fullPath) > 0) continue;
             }
-            tasks.push_back({ item.fullPath, item.isFolder });
+            tasks.push_back({ item.fullPath, false });
         }
     }
 
@@ -2361,6 +2361,55 @@ void FileListView::StartThumbnailLoader() {
 
 LRESULT CALLBACK FileListView::EditSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
+int FileListView::HitTestItem(int x, int y) {
+    if (!m_hwnd) return -1;
+    LVHITTESTINFO lvhti = { 0 };
+    lvhti.pt = { x, y };
+    int hit = ListView_HitTest(m_hwnd, &lvhti);
+    if (hit >= 0) return hit;
+
+    if (m_viewMode == 1 || m_viewMode == 2 || m_viewMode == 3) {
+        DWORD sp = (DWORD)SendMessageW(m_hwnd, LVM_GETITEMSPACING, FALSE, 0);
+        int spX = LOWORD(sp);
+        int spY = HIWORD(sp);
+        if (spX <= 0 || spY <= 0) return -1;
+
+        int total = (int)m_filteredIndices.size();
+        for (int i = 0; i < total; ++i) {
+            RECT rcB = { 0 };
+            if (!ListView_GetItemRect(m_hwnd, i, &rcB, LVIR_BOUNDS)) continue;
+            if (y >= rcB.top && y < rcB.top + spY &&
+                x >= rcB.left && x < rcB.left + spX) {
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
+void FileListView::InvalidateItemCell(int itemIndex) {
+    if (itemIndex < 0 || !m_hwnd) return;
+    RECT rcB = { 0 };
+    if (ListView_GetItemRect(m_hwnd, itemIndex, &rcB, LVIR_BOUNDS)) {
+        DWORD sp = (DWORD)SendMessageW(m_hwnd, LVM_GETITEMSPACING, FALSE, 0);
+        int spX = LOWORD(sp);
+        int spY = HIWORD(sp);
+        if (spX > 0 && spY > 0) {
+            RECT rcCell = { rcB.left - 2, rcB.top - 2, rcB.left + spX + 2, rcB.top + spY + 2 };
+            InvalidateRect(m_hwnd, &rcCell, TRUE);
+        } else {
+            InvalidateRect(m_hwnd, &rcB, TRUE);
+        }
+    }
+}
+
+void FileListView::KillRenameTimer() {
+    if (m_hwnd && m_renameTargetItem >= 0) {
+        KillTimer(m_hwnd, 705);
+        m_renameTargetItem = -1;
+    }
 }
 
 LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
@@ -2486,6 +2535,81 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
     case WM_LBUTTONDOWN: {
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
+
+        if (pThis && (pThis->m_viewMode == 1 || pThis->m_viewMode == 2 || pThis->m_viewMode == 3)) {
+            pThis->KillRenameTimer();
+
+            int hit = pThis->HitTestItem(x, y);
+            if (hit < 0) {
+                bool ctrl = (GetKeyState(VK_CONTROL) < 0);
+                bool shift = (GetKeyState(VK_SHIFT) < 0);
+                if (!ctrl && !shift) {
+                    ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
+                    InvalidateRect(hwnd, nullptr, TRUE);
+                }
+                SetFocus(hwnd);
+                return 0;
+            }
+
+            SetFocus(hwnd);
+            bool ctrl = (GetKeyState(VK_CONTROL) < 0);
+            bool shift = (GetKeyState(VK_SHIFT) < 0);
+
+            if (!ctrl && !shift) {
+                bool isAlreadySel = (ListView_GetItemState(hwnd, hit, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+                bool isAlreadyFoc = (ListView_GetItemState(hwnd, hit, LVIS_FOCUSED) & LVIS_FOCUSED) != 0;
+
+                RECT rcB = { 0 };
+                ListView_GetItemRect(hwnd, hit, &rcB, LVIR_BOUNDS);
+                int iconDim = (pThis->m_viewMode == 1) ? Theme::Get().Scale(256, hwnd)
+                            : ((pThis->m_viewMode == 2) ? Theme::Get().Scale(96, hwnd)
+                            : Theme::Get().Scale(48, hwnd));
+                int labelTop = rcB.top + Theme::Get().Scale(6, hwnd) + iconDim;
+
+                if (isAlreadySel && isAlreadyFoc && y >= labelTop) {
+                    pThis->m_renameTargetItem = hit;
+                    SetTimer(hwnd, 705, GetDoubleClickTime() + 60, nullptr);
+                    return 0;
+                }
+
+                int curSel = -1;
+                while ((curSel = ListView_GetNextItem(hwnd, curSel, LVNI_SELECTED)) != -1) {
+                    if (curSel != hit) {
+                        ListView_SetItemState(hwnd, curSel, 0, LVIS_SELECTED | LVIS_FOCUSED);
+                        pThis->InvalidateItemCell(curSel);
+                    }
+                }
+                ListView_SetItemState(hwnd, hit, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                pThis->InvalidateItemCell(hit);
+
+                if (pThis->onSelectionChanged && hit < (int)pThis->m_filteredIndices.size()) {
+                    int idx = pThis->m_filteredIndices[hit];
+                    pThis->onSelectionChanged(pThis->m_allItems[idx].fullPath);
+                }
+                pThis->NotifyStatus();
+                return 0;
+            } else if (ctrl) {
+                bool isSel = (ListView_GetItemState(hwnd, hit, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+                ListView_SetItemState(hwnd, hit, isSel ? 0 : LVIS_SELECTED, LVIS_SELECTED);
+                ListView_SetItemState(hwnd, hit, LVIS_FOCUSED, LVIS_FOCUSED);
+                pThis->InvalidateItemCell(hit);
+                pThis->NotifyStatus();
+                return 0;
+            } else if (shift) {
+                int curFoc = ListView_GetNextItem(hwnd, -1, LVNI_FOCUSED);
+                if (curFoc < 0) curFoc = 0;
+                int start = (std::min)(curFoc, hit);
+                int end = (std::max)(curFoc, hit);
+                ListView_SetItemState(hwnd, -1, 0, LVIS_SELECTED);
+                for (int k = start; k <= end; ++k) {
+                    ListView_SetItemState(hwnd, k, LVIS_SELECTED, LVIS_SELECTED);
+                    pThis->InvalidateItemCell(k);
+                }
+                ListView_SetItemState(hwnd, hit, LVIS_FOCUSED, LVIS_FOCUSED);
+                pThis->NotifyStatus();
+                return 0;
+            }
+        }
 
         LVHITTESTINFO lvhti = { 0 };
         lvhti.pt = { x, y };
@@ -2629,23 +2753,28 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
     case WM_LBUTTONDBLCLK: {
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
-        LVHITTESTINFO lvhti = { 0 };
-        lvhti.pt = { x, y };
-        int hit = ListView_HitTest(hwnd, &lvhti);
-        if (hit < 0) {
-            pThis->GoUp();
-            return 0;
+        if (pThis) {
+            pThis->KillRenameTimer();
+            int hit = pThis->HitTestItem(x, y);
+            if (hit >= 0) {
+                pThis->OnItemDoubleClicked(hit);
+                return 0;
+            } else {
+                pThis->GoUp();
+                return 0;
+            }
         }
         break;
     }
     case WM_RBUTTONDOWN: {
+        if (pThis) pThis->KillRenameTimer();
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
 
         // Select item under cursor if not selected
         LVHITTESTINFO lvhti = { 0 };
         lvhti.pt = { x, y };
-        int hit = ListView_HitTest(hwnd, &lvhti);
+        int hit = pThis ? pThis->HitTestItem(x, y) : ListView_HitTest(hwnd, &lvhti);
 
         auto isPointInBlankArea = [&](int px, int itemHit) -> bool {
             if (itemHit < 0 || !pThis) return true;
@@ -2760,13 +2889,11 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         break;
     }
     case WM_MBUTTONUP: {
+        if (pThis) pThis->KillRenameTimer();
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
-        LVHITTESTINFO hti = { 0 };
-        hti.pt.x = x;
-        hti.pt.y = y;
-        int hitIndex = ListView_HitTest(hwnd, &hti);
-        if (hitIndex >= 0 && (hti.flags & (LVHT_ONITEM | LVHT_ONITEMICON | LVHT_ONITEMLABEL))) {
+        int hitIndex = pThis ? pThis->HitTestItem(x, y) : -1;
+        if (hitIndex >= 0) {
             if (hitIndex < (int)pThis->m_filteredIndices.size()) {
                 int idx = pThis->m_filteredIndices[hitIndex];
                 const auto& item = pThis->m_allItems[idx];
@@ -2913,9 +3040,29 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
             pThis->GoUp();
             return 0;
         }
+        if (pThis && (pThis->m_viewMode == 1 || pThis->m_viewMode == 2 || pThis->m_viewMode == 3)) {
+            if (wParam == VK_UP || wParam == VK_DOWN || wParam == VK_LEFT || wParam == VK_RIGHT ||
+                wParam == VK_HOME || wParam == VK_END || wParam == VK_PRIOR || wParam == VK_NEXT) {
+                int oldFocus = ListView_GetNextItem(hwnd, -1, LVNI_FOCUSED);
+                LRESULT res = DefSubclassProc(hwnd, msg, wParam, lParam);
+                int newFocus = ListView_GetNextItem(hwnd, -1, LVNI_FOCUSED);
+                if (oldFocus >= 0 && oldFocus != newFocus) pThis->InvalidateItemCell(oldFocus);
+                if (newFocus >= 0) pThis->InvalidateItemCell(newFocus);
+                return res;
+            }
+        }
         break;
     }
     case WM_TIMER: {
+        if (wParam == 705) {
+            KillTimer(hwnd, 705);
+            if (pThis && pThis->m_renameTargetItem >= 0) {
+                int itemToRename = pThis->m_renameTargetItem;
+                pThis->m_renameTargetItem = -1;
+                ListView_EditLabel(pThis->m_hwnd, itemToRename);
+            }
+            return 0;
+        }
         if (wParam == 701 || wParam == 702 || wParam == 703) {
             KillTimer(hwnd, wParam);
             pThis->Refresh();
@@ -3172,6 +3319,28 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                 }
                 HWND hEdit = ListView_GetEditControl(pThis->m_hwnd);
                 if (hEdit) {
+                    SendMessageW(hEdit, WM_SETFONT, (WPARAM)pThis->m_hFontText, TRUE);
+
+                    if (pThis->m_viewMode == 1 || pThis->m_viewMode == 2 || pThis->m_viewMode == 3) {
+                        int sel = ListView_GetNextItem(pThis->m_hwnd, -1, LVNI_FOCUSED);
+                        if (sel >= 0) {
+                            RECT rcB = { 0 };
+                            if (ListView_GetItemRect(pThis->m_hwnd, sel, &rcB, LVIR_BOUNDS)) {
+                                DWORD sp = (DWORD)SendMessageW(pThis->m_hwnd, LVM_GETITEMSPACING, FALSE, 0);
+                                int spX = LOWORD(sp);
+                                int cellW = (spX > 0) ? spX : (rcB.right - rcB.left);
+                                int iconDim = (pThis->m_viewMode == 1) ? Theme::Get().Scale(256, pThis->m_hwnd)
+                                            : ((pThis->m_viewMode == 2) ? Theme::Get().Scale(96, pThis->m_hwnd)
+                                            : Theme::Get().Scale(48, pThis->m_hwnd));
+                                int editY = rcB.top + Theme::Get().Scale(6, pThis->m_hwnd) + iconDim + Theme::Get().Scale(4, pThis->m_hwnd);
+                                int editX = rcB.left + Theme::Get().Scale(4, pThis->m_hwnd);
+                                int editW = cellW - Theme::Get().Scale(8, pThis->m_hwnd);
+                                int editH = Theme::Get().Scale(24, pThis->m_hwnd);
+                                SetWindowPos(hEdit, nullptr, editX, editY, editW, editH, SWP_NOZORDER | SWP_SHOWWINDOW);
+                            }
+                        }
+                    }
+
                     wchar_t text[MAX_PATH];
                     GetWindowTextW(hEdit, text, MAX_PATH);
                     const wchar_t* pExt = PathFindExtensionW(text);
@@ -3631,6 +3800,11 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                 if (pnlv->uChanged & LVIF_STATE) {
                     if ((pnlv->uNewState ^ pnlv->uOldState) & LVIS_SELECTED) {
                         pThis->NotifyStatus();
+                    }
+                    if (pThis->m_viewMode == 1 || pThis->m_viewMode == 2 || pThis->m_viewMode == 3) {
+                        if ((pnlv->uNewState ^ pnlv->uOldState) & (LVIS_SELECTED | LVIS_FOCUSED)) {
+                            pThis->InvalidateItemCell(pnlv->iItem);
+                        }
                     }
                     if (pnlv->uNewState & LVIS_SELECTED) {
                         if (pThis->onSelectionChanged) {

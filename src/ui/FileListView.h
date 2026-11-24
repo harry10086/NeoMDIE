@@ -137,6 +137,11 @@ private:
   void OnItemRightClicked(POINT ptScreen);
   void OnFolderSizeReady(FolderSizeResult *pRes);
 
+  int HitTestItem(int x, int y);
+  void InvalidateItemCell(int itemIndex);
+  void KillRenameTimer();
+  int m_renameTargetItem = -1;
+
   HWND m_hwndParent = nullptr;
   HWND m_hwnd = nullptr;
   int m_controlId = 0;
