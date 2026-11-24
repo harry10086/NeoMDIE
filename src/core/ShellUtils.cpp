@@ -803,34 +803,6 @@ std::wstring GetItemTypeName(const std::wstring& path, DWORD attr) {
 std::wstring GetItemInfoTip(const std::wstring& path, bool isFolder, uint64_t size, FILETIME modifiedTime, const std::wstring& typeName, bool isSizeCalculated) {
     if (path.empty()) return L"";
 
-    // 1. Try Windows Shell IQueryInfo to get genuine Explorer InfoTip
-    PIDLIST_ABSOLUTE pidl = nullptr;
-    if (SUCCEEDED(SHParseDisplayName(path.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
-        IShellFolder* pFolder = nullptr;
-        PCUITEMID_CHILD pidlChild = nullptr;
-        if (SUCCEEDED(SHBindToParent(pidl, IID_PPV_ARGS(&pFolder), &pidlChild)) && pFolder && pidlChild) {
-            IQueryInfo* pqi = nullptr;
-            if (SUCCEEDED(pFolder->GetUIObjectOf(nullptr, 1, &pidlChild, IID_IQueryInfo, nullptr, (void**)&pqi)) && pqi) {
-                wchar_t* pTip = nullptr;
-                if (SUCCEEDED(pqi->GetInfoTip(0, &pTip)) && pTip && pTip[0]) {
-                    std::wstring result = pTip;
-                    CoTaskMemFree(pTip);
-                    pqi->Release();
-                    pFolder->Release();
-                    CoTaskMemFree(pidl);
-                    if (result.find(L'\n') != std::wstring::npos || !isFolder) {
-                        return result;
-                    }
-                }
-                if (pTip) CoTaskMemFree(pTip);
-                pqi->Release();
-            }
-            pFolder->Release();
-        }
-        CoTaskMemFree(pidl);
-    }
-
-    // 2. Structured fallback matching Windows Explorer
     bool isZh = I18n::Get().IsChinese();
     std::wstring tip;
     if (isFolder) {

@@ -2456,24 +2456,14 @@ int FileListView::HitTestItem(int x, int y) {
                 }
 
                 // 2. Label area hit test
-                if (y >= labelTop) {
-                    int idx = m_filteredIndices[i];
-                    if (idx >= 0 && idx < (int)m_allItems.size()) {
-                        HDC hdc = GetDC(m_hwnd);
-                        HGDIOBJ oldFont = SelectObject(hdc, m_hFontText);
-                        RECT rcCalc = { rcB.left + Theme::Get().Scale(4, m_hwnd), labelTop,
-                                        rcB.left + spX - Theme::Get().Scale(4, m_hwnd), rcB.top + spY };
-                        DrawTextW(hdc, m_allItems[idx].name.c_str(), -1, &rcCalc,
-                                  DT_CENTER | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX | DT_CALCRECT);
-                        SelectObject(hdc, oldFont);
-                        ReleaseDC(m_hwnd, hdc);
+                int maxTextHeight = Theme::Get().Scale(50, m_hwnd);
+                int textBottom = labelTop + maxTextHeight;
+                if (textBottom > rcB.top + spY - 2) textBottom = rcB.top + spY - 2;
 
-                        int textBottom = labelTop + (rcCalc.bottom - rcCalc.top) + margin;
-                        if (y <= textBottom &&
-                            x >= rcB.left + Theme::Get().Scale(2, m_hwnd) &&
-                            x <= rcB.left + spX - Theme::Get().Scale(2, m_hwnd)) {
-                            return i;
-                        }
+                if (y >= labelTop && y <= textBottom) {
+                    if (x >= rcB.left + Theme::Get().Scale(2, m_hwnd) &&
+                        x <= rcB.left + spX - Theme::Get().Scale(2, m_hwnd)) {
+                        return i;
                     }
                 }
 
