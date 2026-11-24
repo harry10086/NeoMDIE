@@ -15,7 +15,8 @@ public:
   HWND Create(HWND hwndParent, int id);
   HWND GetHwnd() const { return m_hwnd; }
 
-  bool NavigateTo(const std::wstring &path, bool recordHistory = true);
+  bool NavigateTo(const std::wstring &path, bool recordHistory = true,
+                  const PaneViewState *pRestoreState = nullptr);
   std::wstring GetCurrentPath() const { return m_currentPath; }
 
   void Refresh();
@@ -32,11 +33,14 @@ public:
   void SetHistory(const std::vector<std::wstring> &history, int historyIndex) {
     m_history = history;
     m_historyIndex = historyIndex;
+    m_historyStates.resize(m_history.size());
   }
   void ClearHistory(const std::wstring &initialPath) {
     m_history.clear();
+    m_historyStates.clear();
     if (!initialPath.empty()) {
       m_history.push_back(initialPath);
+      m_historyStates.push_back(PaneViewState{});
       m_historyIndex = 0;
     } else {
       m_historyIndex = -1;
@@ -142,7 +146,11 @@ private:
   std::vector<int> m_filteredIndices;
 
   std::vector<std::wstring> m_history;
+  std::vector<PaneViewState> m_historyStates;
   int m_historyIndex = -1;
+  bool m_hasPendingRestore = false;
+  PaneViewState m_pendingRestoreState;
+  std::wstring m_pendingSelectPath;
 
   std::wstring m_filterQuery;
   std::vector<ColumnId> m_activeColumns;

@@ -832,7 +832,7 @@ void FileListView::UpdateColumnsLanguage() {
     }
 }
 
-bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
+bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, const PaneViewState* pRestoreState) {
     if (path.find(L"645FF040-5081-101B-9F08-00AA002F954E") != std::wstring::npos ||
         path.find(L"RecycleBinFolder") != std::wstring::npos) {
         ShellExecuteW(nullptr, L"open", L"explorer.exe", L"::{645FF040-5081-101B-9F08-00AA002F954E}", nullptr, SW_SHOWNORMAL);
@@ -841,6 +841,10 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
     std::wstring normalized = Util::NormalizePath(path);
     if (!m_currentPath.empty()) {
         SaveColumnWidths();
+        // Save current view state before leaving this folder
+        if (m_historyIndex >= 0 && m_historyIndex < (int)m_historyStates.size()) {
+            m_historyStates[m_historyIndex] = GetViewState();
+        }
     }
 
     m_calcSize.CancelAll();
@@ -848,11 +852,20 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
     ClearThumbnails();
     m_currentPath = normalized;
 
+    if (pRestoreState) {
+        m_pendingRestoreState = *pRestoreState;
+        m_hasPendingRestore = true;
+    } else {
+        m_hasPendingRestore = false;
+    }
+
     if (recordHistory) {
         if (m_historyIndex >= 0 && m_historyIndex + 1 < (int)m_history.size()) {
             m_history.erase(m_history.begin() + m_historyIndex + 1, m_history.end());
+            m_historyStates.erase(m_historyStates.begin() + m_historyIndex + 1, m_historyStates.end());
         }
         m_history.push_back(normalized);
+        m_historyStates.push_back(PaneViewState{});
         m_historyIndex = (int)m_history.size() - 1;
     }
 
@@ -899,6 +912,14 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
             ListView_SetItemCountEx(m_hwnd, 0, 0);
             ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
             ApplyFilter();
+            if (m_hasPendingRestore) {
+                RestoreViewState(m_pendingRestoreState);
+                m_hasPendingRestore = false;
+            } else if (!m_pendingSelectPath.empty()) {
+                std::wstring target = m_pendingSelectPath;
+                m_pendingSelectPath.clear();
+                SelectItemByPath(target);
+            }
             StartCustomIconLoader();
             StartThumbnailLoader();
             if (onPathChanged) {
@@ -953,6 +974,14 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory) {
     ListView_SetItemCountEx(m_hwnd, 0, 0);
     ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     ApplyFilter();
+    if (m_hasPendingRestore) {
+        RestoreViewState(m_pendingRestoreState);
+        m_hasPendingRestore = false;
+    } else if (!m_pendingSelectPath.empty()) {
+        std::wstring target = m_pendingSelectPath;
+        m_pendingSelectPath.clear();
+        SelectItemByPath(target);
+    }
 
     if (!ShellUtils::IsVirtualShellPath(normalized)) {
         m_watcher.Watch(normalized, m_hwnd, WM_NOTIFY_DIR_CHANGED);
@@ -1056,20 +1085,36 @@ void FileListView::Refresh() {
 
 void FileListView::GoBack() {
     if (CanGoBack()) {
+        if (m_historyIndex >= 0 && m_historyIndex < (int)m_historyStates.size()) {
+            m_historyStates[m_historyIndex] = GetViewState();
+        }
         m_historyIndex--;
-        NavigateTo(m_history[m_historyIndex], false);
+        PaneViewState targetState = m_historyStates[m_historyIndex];
+        NavigateTo(m_history[m_historyIndex], false, &targetState);
     }
 }
 
 void FileListView::GoForward() {
     if (CanGoForward()) {
+        if (m_historyIndex >= 0 && m_historyIndex < (int)m_historyStates.size()) {
+            m_historyStates[m_historyIndex] = GetViewState();
+        }
         m_historyIndex++;
-        NavigateTo(m_history[m_historyIndex], false);
+        PaneViewState targetState = m_historyStates[m_historyIndex];
+        NavigateTo(m_history[m_historyIndex], false, &targetState);
     }
 }
 
 void FileListView::GoUp() {
+    std::wstring prevFolder = m_currentPath;
     std::wstring parent = ShellUtils::GetParentPath(m_currentPath);
+    if (parent.empty() || parent == m_currentPath) return;
+
+    if (m_historyIndex >= 0 && m_historyIndex < (int)m_historyStates.size()) {
+        m_historyStates[m_historyIndex] = GetViewState();
+    }
+
+    m_pendingSelectPath = prevFolder;
     NavigateTo(parent, true);
 }
 
@@ -1648,6 +1693,22 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
         if (targetTopRow > 0) {
             ListView_EnsureVisible(m_hwnd, totalCount - 1, FALSE);
             ListView_EnsureVisible(m_hwnd, targetTopRow, FALSE);
+
+            if (m_viewMode == 0) {
+                int currentTop = ListView_GetTopIndex(m_hwnd);
+                int delta = targetTopRow - currentTop;
+                if (delta != 0) {
+                    RECT rcItem = { 0 };
+                    if (ListView_GetItemRect(m_hwnd, 0, &rcItem, LVIR_BOUNDS)) {
+                        int rowH = rcItem.bottom - rcItem.top;
+                        if (rowH > 0) {
+                            ListView_Scroll(m_hwnd, 0, delta * rowH);
+                        }
+                    }
+                }
+            }
+        } else if (focusedRow >= 0) {
+            ListView_EnsureVisible(m_hwnd, focusedRow, FALSE);
         } else {
             ListView_EnsureVisible(m_hwnd, 0, FALSE);
         }
@@ -2018,15 +2079,43 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
 }
 
 void FileListView::SelectItemByPath(const std::wstring& path) {
+    if (path.empty() || m_filteredIndices.empty()) return;
+
     ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+
+    std::wstring normTarget = Util::NormalizePath(path);
+    while (!normTarget.empty() && (normTarget.back() == L'\\' || normTarget.back() == L'/')) {
+        normTarget.pop_back();
+    }
+    std::wstring targetName = PathFindFileNameW(normTarget.c_str());
+
+    int targetRow = -1;
     for (int row = 0; row < (int)m_filteredIndices.size(); ++row) {
         int idx = m_filteredIndices[row];
         if (idx >= 0 && idx < (int)m_allItems.size()) {
-            if (_wcsicmp(m_allItems[idx].fullPath.c_str(), path.c_str()) == 0) {
-                ListView_SetItemState(m_hwnd, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                ListView_EnsureVisible(m_hwnd, row, FALSE);
+            const auto& item = m_allItems[idx];
+            std::wstring normItem = Util::NormalizePath(item.fullPath);
+            while (!normItem.empty() && (normItem.back() == L'\\' || normItem.back() == L'/')) {
+                normItem.pop_back();
+            }
+
+            if (_wcsicmp(item.fullPath.c_str(), path.c_str()) == 0 ||
+                _wcsicmp(normItem.c_str(), normTarget.c_str()) == 0 ||
+                (!targetName.empty() && _wcsicmp(item.name.c_str(), targetName.c_str()) == 0)) {
+                targetRow = row;
                 break;
             }
+        }
+    }
+
+    if (targetRow >= 0) {
+        ListView_SetItemState(m_hwnd, targetRow, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        int totalCount = (int)m_filteredIndices.size();
+        if (totalCount > 0) {
+            int contextRow = (std::min)(targetRow + 4, totalCount - 1);
+            ListView_EnsureVisible(m_hwnd, contextRow, FALSE);
+            ListView_EnsureVisible(m_hwnd, (std::max)(0, targetRow - 4), FALSE);
+            ListView_EnsureVisible(m_hwnd, targetRow, FALSE);
         }
     }
 }
@@ -2826,6 +2915,14 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
                     ListView_SetItemCountEx(pThis->m_hwnd, 0, 0);
                     ListView_SetItemState(pThis->m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
                     pThis->ApplyFilter();
+                    if (pThis->m_hasPendingRestore) {
+                        pThis->RestoreViewState(pThis->m_pendingRestoreState);
+                        pThis->m_hasPendingRestore = false;
+                    } else if (!pThis->m_pendingSelectPath.empty()) {
+                        std::wstring target = pThis->m_pendingSelectPath;
+                        pThis->m_pendingSelectPath.clear();
+                        pThis->SelectItemByPath(target);
+                    }
                     pThis->NotifyStatus();
                     pThis->m_watcher.Watch(pThis->m_currentPath, pThis->m_hwnd, WM_NOTIFY_DIR_CHANGED);
                     if (pThis->m_calcFolderSize && pThis->m_currentPath != L"此电脑" && pThis->m_currentPath != L"This PC") {
@@ -3568,6 +3665,14 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     ListView_SetItemCountEx(pThis->m_hwnd, 0, 0);
                     ListView_SetItemState(pThis->m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
                     pThis->ApplyFilter();
+                    if (pThis->m_hasPendingRestore) {
+                        pThis->RestoreViewState(pThis->m_pendingRestoreState);
+                        pThis->m_hasPendingRestore = false;
+                    } else if (!pThis->m_pendingSelectPath.empty()) {
+                        std::wstring target = pThis->m_pendingSelectPath;
+                        pThis->m_pendingSelectPath.clear();
+                        pThis->SelectItemByPath(target);
+                    }
                     pThis->NotifyStatus();
                     pThis->m_watcher.Watch(pThis->m_currentPath, pThis->m_hwnd, WM_NOTIFY_DIR_CHANGED);
                     if (pThis->m_calcFolderSize && pThis->m_currentPath != L"此电脑" && pThis->m_currentPath != L"This PC") {
