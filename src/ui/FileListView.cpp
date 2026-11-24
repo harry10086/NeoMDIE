@@ -2408,22 +2408,22 @@ int FileListView::HitTestItem(int x, int y) {
             if (!ListView_GetItemRect(m_hwnd, i, &rcB, LVIR_BOUNDS)) continue;
             if (y >= rcB.top && y < rcB.top + spY &&
                 x >= rcB.left && x < rcB.left + spX) {
-                // (x, y) is inside cell i's tile. Check if it hit the actual icon or label.
+                // (x, y) is inside cell i's tile. Check if it hit the actual icon or label card.
                 int iconDim = (m_viewMode == 1) ? Theme::Get().Scale(256, m_hwnd)
                             : ((m_viewMode == 2) ? Theme::Get().Scale(96, m_hwnd)
                             : Theme::Get().Scale(48, m_hwnd));
                 int iconX = rcB.left + (spX - iconDim) / 2;
                 int iconY = rcB.top + Theme::Get().Scale(6, m_hwnd);
-                int margin = Theme::Get().Scale(4, m_hwnd);
+                int margin = Theme::Get().Scale(8, m_hwnd);
+                int labelTop = iconY + iconDim + Theme::Get().Scale(4, m_hwnd);
 
                 // 1. Icon area hit test
                 if (x >= iconX - margin && x <= iconX + iconDim + margin &&
-                    y >= iconY - margin && y <= iconY + iconDim + margin) {
+                    y >= rcB.top + 2 && y <= labelTop) {
                     return i;
                 }
 
                 // 2. Label area hit test
-                int labelTop = iconY + iconDim + Theme::Get().Scale(4, m_hwnd);
                 if (y >= labelTop) {
                     int idx = m_filteredIndices[i];
                     if (idx >= 0 && idx < (int)m_allItems.size()) {
@@ -2437,7 +2437,9 @@ int FileListView::HitTestItem(int x, int y) {
                         ReleaseDC(m_hwnd, hdc);
 
                         int textBottom = labelTop + (rcCalc.bottom - rcCalc.top) + margin;
-                        if (y <= textBottom && x >= rcCalc.left - margin && x <= rcCalc.right + margin) {
+                        if (y <= textBottom &&
+                            x >= rcB.left + Theme::Get().Scale(2, m_hwnd) &&
+                            x <= rcB.left + spX - Theme::Get().Scale(2, m_hwnd)) {
                             return i;
                         }
                     }
@@ -2624,15 +2626,9 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
             if (!ctrl && !shift) {
                 bool isAlreadySel = (ListView_GetItemState(hwnd, hit, LVIS_SELECTED) & LVIS_SELECTED) != 0;
                 bool isAlreadyFoc = (ListView_GetItemState(hwnd, hit, LVIS_FOCUSED) & LVIS_FOCUSED) != 0;
+                int selCount = ListView_GetSelectedCount(hwnd);
 
-                RECT rcB = { 0 };
-                ListView_GetItemRect(hwnd, hit, &rcB, LVIR_BOUNDS);
-                int iconDim = (pThis->m_viewMode == 1) ? Theme::Get().Scale(256, hwnd)
-                            : ((pThis->m_viewMode == 2) ? Theme::Get().Scale(96, hwnd)
-                            : Theme::Get().Scale(48, hwnd));
-                int labelTop = rcB.top + Theme::Get().Scale(6, hwnd) + iconDim;
-
-                if (isAlreadySel && isAlreadyFoc && y >= labelTop) {
+                if (isAlreadySel && isAlreadyFoc && selCount == 1) {
                     pThis->m_renameTargetItem = hit;
                     SetTimer(hwnd, 705, GetDoubleClickTime() + 60, nullptr);
                     return 0;
@@ -2947,6 +2943,10 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
     case WM_MOUSEMOVE: {
         int x = GET_X_LPARAM(lParam);
         int y = GET_Y_LPARAM(lParam);
+
+        if (pThis && pThis->m_renameTargetItem >= 0 && (wParam & MK_LBUTTON)) {
+            pThis->KillRenameTimer();
+        }
 
         bool rDown = (wParam & MK_RBUTTON) != 0;
         if (pThis->m_gesture.OnMouseMove(hwnd, x, y, rDown)) {
