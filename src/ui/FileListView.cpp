@@ -142,11 +142,18 @@ HWND FileListView::Create(HWND hwndParent, int id) {
         hwndParent, (HMENU)(INT_PTR)id, hInst, nullptr
     );
 
-    DWORD exStyle = LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_HEADERDRAGDROP | LVS_EX_SUBITEMIMAGES;
+    DWORD exStyle = LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_HEADERDRAGDROP | LVS_EX_SUBITEMIMAGES | LVS_EX_INFOTIP;
     if (Config::Get().showItemCheckBoxes) {
         exStyle |= LVS_EX_CHECKBOXES;
     }
     ListView_SetExtendedListViewStyle(m_hwnd, exStyle);
+    ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_LABELTIP, 0);
+    ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP);
+
+    HWND hTip = ListView_GetToolTips(m_hwnd);
+    if (hTip) {
+        SendMessageW(hTip, TTM_SETMAXTIPWIDTH, 0, 500);
+    }
 
     HIMAGELIST himlSmall = ShellUtils::GetSystemImageList(false);
     HIMAGELIST himlLarge = ShellUtils::GetSystemImageList(true);
@@ -859,6 +866,7 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
     CancelCustomIconLoader();
     ClearThumbnails();
     m_currentPath = normalized;
+    m_hoverItem = -1;
 
     if (pRestoreState) {
         m_pendingRestoreState = *pRestoreState;
@@ -1345,6 +1353,14 @@ void FileListView::SetViewMode(int mode) {
 
     ApplyViewMetrics();
 
+    m_hoverItem = -1;
+    ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_LABELTIP, 0);
+    ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP);
+    HWND hTip = ListView_GetToolTips(m_hwnd);
+    if (hTip) {
+        SendMessageW(hTip, TTM_SETMAXTIPWIDTH, 0, 500);
+    }
+
     if (m_viewMode == 1 || m_viewMode == 2 || m_viewMode == 3 || m_viewMode == 6 || m_viewMode == 7) {
         StartThumbnailLoader();
     } else {
@@ -1396,11 +1412,27 @@ int FileListView::GetDesiredRowHeight() const {
 void FileListView::ApplyDensity(int density) {
     Config::Get().listDensity = density;
     ApplyViewMetrics();
+
+    m_hoverItem = -1;
+    ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_LABELTIP, 0);
+    ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP);
+    HWND hTip = ListView_GetToolTips(m_hwnd);
+    if (hTip) {
+        SendMessageW(hTip, TTM_SETMAXTIPWIDTH, 0, 500);
+    }
 }
 
 void FileListView::ApplyScale(int scale) {
     Config::Get().listScale = scale;
     ApplyViewMetrics();
+
+    m_hoverItem = -1;
+    ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_LABELTIP, 0);
+    ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP);
+    HWND hTip = ListView_GetToolTips(m_hwnd);
+    if (hTip) {
+        SendMessageW(hTip, TTM_SETMAXTIPWIDTH, 0, 500);
+    }
 }
 
 void FileListView::ApplyViewMetrics() {
@@ -2948,9 +2980,32 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
             pThis->KillRenameTimer();
         }
 
+        TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
+        TrackMouseEvent(&tme);
+
+        if (pThis && (pThis->m_viewMode == 1 || pThis->m_viewMode == 2 || pThis->m_viewMode == 3)) {
+            int hit = pThis->HitTestItem(x, y);
+            if (hit != pThis->m_hoverItem) {
+                int oldHover = pThis->m_hoverItem;
+                pThis->m_hoverItem = hit;
+                if (oldHover >= 0) pThis->InvalidateItemCell(oldHover);
+                if (hit >= 0) pThis->InvalidateItemCell(hit);
+            }
+        }
+
         bool rDown = (wParam & MK_RBUTTON) != 0;
-        if (pThis->m_gesture.OnMouseMove(hwnd, x, y, rDown)) {
+        if (pThis && pThis->m_gesture.OnMouseMove(hwnd, x, y, rDown)) {
             return 0;
+        }
+        break;
+    }
+    case WM_MOUSELEAVE: {
+        if (pThis && (pThis->m_viewMode == 1 || pThis->m_viewMode == 2 || pThis->m_viewMode == 3)) {
+            if (pThis->m_hoverItem >= 0) {
+                int oldHover = pThis->m_hoverItem;
+                pThis->m_hoverItem = -1;
+                pThis->InvalidateItemCell(oldHover);
+            }
         }
         break;
     }
@@ -3433,6 +3488,21 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                 return FALSE;
             }
 
+            case LVN_GETINFOTIPW: {
+                NMLVGETINFOTIPW* pGit = (NMLVGETINFOTIPW*)lParam;
+                if (pGit && pGit->iItem >= 0 && pGit->iItem < (int)pThis->m_filteredIndices.size()) {
+                    int idx = pThis->m_filteredIndices[pGit->iItem];
+                    if (idx >= 0 && idx < (int)pThis->m_allItems.size()) {
+                        const auto& item = pThis->m_allItems[idx];
+                        std::wstring tip = ShellUtils::GetItemInfoTip(item.fullPath, item.isFolder, item.size, item.modifiedTime, item.typeName, item.isSizeCalculated);
+                        if (!tip.empty()) {
+                            wcsncpy_s(pGit->pszText, pGit->cchTextMax, tip.c_str(), _TRUNCATE);
+                        }
+                    }
+                }
+                return 0;
+            }
+
             case NM_CUSTOMDRAW: {
                 NMLVCUSTOMDRAW* pcd = (NMLVCUSTOMDRAW*)lParam;
                 switch (pcd->nmcd.dwDrawStage) {
@@ -3449,7 +3519,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                                 RECT rcItem = { 0 };
                                 ListView_GetItemRect(pThis->m_hwnd, row, &rcItem, LVIR_BOUNDS);
                                 bool isSelected = (ListView_GetItemState(pThis->m_hwnd, row, LVIS_SELECTED) & LVIS_SELECTED) != 0;
-                                bool isHot = (pcd->nmcd.uItemState & CDIS_HOT) != 0 || (ListView_GetItemState(pThis->m_hwnd, row, LVIS_DROPHILITED) & LVIS_DROPHILITED) != 0;
+                                bool isHot = (row == pThis->m_hoverItem) || (pcd->nmcd.uItemState & CDIS_HOT) != 0 || (ListView_GetItemState(pThis->m_hwnd, row, LVIS_DROPHILITED) & LVIS_DROPHILITED) != 0;
 
                                 // 1. Item background (hover, selected, or default background)
                                 HBRUSH hbrBg = isSelected ? Theme::Get().BrushSelected() : (isHot ? Theme::Get().BrushHover() : Theme::Get().BrushBackground());

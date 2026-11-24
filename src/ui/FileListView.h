@@ -141,6 +141,7 @@ private:
   void InvalidateItemCell(int itemIndex);
   void KillRenameTimer();
   int m_renameTargetItem = -1;
+  int m_hoverItem = -1;
 
   HWND m_hwndParent = nullptr;
   HWND m_hwnd = nullptr;

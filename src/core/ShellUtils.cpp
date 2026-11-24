@@ -800,6 +800,93 @@ std::wstring GetItemTypeName(const std::wstring& path, DWORD attr) {
     return typeName;
 }
 
+std::wstring GetItemInfoTip(const std::wstring& path, bool isFolder, uint64_t size, FILETIME modifiedTime, const std::wstring& typeName, bool isSizeCalculated) {
+    if (path.empty()) return L"";
+
+    // 1. Try Windows Shell IQueryInfo to get genuine Explorer InfoTip
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (SUCCEEDED(SHParseDisplayName(path.c_str(), nullptr, &pidl, 0, nullptr)) && pidl) {
+        IShellFolder* pFolder = nullptr;
+        PCUITEMID_CHILD pidlChild = nullptr;
+        if (SUCCEEDED(SHBindToParent(pidl, IID_PPV_ARGS(&pFolder), &pidlChild)) && pFolder && pidlChild) {
+            IQueryInfo* pqi = nullptr;
+            if (SUCCEEDED(pFolder->GetUIObjectOf(nullptr, 1, &pidlChild, IID_IQueryInfo, nullptr, (void**)&pqi)) && pqi) {
+                wchar_t* pTip = nullptr;
+                if (SUCCEEDED(pqi->GetInfoTip(0, &pTip)) && pTip && pTip[0]) {
+                    std::wstring result = pTip;
+                    CoTaskMemFree(pTip);
+                    pqi->Release();
+                    pFolder->Release();
+                    CoTaskMemFree(pidl);
+                    if (result.find(L'\n') != std::wstring::npos || !isFolder) {
+                        return result;
+                    }
+                }
+                if (pTip) CoTaskMemFree(pTip);
+                pqi->Release();
+            }
+            pFolder->Release();
+        }
+        CoTaskMemFree(pidl);
+    }
+
+    // 2. Structured fallback matching Windows Explorer
+    bool isZh = I18n::Get().IsChinese();
+    std::wstring tip;
+    if (isFolder) {
+        std::wstring dateStr = Util::FormatFileTime(modifiedTime);
+        if (!dateStr.empty()) {
+            tip += (isZh ? L"修改日期: " : L"Date modified: ") + dateStr;
+        }
+
+        if (isSizeCalculated && size > 0) {
+            if (!tip.empty()) tip += L"\n";
+            tip += (isZh ? L"文件夹大小: " : L"Folder size: ") + Util::FormatBytes(size);
+        }
+
+        // Fast scan of immediate items inside folder (up to 500 items)
+        std::wstring pattern = Util::CombinePath(path, L"*");
+        WIN32_FIND_DATAW wfd;
+        HANDLE hFind = FindFirstFileW(pattern.c_str(), &wfd);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            int fileCount = 0;
+            int dirCount = 0;
+            do {
+                if (wcscmp(wfd.cFileName, L".") == 0 || wcscmp(wfd.cFileName, L"..") == 0) continue;
+                if (wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                    dirCount++;
+                } else {
+                    fileCount++;
+                }
+                if (fileCount + dirCount >= 500) break;
+            } while (FindNextFileW(hFind, &wfd));
+            FindClose(hFind);
+
+            if (!tip.empty()) tip += L"\n";
+            if (fileCount == 0 && dirCount == 0) {
+                tip += (isZh ? L"文件夹为空" : L"Folder is empty");
+            } else {
+                if (isZh) {
+                    tip += L"包含: " + std::to_wstring(fileCount) + L" 个文件，" + std::to_wstring(dirCount) + L" 个文件夹";
+                } else {
+                    tip += L"Contains: " + std::to_wstring(fileCount) + L" files, " + std::to_wstring(dirCount) + L" folders";
+                }
+            }
+        }
+    } else {
+        std::wstring type = typeName.empty() ? (isZh ? L"文件" : L"File") : typeName;
+        tip += (isZh ? L"类型: " : L"Type: ") + type;
+        tip += L"\n";
+        tip += (isZh ? L"大小: " : L"Size: ") + Util::FormatBytes(size);
+        std::wstring dateStr = Util::FormatFileTime(modifiedTime);
+        if (!dateStr.empty()) {
+            tip += L"\n";
+            tip += (isZh ? L"修改日期: " : L"Date modified: ") + dateStr;
+        }
+    }
+    return tip;
+}
+
 bool CanHaveThumbnail(const std::wstring& ext) {
     if (ext.empty()) return false;
     static const std::unordered_set<std::wstring> s_thumbExts = {

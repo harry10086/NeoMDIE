@@ -90,6 +90,7 @@ namespace ShellUtils {
     int GetItemIconIndex(const std::wstring& path, DWORD attr, bool isFolder, bool fastOnly = false);
     int GetCustomPathIcon(const std::wstring& path);
     std::wstring GetItemTypeName(const std::wstring& path, DWORD attr);
+    std::wstring GetItemInfoTip(const std::wstring& path, bool isFolder, uint64_t size, FILETIME modifiedTime, const std::wstring& typeName, bool isSizeCalculated);
 
     // Shell Thumbnail extraction (supports images, videos, media folders with album art, PDFs, etc.)
     HBITMAP GetThumbnail(const std::wstring& path, int size = 256);
