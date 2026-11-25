@@ -142,6 +142,10 @@ private:
   void KillRenameTimer();
   int m_renameTargetItem = -1;
   int m_hoverItem = -1;
+  int m_layoutX = 0;
+  int m_layoutY = 0;
+  int m_layoutW = 0;
+  int m_layoutH = 0;
 
   HWND m_hwndParent = nullptr;
   HWND m_hwnd = nullptr;

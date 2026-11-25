@@ -447,6 +447,9 @@ void FileListView::RebuildColumns() {
 
     UpdateHeaderSortArrow();
     UpdateHeaderCheckBox();
+    if (m_layoutW > 0 && m_layoutH > 0) {
+        UpdateLayout(m_layoutX, m_layoutY, m_layoutW, m_layoutH);
+    }
     InvalidateRect(m_hwnd, nullptr, TRUE);
 }
 
@@ -1382,6 +1385,9 @@ void FileListView::SetViewMode(int mode) {
 
     UpdateHeaderSortArrow();
     UpdateHeaderCheckBox();
+    if (m_layoutW > 0 && m_layoutH > 0) {
+        UpdateLayout(m_layoutX, m_layoutY, m_layoutW, m_layoutH);
+    }
     InvalidateRect(m_hwnd, nullptr, TRUE);
 }
 
@@ -1983,8 +1989,13 @@ void FileListView::ScrollPageDown() {
 }
 
 void FileListView::UpdateLayout(int x, int y, int width, int height) {
+    m_layoutX = x;
+    m_layoutY = y;
+    m_layoutW = width;
+    m_layoutH = height;
     if (m_hwnd) {
-        MoveWindow(m_hwnd, x, y, width, height, TRUE);
+        int topPad = (m_viewMode == 5) ? Theme::Get().Scale(8, m_hwnd) : 0;
+        MoveWindow(m_hwnd, x, y + topPad, width, (std::max)(0, height - topPad), TRUE);
     }
 }
 
