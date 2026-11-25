@@ -2284,7 +2284,7 @@ void FileListView::StartCustomIconLoader() {
             }
 
             DWORD now = GetTickCount();
-            if (updatedAny && (now - lastNotify >= 60 || i == tasks.size() - 1)) {
+            if (updatedAny && (now - lastNotify >= 250 || i == tasks.size() - 1)) {
                 PostMessageW(hwnd, WM_REFRESH_ICONS, (WPARAM)curGen, 0);
                 lastNotify = now;
                 updatedAny = false;
@@ -2474,7 +2474,23 @@ int FileListView::HitTestItem(int x, int y) {
         RECT rcClient = { 0 };
         GetClientRect(m_hwnd, &rcClient);
         int total = (int)m_filteredIndices.size();
-        for (int i = 0; i < total; ++i) {
+        // Binary search for the first item whose cell bottom >= rcClient.top
+        int lo = 0, hi = total - 1, startIdx = 0;
+        while (lo <= hi) {
+            int mid = lo + (hi - lo) / 2;
+            RECT rcMid = { 0 };
+            if (ListView_GetItemRect(m_hwnd, mid, &rcMid, LVIR_BOUNDS)) {
+                if (rcMid.top + spY < rcClient.top) {
+                    startIdx = mid + 1;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            } else {
+                break;
+            }
+        }
+        for (int i = startIdx; i < total; ++i) {
             RECT rcB = { 0 };
             if (!ListView_GetItemRect(m_hwnd, i, &rcB, LVIR_BOUNDS)) continue;
             if (rcB.top + spY < rcClient.top) continue;
