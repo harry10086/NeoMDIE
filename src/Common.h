@@ -60,6 +60,7 @@ inline void SafeRelease(T*& p) {
 
 struct PaneViewState {
     int topIndex = 0;
+    int scrollPosY = -1;
     std::wstring topItemPath;
     std::wstring focusedPath;
     std::vector<std::wstring> selectedPaths;

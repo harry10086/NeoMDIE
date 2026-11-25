@@ -152,6 +152,7 @@ HWND FileListView::Create(HWND hwndParent, int id) {
 
     HWND hTip = ListView_GetToolTips(m_hwnd);
     if (hTip) {
+        SendMessageW(hTip, WM_SETFONT, (WPARAM)Theme::Get().GetUIFont(m_hwnd), TRUE);
         SendMessageW(hTip, TTM_SETMAXTIPWIDTH, 0, 500);
     }
 
@@ -1358,6 +1359,7 @@ void FileListView::SetViewMode(int mode) {
     ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP);
     HWND hTip = ListView_GetToolTips(m_hwnd);
     if (hTip) {
+        SendMessageW(hTip, WM_SETFONT, (WPARAM)Theme::Get().GetUIFont(m_hwnd), TRUE);
         SendMessageW(hTip, TTM_SETMAXTIPWIDTH, 0, 500);
     }
 
@@ -1418,6 +1420,7 @@ void FileListView::ApplyDensity(int density) {
     ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP);
     HWND hTip = ListView_GetToolTips(m_hwnd);
     if (hTip) {
+        SendMessageW(hTip, WM_SETFONT, (WPARAM)Theme::Get().GetUIFont(m_hwnd), TRUE);
         SendMessageW(hTip, TTM_SETMAXTIPWIDTH, 0, 500);
     }
 }
@@ -1431,6 +1434,7 @@ void FileListView::ApplyScale(int scale) {
     ListView_SetExtendedListViewStyleEx(m_hwnd, LVS_EX_INFOTIP, LVS_EX_INFOTIP);
     HWND hTip = ListView_GetToolTips(m_hwnd);
     if (hTip) {
+        SendMessageW(hTip, WM_SETFONT, (WPARAM)Theme::Get().GetUIFont(m_hwnd), TRUE);
         SendMessageW(hTip, TTM_SETMAXTIPWIDTH, 0, 500);
     }
 }
@@ -1671,6 +1675,10 @@ PaneViewState FileListView::GetViewState() const {
     }
 
     state.topIndex = ListView_GetTopIndex(m_hwnd);
+    SCROLLINFO siV = { sizeof(SCROLLINFO), SIF_POS };
+    if (GetScrollInfo(m_hwnd, SB_VERT, &siV)) {
+        state.scrollPosY = siV.nPos;
+    }
     if (state.topIndex >= 0 && state.topIndex < (int)m_filteredIndices.size()) {
         int idx = m_filteredIndices[state.topIndex];
         if (idx >= 0 && idx < (int)m_allItems.size()) {
@@ -1784,8 +1792,14 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
             int rowToEnsure = (focusedRow >= 0) ? focusedRow : ((targetTopRow > 0) ? targetTopRow : 0);
             ListView_EnsureVisible(m_hwnd, rowToEnsure, FALSE);
         } else {
-            // Icon / Tile views
-            if (focusedRow >= 0) {
+            // Icon / Tile / Content views: restore exact pixel scroll position if recorded
+            if (state.scrollPosY >= 0) {
+                int curY = GetScrollPos(m_hwnd, SB_VERT);
+                int dy = state.scrollPosY - curY;
+                if (dy != 0) {
+                    ListView_Scroll(m_hwnd, 0, dy);
+                }
+            } else if (focusedRow >= 0) {
                 ListView_EnsureVisible(m_hwnd, focusedRow, FALSE);
             } else if (targetTopRow > 0) {
                 ListView_EnsureVisible(m_hwnd, targetTopRow, FALSE);
@@ -2409,7 +2423,20 @@ LRESULT CALLBACK FileListView::EditSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
                     int editY = rcB.top + Theme::Get().Scale(6, pThis->m_hwnd) + iconDim + Theme::Get().Scale(4, pThis->m_hwnd);
                     int editX = rcB.left + Theme::Get().Scale(4, pThis->m_hwnd);
                     int editW = cellW - Theme::Get().Scale(8, pThis->m_hwnd);
+
+                    wchar_t text[MAX_PATH] = { 0 };
+                    GetWindowTextW(hwnd, text, MAX_PATH);
                     int editH = Theme::Get().Scale(24, pThis->m_hwnd);
+                    if (text[0]) {
+                        HDC hdc = GetDC(hwnd);
+                        HGDIOBJ oldFont = SelectObject(hdc, pThis->m_hFontText);
+                        RECT rcCalc = { 0, 0, editW - Theme::Get().Scale(6, pThis->m_hwnd), 0 };
+                        DrawTextW(hdc, text, -1, &rcCalc, DT_CENTER | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX | DT_CALCRECT);
+                        SelectObject(hdc, oldFont);
+                        ReleaseDC(hwnd, hdc);
+                        int neededH = (rcCalc.bottom - rcCalc.top) + Theme::Get().Scale(10, pThis->m_hwnd);
+                        if (neededH > editH) editH = neededH;
+                    }
 
                     pwp->x = editX;
                     pwp->y = editY;
@@ -2974,6 +3001,7 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         TrackMouseEvent(&tme);
 
         if (pThis && (pThis->m_viewMode == 1 || pThis->m_viewMode == 2 || pThis->m_viewMode == 3)) {
+            LRESULT res = DefSubclassProc(hwnd, msg, wParam, lParam);
             int hit = pThis->HitTestItem(x, y);
             if (hit != pThis->m_hoverItem) {
                 int oldHover = pThis->m_hoverItem;
@@ -2981,6 +3009,7 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
                 if (oldHover >= 0) pThis->InvalidateItemCell(oldHover);
                 if (hit >= 0) pThis->InvalidateItemCell(hit);
             }
+            return res;
         }
 
         bool rDown = (wParam & MK_RBUTTON) != 0;
@@ -3647,7 +3676,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                                 RECT rcBounds = { 0 };
                                 ListView_GetItemRect(pThis->m_hwnd, row, &rcBounds, LVIR_BOUNDS);
                                 bool isSelected = (ListView_GetItemState(pThis->m_hwnd, row, LVIS_SELECTED) & LVIS_SELECTED) != 0;
-                                bool isHot = (pcd->nmcd.uItemState & CDIS_HOT) != 0 || (ListView_GetItemState(pThis->m_hwnd, row, LVIS_DROPHILITED) & LVIS_DROPHILITED) != 0;
+                                bool isHot = (row == pThis->m_hoverItem) || (pcd->nmcd.uItemState & CDIS_HOT) != 0 || (ListView_GetItemState(pThis->m_hwnd, row, LVIS_DROPHILITED) & LVIS_DROPHILITED) != 0;
 
                                 // Full grid cell rect from icon spacing (LVIR_BOUNDS in SysListView32 has hardcoded height)
                                 DWORD sp = (DWORD)SendMessageW(pThis->m_hwnd, LVM_GETITEMSPACING, FALSE, 0);
