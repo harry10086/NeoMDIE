@@ -1485,6 +1485,16 @@ void FileListView::ApplyViewMetrics() {
     // MUST use m_hFontText so labels and filenames match Windows Explorer standard size!
     if (m_viewMode == 0) {
         SendMessageW(m_hwnd, WM_SETFONT, (WPARAM)hNewMetricFont, TRUE);
+    } else if (m_viewMode == 1 || m_viewMode == 2 || m_viewMode == 3) {
+        // Reserve enough vertical metric height for 2-3 wrapped label lines + bottom padding
+        // so SysListView32 scroll range does not clip the bottom row in Medium/Large/Extra Large views
+        int iconMetricH = MulDiv(34, currentDpi, 96);
+        LOGFONTW lfIconMetric = lf;
+        lfIconMetric.lfHeight = -iconMetricH;
+        HFONT hIconMetric = CreateFontIndirectW(&lfIconMetric);
+        SendMessageW(m_hwnd, WM_SETFONT, (WPARAM)hIconMetric, TRUE);
+        DeleteObject(hNewMetricFont);
+        hNewMetricFont = hIconMetric;
     } else {
         SendMessageW(m_hwnd, WM_SETFONT, (WPARAM)hNewTextFont, TRUE);
     }
@@ -1524,7 +1534,7 @@ void FileListView::ApplyViewMetrics() {
         SendMessageW(m_hwnd, LVM_ARRANGE, LVA_DEFAULT, 0);
     } else if (m_viewMode == 4) { // Small Icons (小图标 16x16)
         int tileW = Theme::Get().Scale((density == 0) ? 220 : ((density == 2) ? 320 : 260), m_hwnd);
-        int tileH = Theme::Get().Scale((density == 0) ? 22 : ((density == 2) ? 28 : 24), m_hwnd);
+        int tileH = Theme::Get().Scale((density == 0) ? 26 : ((density == 2) ? 32 : 28), m_hwnd);
         if (scale == 2) { tileW = tileW * 5 / 4; tileH = tileH * 5 / 4; }
         else if (scale == 0) { tileW = tileW * 9 / 10; tileH = tileH * 9 / 10; }
         LVTILEVIEWINFO tvi = { 0 };
@@ -1537,7 +1547,7 @@ void FileListView::ApplyViewMetrics() {
         tvi.rcLabelMargin.left = Theme::Get().Scale(4, m_hwnd);
         tvi.rcLabelMargin.top = Theme::Get().Scale(2, m_hwnd);
         tvi.rcLabelMargin.right = Theme::Get().Scale(4, m_hwnd);
-        tvi.rcLabelMargin.bottom = Theme::Get().Scale(2, m_hwnd);
+        tvi.rcLabelMargin.bottom = Theme::Get().Scale(5, m_hwnd);
         SendMessageW(m_hwnd, LVM_SETTILEVIEWINFO, 0, (LPARAM)&tvi);
     } else if (m_viewMode == 5) { // List (列表 16x16)
         int colW = Theme::Get().Scale((density == 0) ? 220 : ((density == 2) ? 320 : 260), m_hwnd);
@@ -2461,10 +2471,14 @@ int FileListView::HitTestItem(int x, int y) {
         int spY = HIWORD(sp);
         if (spX <= 0 || spY <= 0) return -1;
 
+        RECT rcClient = { 0 };
+        GetClientRect(m_hwnd, &rcClient);
         int total = (int)m_filteredIndices.size();
         for (int i = 0; i < total; ++i) {
             RECT rcB = { 0 };
             if (!ListView_GetItemRect(m_hwnd, i, &rcB, LVIR_BOUNDS)) continue;
+            if (rcB.top + spY < rcClient.top) continue;
+            if (rcB.top > rcClient.bottom) break;
             if (y >= rcB.top && y < rcB.top + spY &&
                 x >= rcB.left && x < rcB.left + spX) {
                 // (x, y) is inside cell i's tile. Check if it hit the actual icon or label card.
@@ -2997,6 +3011,11 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
             pThis->KillRenameTimer();
         }
 
+        bool rDown = (wParam & MK_RBUTTON) != 0;
+        if (pThis && pThis->m_gesture.OnMouseMove(hwnd, x, y, rDown)) {
+            return 0;
+        }
+
         TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hwnd, 0 };
         TrackMouseEvent(&tme);
 
@@ -3010,11 +3029,6 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
                 if (hit >= 0) pThis->InvalidateItemCell(hit);
             }
             return res;
-        }
-
-        bool rDown = (wParam & MK_RBUTTON) != 0;
-        if (pThis && pThis->m_gesture.OnMouseMove(hwnd, x, y, rDown)) {
-            return 0;
         }
         break;
     }
@@ -3482,12 +3496,24 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                         }
                     }
 
-                    wchar_t text[MAX_PATH];
-                    GetWindowTextW(hEdit, text, MAX_PATH);
-                    const wchar_t* pExt = PathFindExtensionW(text);
-                    int extPos = pExt ? (int)(pExt - text) : (int)wcslen(text);
-                    // Select filename only, without extension
-                    SendMessageW(hEdit, EM_SETSEL, 0, extPos);
+                    int selRow = ListView_GetNextItem(pThis->m_hwnd, -1, LVNI_FOCUSED);
+                    bool isFolder = false;
+                    if (selRow >= 0 && selRow < (int)pThis->m_filteredIndices.size()) {
+                        int idx = pThis->m_filteredIndices[selRow];
+                        if (idx >= 0 && idx < (int)pThis->m_allItems.size()) {
+                            isFolder = pThis->m_allItems[idx].isFolder;
+                        }
+                    }
+                    if (isFolder) {
+                        SendMessageW(hEdit, EM_SETSEL, 0, -1);
+                    } else {
+                        wchar_t text[MAX_PATH];
+                        GetWindowTextW(hEdit, text, MAX_PATH);
+                        const wchar_t* pExt = PathFindExtensionW(text);
+                        int extPos = pExt ? (int)(pExt - text) : (int)wcslen(text);
+                        // Select filename only, without extension
+                        SendMessageW(hEdit, EM_SETSEL, 0, extPos);
+                    }
                 }
                 return FALSE; // Allow edit
             }
@@ -3676,7 +3702,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                                 RECT rcBounds = { 0 };
                                 ListView_GetItemRect(pThis->m_hwnd, row, &rcBounds, LVIR_BOUNDS);
                                 bool isSelected = (ListView_GetItemState(pThis->m_hwnd, row, LVIS_SELECTED) & LVIS_SELECTED) != 0;
-                                bool isHot = (row == pThis->m_hoverItem) || (pcd->nmcd.uItemState & CDIS_HOT) != 0 || (ListView_GetItemState(pThis->m_hwnd, row, LVIS_DROPHILITED) & LVIS_DROPHILITED) != 0;
+                                bool isHot = (row == pThis->m_hoverItem) || (ListView_GetItemState(pThis->m_hwnd, row, LVIS_DROPHILITED) & LVIS_DROPHILITED) != 0;
 
                                 // Full grid cell rect from icon spacing (LVIR_BOUNDS in SysListView32 has hardcoded height)
                                 DWORD sp = (DWORD)SendMessageW(pThis->m_hwnd, LVM_GETITEMSPACING, FALSE, 0);
@@ -3685,6 +3711,9 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                                 int cellW = (spX > 0) ? spX : (rcBounds.right - rcBounds.left);
                                 int cellH = (spY > 0) ? spY : (rcBounds.bottom - rcBounds.top);
                                 RECT rcCell = { rcBounds.left, rcBounds.top, rcBounds.left + cellW, rcBounds.top + cellH };
+
+                                // Always paint clean background across entire cell to prevent hover/selection residue
+                                FillRect(hdc, &rcCell, Theme::Get().BrushBackground());
 
                                 // 1. Icon layout
                                 int iconDim = (pThis->m_viewMode == 1) ? Theme::Get().Scale(256, pThis->m_hwnd)

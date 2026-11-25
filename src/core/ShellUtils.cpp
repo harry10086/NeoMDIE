@@ -2024,7 +2024,7 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
         pContextMenu->QueryInterface(IID_PPV_ARGS(&g_pContextMenu2));
         pContextMenu->QueryInterface(IID_PPV_ARGS(&g_pContextMenu3));
         int shellPos = GetMenuItemCount(hMenu);
-        pContextMenu->QueryContextMenu(hMenu, shellPos, 1, 0x6FFF, CMF_NORMAL);
+        pContextMenu->QueryContextMenu(hMenu, shellPos, 1, 0x6FFF, CMF_NORMAL | CMF_ASYNCVERBSTATE);
 
         // Filter out broken / duplicate Shell items:
         // Shell's duplicate "View", "Sort by", "Refresh", "Paste", and shell's broken "New" / "New Folder"
