@@ -996,6 +996,10 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
     ApplyFilter();
     ValidateRect(m_hwnd, nullptr);
     SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
+
+    // Now that SysListView32 has computed real scroll ranges, suppress redraw again
+    // while performing scroll restoration so Win11 cannot paint/animate intermediate scroll frames
+    SendMessageW(m_hwnd, WM_SETREDRAW, FALSE, 0);
     if (m_hasPendingRestore) {
         RestoreViewState(m_pendingRestoreState);
         m_hasPendingRestore = false;
@@ -1007,6 +1011,7 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
         m_pendingSelectPath.clear();
         SelectItemByPath(target);
     }
+    SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(m_hwnd, nullptr, FALSE);
 
     if (!ShellUtils::IsVirtualShellPath(normalized)) {
