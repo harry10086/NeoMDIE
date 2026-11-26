@@ -1818,9 +1818,14 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
             int colW = ListView_GetColumnWidth(m_hwnd, 0);
             if (colW <= 0) colW = Theme::Get().Scale(260, m_hwnd);
             if (state.scrollPosX >= 0) {
-                SendMessageW(m_hwnd, WM_HSCROLL, SB_LEFT, 0);
-                if (state.scrollPosX > 0) {
-                    ListView_Scroll(m_hwnd, state.scrollPosX * colW, 0);
+                RECT rc0 = { 0 };
+                if (ListView_GetItemRect(m_hwnd, 0, &rc0, LVIR_BOUNDS) && ((-rc0.left) % colW != 0)) {
+                    SendMessageW(m_hwnd, WM_HSCROLL, SB_LEFT, 0);
+                }
+                int curX = GetScrollPos(m_hwnd, SB_HORZ);
+                int dCols = state.scrollPosX - curX;
+                if (dCols != 0) {
+                    ListView_Scroll(m_hwnd, dCols * colW, 0);
                 }
             } else {
                 SendMessageW(m_hwnd, WM_HSCROLL, SB_LEFT, 0);

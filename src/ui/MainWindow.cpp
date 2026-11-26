@@ -999,7 +999,8 @@ void MainWindow::CreateControls() {
                                           ? targetPanePaths[p] : fallbackPath;
                 if (_wcsicmp(m_multiPane.GetPane(p).GetCurrentPath().c_str(), targetPath.c_str()) != 0 ||
                     m_multiPane.GetPane(p).GetCurrentPath().empty()) {
-                    m_multiPane.GetPane(p).NavigateTo(targetPath, false);
+                    const PaneViewState* pInitState = (p < (int)targetViewStates.size()) ? &targetViewStates[p] : nullptr;
+                    m_multiPane.GetPane(p).NavigateTo(targetPath, false, pInitState);
                 }
                 if (p < (int)targetHistories.size() && !targetHistories[p].history.empty()) {
                     m_multiPane.GetPane(p).SetHistory(targetHistories[p].history, targetHistories[p].historyIndex);
