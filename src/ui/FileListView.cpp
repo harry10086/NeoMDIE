@@ -438,13 +438,9 @@ void FileListView::RebuildColumns() {
     }
 
     if (m_viewMode == 5) {
+        SendMessageW(m_hwnd, WM_HSCROLL, SB_LEFT, 0);
         ListView_EnsureVisible(m_hwnd, 0, FALSE);
-        int hPos = GetScrollPos(m_hwnd, SB_HORZ);
-        if (hPos > 0) {
-            int colW = ListView_GetColumnWidth(m_hwnd, 0);
-            if (colW <= 0) colW = Theme::Get().Scale(260, m_hwnd);
-            ListView_Scroll(m_hwnd, -hPos * colW, 0);
-        }
+        SendMessageW(m_hwnd, WM_HSCROLL, SB_LEFT, 0);
     }
 
     UpdateHeaderSortArrow();
@@ -1002,6 +998,8 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
     if (m_hasPendingRestore) {
         RestoreViewState(m_pendingRestoreState);
         m_hasPendingRestore = false;
+    } else if (m_viewMode == 5 && m_pendingSelectPath.empty()) {
+        SendMessageW(m_hwnd, WM_HSCROLL, SB_LEFT, 0);
     }
     if (!m_pendingSelectPath.empty()) {
         std::wstring target = m_pendingSelectPath;
@@ -1378,13 +1376,9 @@ void FileListView::SetViewMode(int mode) {
     }
 
     if (m_viewMode == 5) {
+        SendMessageW(m_hwnd, WM_HSCROLL, SB_LEFT, 0);
         ListView_EnsureVisible(m_hwnd, 0, FALSE);
-        int hPos = GetScrollPos(m_hwnd, SB_HORZ);
-        if (hPos > 0) {
-            int colW = ListView_GetColumnWidth(m_hwnd, 0);
-            if (colW <= 0) colW = Theme::Get().Scale(260, m_hwnd);
-            ListView_Scroll(m_hwnd, -hPos * colW, 0);
-        }
+        SendMessageW(m_hwnd, WM_HSCROLL, SB_LEFT, 0);
     }
 
     UpdateHeaderSortArrow();
@@ -1824,16 +1818,12 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
             int colW = ListView_GetColumnWidth(m_hwnd, 0);
             if (colW <= 0) colW = Theme::Get().Scale(260, m_hwnd);
             if (state.scrollPosX >= 0) {
-                int curX = GetScrollPos(m_hwnd, SB_HORZ);
-                int dCols = state.scrollPosX - curX;
-                if (dCols != 0) {
-                    ListView_Scroll(m_hwnd, dCols * colW, 0);
+                SendMessageW(m_hwnd, WM_HSCROLL, SB_LEFT, 0);
+                if (state.scrollPosX > 0) {
+                    ListView_Scroll(m_hwnd, state.scrollPosX * colW, 0);
                 }
             } else {
-                int hPos = GetScrollPos(m_hwnd, SB_HORZ);
-                if (hPos > 0) {
-                    ListView_Scroll(m_hwnd, -hPos * colW, 0);
-                }
+                SendMessageW(m_hwnd, WM_HSCROLL, SB_LEFT, 0);
                 int rowToEnsure = (focusedRow >= 0) ? focusedRow : ((targetTopRow > 0) ? targetTopRow : 0);
                 ListView_EnsureVisible(m_hwnd, rowToEnsure, FALSE);
                 // Re-align leftmost visible column cleanly if EnsureVisible left it partially clipped
