@@ -1007,7 +1007,7 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
         m_pendingSelectPath.clear();
         SelectItemByPath(target);
     }
-    RedrawWindow(m_hwnd, nullptr, nullptr, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
+    InvalidateRect(m_hwnd, nullptr, FALSE);
 
     if (!ShellUtils::IsVirtualShellPath(normalized)) {
         m_watcher.Watch(normalized, m_hwnd, WM_NOTIFY_DIR_CHANGED);
@@ -1996,7 +1996,18 @@ void FileListView::UpdateLayout(int x, int y, int width, int height) {
     m_layoutH = height;
     if (m_hwnd) {
         int topPad = (m_viewMode == 5) ? Theme::Get().Scale(8, m_hwnd) : 0;
-        MoveWindow(m_hwnd, x, y + topPad, width, (std::max)(0, height - topPad), TRUE);
+        int targetY = y + topPad;
+        int targetH = (std::max)(0, height - topPad);
+        RECT rcCur = { 0 };
+        if (GetWindowRect(m_hwnd, &rcCur)) {
+            HWND hParent = GetParent(m_hwnd);
+            if (hParent) MapWindowPoints(nullptr, hParent, (LPPOINT)&rcCur, 2);
+            if (rcCur.left == x && rcCur.top == targetY &&
+                (rcCur.right - rcCur.left) == width && (rcCur.bottom - rcCur.top) == targetH) {
+                return;
+            }
+        }
+        MoveWindow(m_hwnd, x, targetY, width, targetH, TRUE);
     }
 }
 
