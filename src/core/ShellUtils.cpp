@@ -1366,12 +1366,16 @@ std::vector<NeoShellItem> EnumerateWslDistros() {
         return name;
     };
 
-    // 1. Shell namespace enumeration (::{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6} or \\wsl.localhost)
+    // 1. Check registry HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss first (instant, 0ms)
+    // and only query Shell namespace if the Win11 Linux CLSID is actually registered.
+    // Never call SHParseDisplayName(L"\\\\wsl.localhost") unconditionally, as Win10 treats it
+    // as a UNC network host and blocks for 3-5 seconds waiting on SMB/DNS timeout!
     PIDLIST_ABSOLUTE pidlLinux = nullptr;
-    HRESULT hr = SHParseDisplayName(L"::{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}", nullptr, &pidlLinux, 0, nullptr);
-    if (FAILED(hr)) {
-        hr = SHParseDisplayName(L"\\\\wsl.localhost", nullptr, &pidlLinux, 0, nullptr);
-    }
+    HKEY hClsid = nullptr;
+    bool hasLinuxClsid = (RegOpenKeyExW(HKEY_CLASSES_ROOT, L"CLSID\\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}", 0, KEY_READ, &hClsid) == ERROR_SUCCESS);
+    if (hClsid) RegCloseKey(hClsid);
+
+    HRESULT hr = hasLinuxClsid ? SHParseDisplayName(L"::{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}", nullptr, &pidlLinux, 0, nullptr) : E_FAIL;
     if (SUCCEEDED(hr) && pidlLinux) {
         IShellFolder* pDesktop = nullptr;
         if (SUCCEEDED(SHGetDesktopFolder(&pDesktop))) {
