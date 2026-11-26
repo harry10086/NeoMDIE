@@ -990,10 +990,11 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
 
     SortItems();
     UpdateHeaderSortArrow();
+    SendMessageW(m_hwnd, WM_SETREDRAW, FALSE, 0);
     ListView_SetItemCountEx(m_hwnd, 0, 0);
     ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-    SendMessageW(m_hwnd, WM_SETREDRAW, FALSE, 0);
     ApplyFilter();
+    ValidateRect(m_hwnd, nullptr);
     SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
     if (m_hasPendingRestore) {
         RestoreViewState(m_pendingRestoreState);
@@ -1859,7 +1860,6 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
         ListView_RedrawItems(m_hwnd, 0, (int)m_filteredIndices.size() - 1);
     }
     InvalidateRect(m_hwnd, nullptr, FALSE);
-    UpdateWindow(m_hwnd);
 }
 
 void FileListView::NotifyStatus() {

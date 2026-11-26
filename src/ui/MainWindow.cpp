@@ -989,10 +989,12 @@ void MainWindow::CreateControls() {
         m_multiPane.SetLayout((PaneLayout)targetLayout);
         int targetPaneCount = m_multiPane.GetPaneCount();
 
+        bool didPaneNav[4] = { false, false, false, false };
         if (targetPanePaths.empty()) {
             m_multiPane.GetPane(0).NavigateTo(fallbackPath, false);
             m_multiPane.GetPane(0).ClearHistory(fallbackPath);
             m_multiPane.GetPane(0).ClearSelection();
+            didPaneNav[0] = true;
         } else {
             for (int p = 0; p < targetPaneCount && p < 4; ++p) {
                 std::wstring targetPath = (p < (int)targetPanePaths.size() && !targetPanePaths[p].empty())
@@ -1001,6 +1003,7 @@ void MainWindow::CreateControls() {
                     m_multiPane.GetPane(p).GetCurrentPath().empty()) {
                     const PaneViewState* pInitState = (p < (int)targetViewStates.size()) ? &targetViewStates[p] : nullptr;
                     m_multiPane.GetPane(p).NavigateTo(targetPath, false, pInitState);
+                    didPaneNav[p] = true;
                 }
                 if (p < (int)targetHistories.size() && !targetHistories[p].history.empty()) {
                     m_multiPane.GetPane(p).SetHistory(targetHistories[p].history, targetHistories[p].historyIndex);
@@ -1028,14 +1031,16 @@ void MainWindow::CreateControls() {
         UpdateWindowTitle(activePath);
         LayoutAll();
 
-        // Restore view states for all panes after layout and sizing are complete
+        // Restore view states for panes that were not freshly navigated above
         for (int p = 0; p < targetPaneCount && p < 4; ++p) {
-            if (p < (int)targetViewStates.size()) {
-                m_multiPane.GetPane(p).RestoreViewState(targetViewStates[p]);
-            } else if (p < (int)targetSelections.size() && !targetSelections[p].empty()) {
-                m_multiPane.GetPane(p).SetSelectedPaths(targetSelections[p]);
-            } else {
-                m_multiPane.GetPane(p).ClearSelection();
+            if (!didPaneNav[p]) {
+                if (p < (int)targetViewStates.size()) {
+                    m_multiPane.GetPane(p).RestoreViewState(targetViewStates[p]);
+                } else if (p < (int)targetSelections.size() && !targetSelections[p].empty()) {
+                    m_multiPane.GetPane(p).SetSelectedPaths(targetSelections[p]);
+                } else {
+                    m_multiPane.GetPane(p).ClearSelection();
+                }
             }
             m_lastPanePaths[p] = m_multiPane.GetPane(p).GetCurrentPath();
         }
