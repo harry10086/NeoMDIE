@@ -71,7 +71,14 @@ static HWND CreateModernButton(HWND hwndParent, int id, const wchar_t* text, int
         x, y, w, h, hwndParent, (HMENU)(INT_PTR)id, GetModuleHandleW(nullptr), nullptr);
 }
 
-static void CenterOnParent(HWND hwndDlg, HWND hwndParent, int w, int h) {
+static void SizeAndCenterDialog(HWND hwndDlg, HWND hwndParent, int clientW, int clientH) {
+    RECT rcWin = { 0, 0, clientW, clientH };
+    DWORD style = (DWORD)GetWindowLongW(hwndDlg, GWL_STYLE);
+    DWORD exStyle = (DWORD)GetWindowLongW(hwndDlg, GWL_EXSTYLE);
+    AdjustWindowRectEx(&rcWin, style, FALSE, exStyle);
+    int w = rcWin.right - rcWin.left;
+    int h = rcWin.bottom - rcWin.top;
+
     RECT rcParent = { 0 };
     if (hwndParent && GetWindowRect(hwndParent, &rcParent)) {
         int px = rcParent.left + (rcParent.right - rcParent.left - w) / 2;
@@ -85,7 +92,7 @@ static void CenterOnParent(HWND hwndDlg, HWND hwndParent, int w, int h) {
 }
 
 // ============================================================================
-// 1. Modern About Dialog
+// 1. Modern About Dialog (Minimal & Clean: no redundant bottom buttons)
 // ============================================================================
 struct AboutState {
     HWND hwndParent = nullptr;
@@ -109,22 +116,6 @@ static LRESULT CALLBACK AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         int iconSz = Theme::Get().Scale(48, hwnd);
         st->hAppIcon = (HICON)LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON),
                                          IMAGE_ICON, iconSz, iconSz, LR_DEFAULTCOLOR);
-
-        bool isZh = I18n::Get().IsChinese();
-        RECT rcClient = { 0 };
-        GetClientRect(hwnd, &rcClient);
-        int pad = Theme::Get().Scale(24, hwnd);
-        int btnH = Theme::Get().Scale(32, hwnd);
-        int btnY = rcClient.bottom - pad - btnH;
-
-        int btnCheckW = Theme::Get().Scale(106, hwnd);
-        int btnRepoW = Theme::Get().Scale(106, hwnd);
-        int btnOkW = Theme::Get().Scale(88, hwnd);
-        int gap = Theme::Get().Scale(10, hwnd);
-
-        CreateModernButton(hwnd, 1001, isZh ? L"检查更新..." : L"Check Updates...", pad, btnY, btnCheckW, btnH);
-        CreateModernButton(hwnd, 1002, isZh ? L"GitHub 仓库" : L"GitHub Repo", pad + btnCheckW + gap, btnY, btnRepoW, btnH);
-        CreateModernButton(hwnd, IDOK, isZh ? L"确定" : L"OK", rcClient.right - pad - btnOkW, btnY, btnOkW, btnH);
         return 0;
     }
     case WM_ERASEBKGND: {
@@ -133,14 +124,6 @@ static LRESULT CALLBACK AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         GetClientRect(hwnd, &rc);
         FillRect(hdc, &rc, Theme::Get().BrushBackground());
         return 1;
-    }
-    case WM_DRAWITEM: {
-        LPDRAWITEMSTRUCT pdis = (LPDRAWITEMSTRUCT)lParam;
-        if (pdis) {
-            DrawModernButton(pdis, hwnd, pdis->CtlID == IDOK);
-            return TRUE;
-        }
-        break;
     }
     case WM_MOUSEMOVE: {
         if (!st) break;
@@ -175,7 +158,6 @@ static LRESULT CALLBACK AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         RECT rcClient = { 0 };
         GetClientRect(hwnd, &rcClient);
 
-        // Double buffer paint
         HDC memDC = CreateCompatibleDC(hdc);
         HBITMAP memBM = CreateCompatibleBitmap(hdc, rcClient.right, rcClient.bottom);
         HGDIOBJ oldBM = SelectObject(memDC, memBM);
@@ -185,7 +167,7 @@ static LRESULT CALLBACK AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 
         bool isZh = I18n::Get().IsChinese();
         bool isDark = Theme::Get().IsDarkMode();
-        int pad = Theme::Get().Scale(24, hwnd);
+        int pad = Theme::Get().Scale(22, hwnd);
         int iconSz = Theme::Get().Scale(48, hwnd);
 
         // 1. Header: App Icon + Title + Subtitle + Version Pill
@@ -209,7 +191,7 @@ static LRESULT CALLBACK AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         SIZE szTitle = { 0 };
         GetTextExtentPoint32W(memDC, L"NeoMDIE", 7, &szTitle);
         int pillX = textX + szTitle.cx + Theme::Get().Scale(10, hwnd);
-        int pillW = Theme::Get().Scale(110, hwnd);
+        int pillW = Theme::Get().Scale(104, hwnd);
         int pillH = Theme::Get().Scale(22, hwnd);
         int pillY = pad + Theme::Get().Scale(2, hwnd);
         RECT rcPill = { pillX, pillY, pillX + pillW, pillY + pillH };
@@ -227,16 +209,16 @@ static LRESULT CALLBACK AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                               : L"Modern Native Win32 Tabbed & Multi-Pane File Manager",
                   -1, &rcSub, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-        // 2. Rounded Info Card
+        // 2. Rounded Info Card (cleanly encloses all 5 rows)
         int cardTop = pad + iconSz + Theme::Get().Scale(18, hwnd);
-        int cardBottom = rcClient.bottom - pad - Theme::Get().Scale(32, hwnd) - Theme::Get().Scale(18, hwnd);
+        int cardBottom = rcClient.bottom - pad;
         RECT rcCard = { pad, cardTop, rcClient.right - pad, cardBottom };
         Theme::DrawSmoothRoundRect(memDC, rcCard, Theme::Get().Scale(8, hwnd),
                                    Theme::Get().ClrSurface(), Theme::Get().ClrBorder(), 1.0f);
 
         int innerX = rcCard.left + Theme::Get().Scale(16, hwnd);
-        int valX = rcCard.left + Theme::Get().Scale(108, hwnd);
-        int rowY = rcCard.top + Theme::Get().Scale(14, hwnd);
+        int valX = rcCard.left + Theme::Get().Scale(104, hwnd);
+        int rowY = rcCard.top + Theme::Get().Scale(12, hwnd);
         int rowH = Theme::Get().Scale(28, hwnd);
 
         auto drawRow = [&](const wchar_t* label, const wchar_t* value, bool isLink, bool isHovered, RECT* outLinkRc) {
@@ -284,24 +266,6 @@ static LRESULT CALLBACK AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         EndPaint(hwnd, &ps);
         return 0;
     }
-    case WM_COMMAND: {
-        int id = LOWORD(wParam);
-        if (id == IDOK || id == IDCANCEL) {
-            DestroyWindow(hwnd);
-            return 0;
-        }
-        if (id == 1001) { // Check Updates
-            HWND parent = st ? st->hwndParent : nullptr;
-            DestroyWindow(hwnd);
-            ShowCheckUpdates(parent);
-            return 0;
-        }
-        if (id == 1002) { // Open GitHub
-            ShellExecuteW(nullptr, L"open", REPO_URL, nullptr, nullptr, SW_SHOWNORMAL);
-            return 0;
-        }
-        break;
-    }
     case WM_KEYDOWN: {
         if (wParam == VK_ESCAPE || wParam == VK_RETURN) {
             DestroyWindow(hwnd);
@@ -338,17 +302,18 @@ void ShowAbout(HWND hwndParent) {
     AboutState st;
     st.hwndParent = hwndParent;
 
-    int w = Theme::Get().Scale(500, hwndParent);
-    int h = Theme::Get().Scale(336, hwndParent);
+    int clientW = Theme::Get().Scale(464, hwndParent);
+    // 22 top + 48 header + 18 gap + (12 + 5*28 + 12 = 164) card + 22 bottom = 274
+    int clientH = Theme::Get().Scale(274, hwndParent);
 
     HWND hwndDlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME, ABOUT_CLASS,
         isZh ? L"关于 NeoMDIE" : L"About NeoMDIE",
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        0, 0, w, h, hwndParent, nullptr, hInst, &st);
+        0, 0, 100, 100, hwndParent, nullptr, hInst, &st);
     if (!hwndDlg) return;
 
-    CenterOnParent(hwndDlg, hwndParent, w, h);
+    SizeAndCenterDialog(hwndDlg, hwndParent, clientW, clientH);
     EnableWindow(hwndParent, FALSE);
     ShowWindow(hwndDlg, SW_SHOW);
     UpdateWindow(hwndDlg);
@@ -367,7 +332,7 @@ void ShowAbout(HWND hwndParent) {
 }
 
 // ============================================================================
-// 2. Modern Check for Updates Dialog
+// 2. Modern Check for Updates Dialog (Minimal & Clean)
 // ============================================================================
 enum class UpdateCheckStatus {
     Checking,
@@ -393,7 +358,6 @@ struct UpdateDialogState {
 
     HWND hBtnPrimary = nullptr;
     HWND hBtnSecondary = nullptr;
-    HWND hBtnClose = nullptr;
 };
 
 static void StartAsyncUpdateCheck(HWND hwndDlg, std::shared_ptr<std::atomic<bool>> alive) {
@@ -413,8 +377,8 @@ static void StartAsyncUpdateCheck(HWND hwndDlg, std::shared_ptr<std::atomic<bool
             if (!hUrl) {
                 InternetCloseHandle(hInternet);
                 pRes->status = UpdateCheckStatus::Error;
-                pRes->errorMsg = isZh ? L"无法连接到 GitHub 服务器，您可以点击下方按钮直接在浏览器查看。"
-                                      : L"Unable to connect to GitHub. You can open the Releases page directly.";
+                pRes->errorMsg = isZh ? L"无法连接到 GitHub 服务器，请稍后重试或访问 Releases。"
+                                      : L"Unable to connect to GitHub. Retry or open Releases.";
             } else {
                 std::string json;
                 char buffer[2048];
@@ -473,45 +437,37 @@ static void LayoutUpdateButtons(HWND hwnd, UpdateDialogState* st) {
     bool isZh = I18n::Get().IsChinese();
     RECT rcClient = { 0 };
     GetClientRect(hwnd, &rcClient);
-    int pad = Theme::Get().Scale(24, hwnd);
+    int cw = rcClient.right - rcClient.left;
+    int pad = Theme::Get().Scale(22, hwnd);
     int btnH = Theme::Get().Scale(32, hwnd);
     int btnY = rcClient.bottom - pad - btnH;
-    int btnW = Theme::Get().Scale(106, hwnd);
-    int btnPrimW = Theme::Get().Scale(120, hwnd);
-    int gap = Theme::Get().Scale(10, hwnd);
+    int gap = Theme::Get().Scale(12, hwnd);
 
     if (st->status == UpdateCheckStatus::Checking) {
         ShowWindow(st->hBtnSecondary, SW_HIDE);
-        ShowWindow(st->hBtnClose, SW_HIDE);
-        SetWindowTextW(st->hBtnPrimary, isZh ? L"取消" : L"Cancel");
-        MoveWindow(st->hBtnPrimary, rcClient.right - pad - Theme::Get().Scale(88, hwnd), btnY,
-                   Theme::Get().Scale(88, hwnd), btnH, TRUE);
+        ShowWindow(st->hBtnPrimary, SW_HIDE);
     } else if (st->status == UpdateCheckStatus::UpToDate) {
-        ShowWindow(st->hBtnClose, SW_HIDE);
+        ShowWindow(st->hBtnPrimary, SW_HIDE);
         ShowWindow(st->hBtnSecondary, SW_SHOW);
-        SetWindowTextW(st->hBtnSecondary, isZh ? L"访问 Releases" : L"Releases");
-        MoveWindow(st->hBtnSecondary, pad, btnY, btnW, btnH, TRUE);
-        SetWindowTextW(st->hBtnPrimary, isZh ? L"完成" : L"Done");
-        MoveWindow(st->hBtnPrimary, rcClient.right - pad - Theme::Get().Scale(88, hwnd), btnY,
-                   Theme::Get().Scale(88, hwnd), btnH, TRUE);
+        int btnW = Theme::Get().Scale(136, hwnd);
+        SetWindowTextW(st->hBtnSecondary, isZh ? L"访问 Releases" : L"Open Releases");
+        MoveWindow(st->hBtnSecondary, (cw - btnW) / 2, btnY, btnW, btnH, TRUE);
     } else if (st->status == UpdateCheckStatus::UpdateAvailable) {
-        ShowWindow(st->hBtnClose, SW_HIDE);
-        ShowWindow(st->hBtnSecondary, SW_SHOW);
-        SetWindowTextW(st->hBtnSecondary, isZh ? L"稍后提醒" : L"Later");
-        MoveWindow(st->hBtnSecondary, rcClient.right - pad - btnPrimW - gap - Theme::Get().Scale(88, hwnd), btnY,
-                   Theme::Get().Scale(88, hwnd), btnH, TRUE);
+        ShowWindow(st->hBtnSecondary, SW_HIDE);
+        ShowWindow(st->hBtnPrimary, SW_SHOW);
+        int btnW = Theme::Get().Scale(136, hwnd);
         SetWindowTextW(st->hBtnPrimary, isZh ? L"前往下载" : L"Download");
-        MoveWindow(st->hBtnPrimary, rcClient.right - pad - btnPrimW, btnY, btnPrimW, btnH, TRUE);
-    } else { // Error
+        MoveWindow(st->hBtnPrimary, (cw - btnW) / 2, btnY, btnW, btnH, TRUE);
+    } else { // Error: centered pair [Retry] [Open Releases]
         ShowWindow(st->hBtnSecondary, SW_SHOW);
-        ShowWindow(st->hBtnClose, SW_SHOW);
+        ShowWindow(st->hBtnPrimary, SW_SHOW);
+        int w1 = Theme::Get().Scale(96, hwnd);
+        int w2 = Theme::Get().Scale(132, hwnd);
+        int startX = (cw - (w1 + gap + w2)) / 2;
         SetWindowTextW(st->hBtnSecondary, isZh ? L"重试" : L"Retry");
-        MoveWindow(st->hBtnSecondary, pad, btnY, Theme::Get().Scale(84, hwnd), btnH, TRUE);
-        SetWindowTextW(st->hBtnClose, isZh ? L"关闭" : L"Close");
-        MoveWindow(st->hBtnClose, rcClient.right - pad - btnPrimW - gap - Theme::Get().Scale(80, hwnd), btnY,
-                   Theme::Get().Scale(80, hwnd), btnH, TRUE);
+        MoveWindow(st->hBtnSecondary, startX, btnY, w1, btnH, TRUE);
         SetWindowTextW(st->hBtnPrimary, isZh ? L"打开 Releases" : L"Open Releases");
-        MoveWindow(st->hBtnPrimary, rcClient.right - pad - btnPrimW, btnY, btnPrimW, btnH, TRUE);
+        MoveWindow(st->hBtnPrimary, startX + w1 + gap, btnY, w2, btnH, TRUE);
     }
 }
 
@@ -526,10 +482,13 @@ static LRESULT CALLBACK UpdateWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
         Theme::Get().ApplyToWindow(hwnd);
         st->hBtnSecondary = CreateModernButton(hwnd, 2001, L"", 0, 0, 0, 0);
-        st->hBtnClose = CreateModernButton(hwnd, IDCANCEL, L"", 0, 0, 0, 0);
         st->hBtnPrimary = CreateModernButton(hwnd, IDOK, L"", 0, 0, 0, 0);
         LayoutUpdateButtons(hwnd, st);
         StartAsyncUpdateCheck(hwnd, st->alive);
+        return 0;
+    }
+    case WM_SIZE: {
+        LayoutUpdateButtons(hwnd, st);
         return 0;
     }
     case WM_UPDATE_CHECK_DONE: {
@@ -575,13 +534,12 @@ static LRESULT CALLBACK UpdateWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
         bool isZh = I18n::Get().IsChinese();
         bool isDark = Theme::Get().IsDarkMode();
-        int pad = Theme::Get().Scale(24, hwnd);
+        int pad = Theme::Get().Scale(22, hwnd);
 
-        // Status Icon Badge (left circle/rounded box)
         int badgeSz = Theme::Get().Scale(44, hwnd);
         RECT rcBadge = { pad, pad, pad + badgeSz, pad + badgeSz };
         COLORREF badgeClr = Theme::Get().ClrAccent();
-        wchar_t glyph[2] = { 0xE895, 0 }; // Sync/Update glyph
+        wchar_t glyph[2] = { 0xE895, 0 };
         std::wstring heading;
         std::wstring subHeading;
 
@@ -592,17 +550,17 @@ static LRESULT CALLBACK UpdateWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             heading = isZh ? L"正在检查更新..." : L"Checking for Updates...";
             subHeading = isZh ? L"正在连接 GitHub 获取最新发布版本信息" : L"Connecting to GitHub Releases API";
         } else if (curStatus == UpdateCheckStatus::UpToDate) {
-            glyph[0] = (wchar_t)0xE73E; // Checkmark
+            glyph[0] = (wchar_t)0xE73E;
             badgeClr = RGB(16, 152, 72);
             heading = isZh ? L"当前已是最新版本" : L"You Are Up to Date";
             subHeading = isZh ? L"您的 NeoMDIE 已是官方最新稳定版本，无需更新" : L"No newer updates are currently available";
         } else if (curStatus == UpdateCheckStatus::UpdateAvailable) {
-            glyph[0] = (wchar_t)0xE896; // Download
+            glyph[0] = (wchar_t)0xE896;
             badgeClr = Theme::Get().ClrAccent();
             heading = isZh ? (L"发现新版本: " + st->tagName) : (L"New Version Available: " + st->tagName);
             subHeading = isZh ? L"点击“前往下载”即可打开 GitHub 发布页获取最新版" : L"Click Download to open the GitHub Release page";
         } else {
-            glyph[0] = (wchar_t)0xE7BA; // Warning
+            glyph[0] = (wchar_t)0xE7BA;
             badgeClr = RGB(216, 128, 16);
             heading = isZh ? L"检查更新失败" : L"Update Check Failed";
             subHeading = (st && !st->detailMsg.empty()) ? st->detailMsg
@@ -642,17 +600,18 @@ static LRESULT CALLBACK UpdateWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         RECT rcSub = { textX, pad + Theme::Get().Scale(25, hwnd), rcClient.right - pad, pad + Theme::Get().Scale(46, hwnd) };
         DrawTextW(memDC, subHeading.c_str(), -1, &rcSub, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-        // Version Info Card
-        int cardTop = pad + badgeSz + Theme::Get().Scale(18, hwnd);
-        int cardBottom = rcClient.bottom - pad - Theme::Get().Scale(32, hwnd) - Theme::Get().Scale(18, hwnd);
+        // Version Info Card (cleanly encloses both rows with balanced margin above button)
+        int cardTop = pad + badgeSz + Theme::Get().Scale(16, hwnd);
+        int btnAreaH = Theme::Get().Scale(32, hwnd) + Theme::Get().Scale(18, hwnd);
+        int cardBottom = rcClient.bottom - pad - btnAreaH;
         RECT rcCard = { pad, cardTop, rcClient.right - pad, cardBottom };
         Theme::DrawSmoothRoundRect(memDC, rcCard, Theme::Get().Scale(8, hwnd),
                                    Theme::Get().ClrSurface(), Theme::Get().ClrBorder(), 1.0f);
 
         int innerX = rcCard.left + Theme::Get().Scale(16, hwnd);
-        int valX = rcCard.left + Theme::Get().Scale(116, hwnd);
-        int rowY = rcCard.top + Theme::Get().Scale(14, hwnd);
+        int valX = rcCard.left + Theme::Get().Scale(108, hwnd);
         int rowH = Theme::Get().Scale(26, hwnd);
+        int rowY = rcCard.top + (cardBottom - cardTop - rowH * 2) / 2;
 
         auto drawInfo = [&](const wchar_t* lbl, const std::wstring& val, COLORREF valClr) {
             SelectObject(memDC, hBoldFont);
@@ -708,8 +667,6 @@ static LRESULT CALLBACK UpdateWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 StartAsyncUpdateCheck(hwnd, st->alive);
             } else if (st->status == UpdateCheckStatus::UpToDate) { // Open Releases
                 ShellExecuteW(nullptr, L"open", RELEASES_URL, nullptr, nullptr, SW_SHOWNORMAL);
-            } else if (st->status == UpdateCheckStatus::UpdateAvailable) { // Later
-                DestroyWindow(hwnd);
             }
             return 0;
         }
@@ -750,17 +707,18 @@ void ShowCheckUpdates(HWND hwndParent) {
     UpdateDialogState st;
     st.hwndParent = hwndParent;
 
-    int w = Theme::Get().Scale(460, hwndParent);
-    int h = Theme::Get().Scale(240, hwndParent);
+    int clientW = Theme::Get().Scale(432, hwndParent);
+    // 22 top + 44 header + 16 gap + 76 card + 18 gap + 32 btn + 22 bottom = 230
+    int clientH = Theme::Get().Scale(230, hwndParent);
 
     HWND hwndDlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME, UPDATE_CLASS,
         isZh ? L"检查更新" : L"Check for Updates",
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        0, 0, w, h, hwndParent, nullptr, hInst, &st);
+        0, 0, 100, 100, hwndParent, nullptr, hInst, &st);
     if (!hwndDlg) return;
 
-    CenterOnParent(hwndDlg, hwndParent, w, h);
+    SizeAndCenterDialog(hwndDlg, hwndParent, clientW, clientH);
     EnableWindow(hwndParent, FALSE);
     ShowWindow(hwndDlg, SW_SHOW);
     UpdateWindow(hwndDlg);
