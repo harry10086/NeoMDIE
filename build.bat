@@ -71,6 +71,7 @@ if "%BUILD_MODE%"=="debug" (
        src\ui\Theme.cpp ^
        src\ui\DirectoryTree.cpp ^
        src\ui\SettingsDialog.cpp ^
+       src\ui\ModernDialogs.cpp ^
        src\ui\TabBar.cpp ^
        src\ui\BreadcrumbBar.cpp ^
        src\ui\FilterBar.cpp ^
@@ -101,6 +102,7 @@ if "%BUILD_MODE%"=="debug" (
        src\ui\Theme.cpp ^
        src\ui\DirectoryTree.cpp ^
        src\ui\SettingsDialog.cpp ^
+       src\ui\ModernDialogs.cpp ^
        src\ui\TabBar.cpp ^
        src\ui\BreadcrumbBar.cpp ^
        src\ui\FilterBar.cpp ^

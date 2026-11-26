@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "Theme.h"
 #include "SettingsDialog.h"
+#include "ModernDialogs.h"
 #include "..\resource.h"
 #include "..\core\Config.h"
 #include "..\core\I18n.h"
@@ -3229,7 +3230,7 @@ void MainWindow::OnCommand(UINT cmdId) {
         }, 8);
         break;
     case ID_HELP_CHECK_UPDATES: {
-        ShellUtils::CheckForUpdates(m_hwnd);
+        ModernDialogs::ShowCheckUpdates(m_hwnd);
         break;
     }
     case ID_HELP_GITHUB:
@@ -3246,22 +3247,7 @@ void MainWindow::OnCommand(UINT cmdId) {
     }
 
     case ID_HELP_ABOUT: {
-        bool isZh = I18n::Get().IsChinese();
-        std::wstring aboutText = isZh ?
-            L"NeoMDIE - 现代化多标签多栏文件管理器\n"
-            L"版本: v1.1.4 (x64 Release)\n\n"
-            L"作者: Harry (https://mianao.info)\n"
-            L"开源项目仓库: https://github.com/harry10086/NeoMDIE\n"
-            L"致敬经典: MDIE(Multiple Document Interface Explorer)\n\n"
-            L"基于 GNU General Public License v3 (GPLv3) 开源协议发布。" :
-            L"NeoMDIE - Modern Native Win32 Tabbed & Multi-Pane File Manager\n"
-            L"Version: v1.1.4 (x64 Release)\n\n"
-            L"Author: Harry (https://mianao.info)\n"
-            L"Repository: https://github.com/harry10086/NeoMDIE\n"
-            L"Inspired by: MDIE(Multiple Document Interface Explorer)\n\n"
-            L"Pure C++17 / Native Win32 / Shell COM. Zero dependencies.\n"
-            L"Licensed under the GNU General Public License v3 (GPLv3).";
-        MessageBoxW(m_hwnd, aboutText.c_str(), isZh ? L"关于 NeoMDIE" : L"About NeoMDIE", MB_OK | MB_ICONINFORMATION);
+        ModernDialogs::ShowAbout(m_hwnd);
         break;
     }
 
