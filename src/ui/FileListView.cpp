@@ -441,7 +441,9 @@ void FileListView::RebuildColumns() {
         ListView_EnsureVisible(m_hwnd, 0, FALSE);
         int hPos = GetScrollPos(m_hwnd, SB_HORZ);
         if (hPos > 0) {
-            ListView_Scroll(m_hwnd, -hPos, 0);
+            int colW = ListView_GetColumnWidth(m_hwnd, 0);
+            if (colW <= 0) colW = Theme::Get().Scale(260, m_hwnd);
+            ListView_Scroll(m_hwnd, -hPos * colW, 0);
         }
     }
 
@@ -996,6 +998,7 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
     ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     SendMessageW(m_hwnd, WM_SETREDRAW, FALSE, 0);
     ApplyFilter();
+    SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
     if (m_hasPendingRestore) {
         RestoreViewState(m_pendingRestoreState);
         m_hasPendingRestore = false;
@@ -1005,7 +1008,6 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
         m_pendingSelectPath.clear();
         SelectItemByPath(target);
     }
-    SendMessageW(m_hwnd, WM_SETREDRAW, TRUE, 0);
     RedrawWindow(m_hwnd, nullptr, nullptr, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
 
     if (!ShellUtils::IsVirtualShellPath(normalized)) {
@@ -1379,7 +1381,9 @@ void FileListView::SetViewMode(int mode) {
         ListView_EnsureVisible(m_hwnd, 0, FALSE);
         int hPos = GetScrollPos(m_hwnd, SB_HORZ);
         if (hPos > 0) {
-            ListView_Scroll(m_hwnd, -hPos, 0);
+            int colW = ListView_GetColumnWidth(m_hwnd, 0);
+            if (colW <= 0) colW = Theme::Get().Scale(260, m_hwnd);
+            ListView_Scroll(m_hwnd, -hPos * colW, 0);
         }
     }
 
@@ -1816,24 +1820,26 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
             }
         } else if (m_viewMode == 5) {
             // List view (horizontal multi-column scrolling):
-            // Restore exact column scroll position without cutting off the leftmost column
+            // Note: GetScrollPos(SB_HORZ) is in columns, while ListView_Scroll dx is in pixels!
+            int colW = ListView_GetColumnWidth(m_hwnd, 0);
+            if (colW <= 0) colW = Theme::Get().Scale(260, m_hwnd);
             if (state.scrollPosX >= 0) {
                 int curX = GetScrollPos(m_hwnd, SB_HORZ);
-                int dx = state.scrollPosX - curX;
-                if (dx != 0) {
-                    ListView_Scroll(m_hwnd, dx, 0);
+                int dCols = state.scrollPosX - curX;
+                if (dCols != 0) {
+                    ListView_Scroll(m_hwnd, dCols * colW, 0);
                 }
             } else {
                 int hPos = GetScrollPos(m_hwnd, SB_HORZ);
                 if (hPos > 0) {
-                    ListView_Scroll(m_hwnd, -hPos, 0);
+                    ListView_Scroll(m_hwnd, -hPos * colW, 0);
                 }
                 int rowToEnsure = (focusedRow >= 0) ? focusedRow : ((targetTopRow > 0) ? targetTopRow : 0);
                 ListView_EnsureVisible(m_hwnd, rowToEnsure, FALSE);
-                // Re-align leftmost visible column to x=0 if EnsureVisible left it partially clipped
+                // Re-align leftmost visible column cleanly if EnsureVisible left it partially clipped
                 RECT rcItem = { 0 };
                 if (ListView_GetItemRect(m_hwnd, rowToEnsure, &rcItem, LVIR_BOUNDS) && rcItem.left < 0) {
-                    ListView_Scroll(m_hwnd, -1, 0);
+                    ListView_Scroll(m_hwnd, -colW, 0);
                 }
             }
         } else {
@@ -2269,7 +2275,9 @@ void FileListView::SelectItemByPath(const std::wstring& path) {
                     // Align leftmost visible column cleanly so it's never half-clipped on the left
                     RECT rcAfter = { 0 };
                     if (ListView_GetItemRect(m_hwnd, targetRow, &rcAfter, LVIR_BOUNDS) && rcAfter.left < 0) {
-                        ListView_Scroll(m_hwnd, -1, 0);
+                        int colW = ListView_GetColumnWidth(m_hwnd, 0);
+                        if (colW <= 0) colW = Theme::Get().Scale(260, m_hwnd);
+                        ListView_Scroll(m_hwnd, -colW, 0);
                     }
                 }
             }
@@ -2719,7 +2727,7 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         int topIdx = ListView_GetTopIndex(hwnd);
         LRESULT res = DefSubclassProc(hwnd, msg, wParam, lParam);
         int newTopIdx = ListView_GetTopIndex(hwnd);
-        if (newTopIdx != topIdx && topIdx > 0) {
+        if (pThis && pThis->m_viewMode == 0 && newTopIdx != topIdx && topIdx > 0) {
             RECT rcItem = { 0 };
             int itemH = 0;
             if (ListView_GetItemRect(hwnd, 0, &rcItem, LVIR_BOUNDS)) {
