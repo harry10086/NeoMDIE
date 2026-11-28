@@ -5,6 +5,8 @@
 #include <set>
 #include <unordered_set>
 #include <mutex>
+#include <atomic>
+#include <condition_variable>
 #include <commoncontrols.h>
 #include <propkey.h>
 #include <propsys.h>
@@ -803,17 +805,17 @@ std::wstring GetItemTypeName(const std::wstring& path, DWORD attr) {
 std::wstring GetItemInfoTip(const std::wstring& path, bool isFolder, uint64_t size, FILETIME modifiedTime, const std::wstring& typeName, bool isSizeCalculated) {
     if (path.empty()) return L"";
 
-    bool isZh = I18n::Get().IsChinese();
+    auto& i18n = I18n::Get();
     std::wstring tip;
     if (isFolder) {
         std::wstring dateStr = Util::FormatFileTime(modifiedTime);
         if (!dateStr.empty()) {
-            tip += (isZh ? L"修改日期: " : L"Date modified: ") + dateStr;
+            tip += std::wstring(i18n.Pick(L"修改日期: ", L"修改日期: ", L"Date modified: ", L"更新日時: ")) + dateStr;
         }
 
         if (isSizeCalculated && size > 0) {
             if (!tip.empty()) tip += L"\n";
-            tip += (isZh ? L"文件夹大小: " : L"Folder size: ") + Util::FormatBytes(size);
+            tip += std::wstring(i18n.Pick(L"文件夹大小: ", L"資料夾大小: ", L"Folder size: ", L"フォルダー サイズ: ")) + Util::FormatBytes(size);
         }
 
         // Fast scan of immediate items inside folder (up to 500 items)
@@ -836,24 +838,27 @@ std::wstring GetItemInfoTip(const std::wstring& path, bool isFolder, uint64_t si
 
             if (!tip.empty()) tip += L"\n";
             if (fileCount == 0 && dirCount == 0) {
-                tip += (isZh ? L"文件夹为空" : L"Folder is empty");
+                tip += i18n.Pick(L"文件夹为空", L"資料夾是空的", L"Folder is empty", L"空のフォルダー");
             } else {
-                if (isZh) {
-                    tip += L"包含: " + std::to_wstring(fileCount) + L" 个文件，" + std::to_wstring(dirCount) + L" 个文件夹";
-                } else {
-                    tip += L"Contains: " + std::to_wstring(fileCount) + L" files, " + std::to_wstring(dirCount) + L" folders";
-                }
+                wchar_t cntBuf[128];
+                StringCchPrintfW(cntBuf, 128,
+                    i18n.Pick(L"包含: %d 个文件，%d 个文件夹",
+                              L"包含: %d 個檔案，%d 個資料夾",
+                              L"Contains: %d files, %d folders",
+                              L"内容: %d 個のファイル、%d 個のフォルダー"),
+                    fileCount, dirCount);
+                tip += cntBuf;
             }
         }
     } else {
-        std::wstring type = typeName.empty() ? (isZh ? L"文件" : L"File") : typeName;
-        tip += (isZh ? L"类型: " : L"Type: ") + type;
+        std::wstring type = typeName.empty() ? i18n.Pick(L"文件", L"檔案", L"File", L"ファイル") : typeName;
+        tip += std::wstring(i18n.Pick(L"类型: ", L"類型: ", L"Type: ", L"種類: ")) + type;
         tip += L"\n";
-        tip += (isZh ? L"大小: " : L"Size: ") + Util::FormatBytes(size);
+        tip += std::wstring(i18n.Pick(L"大小: ", L"大小: ", L"Size: ", L"サイズ: ")) + Util::FormatBytes(size);
         std::wstring dateStr = Util::FormatFileTime(modifiedTime);
         if (!dateStr.empty()) {
             tip += L"\n";
-            tip += (isZh ? L"修改日期: " : L"Date modified: ") + dateStr;
+            tip += std::wstring(i18n.Pick(L"修改日期: ", L"修改日期: ", L"Date modified: ", L"更新日時: ")) + dateStr;
         }
     }
     return tip;
@@ -1672,27 +1677,27 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
     if (isNetwork) {
         HMENU hMenu = CreatePopupMenu();
         bool isDir = PathIsDirectoryW(firstPath.c_str()) != FALSE;
-        bool isZh = I18n::Get().IsChinese();
+        auto& i18n = I18n::Get();
 
         if (isDir) {
-            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, isZh ? L"在新标签页中打开(&T)" : L"Open in New Tab(&T)");
-            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_BG_TAB, isZh ? L"在后台新标签页中打开(&B)" : L"Open in Background Tab(&B)");
-            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_SPLIT, isZh ? L"在新栏中打开(&S)" : L"Open in New Pane(&S)");
+            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, i18n.Pick(L"在新标签页中打开(&T)", L"在新分頁中開啟(&T)", L"Open in New Tab(&T)", L"新しいタブで開く(&T)"));
+            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_BG_TAB, i18n.Pick(L"在后台新标签页中打开(&B)", L"在背景新分頁中開啟(&B)", L"Open in Background Tab(&B)", L"バックグラウンド タブで開く(&B)"));
+            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_SPLIT, i18n.Pick(L"在新栏中打开(&S)", L"在新窗格中開啟(&S)", L"Open in New Pane(&S)", L"新しいペインで開く(&S)"));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_PIN_QUICKACCESS, isZh ? L"固定到快速访问(&P)" : L"Pin to Quick Access(&P)");
+            AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_PIN_QUICKACCESS, i18n.Pick(L"固定到快速访问(&P)", L"釘選至快速存取(&P)", L"Pin to Quick Access(&P)", L"クイック アクセスにピン留め(&P)"));
         }
-        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_EXPLORER, isZh ? L"在资源管理器中打开(&E)" : L"Open in File Explorer(&E)");
-        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, isZh ? L"复制完整路径(&A)" : L"Copy Full Path(&A)");
-        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, isZh ? L"添加到链接栏(&L)" : L"Add to Links Bar(&L)");
-        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_TERMINAL, isZh ? L"打开命令CMD(&C)" : L"Open CMD(&C)");
+        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_EXPLORER, i18n.Pick(L"在资源管理器中打开(&E)", L"在檔案總管中開啟(&E)", L"Open in File Explorer(&E)", L"エクスプローラーで開く(&E)"));
+        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, i18n.Pick(L"复制完整路径(&A)", L"複製完整路徑(&A)", L"Copy Full Path(&A)", L"フルパスをコピー(&A)"));
+        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, i18n.Pick(L"添加到链接栏(&L)", L"加入連結列(&L)", L"Add to Links Bar(&L)", L"リンク バーに追加(&L)"));
+        AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_TERMINAL, i18n.Pick(L"打开命令CMD(&C)", L"開啟命令提示字元 CMD(&C)", L"Open CMD(&C)", L"コマンド プロンプトを開く(&C)"));
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(hMenu, MF_STRING, 50001, isZh ? L"剪切(&T)\tCtrl+X" : L"Cut(&T)\tCtrl+X");
-        AppendMenuW(hMenu, MF_STRING, 50002, isZh ? L"复制(&C)\tCtrl+C" : L"Copy(&C)\tCtrl+C");
-        AppendMenuW(hMenu, MF_STRING, 50003, isZh ? L"删除(&D)\tDel" : L"Delete(&D)\tDel");
-        AppendMenuW(hMenu, MF_STRING, 50004, isZh ? L"重命名(&M)\tF2" : L"Rename(&M)\tF2");
+        AppendMenuW(hMenu, MF_STRING, 50001, i18n.Pick(L"剪切(&T)\tCtrl+X", L"剪下(&T)\tCtrl+X", L"Cut(&T)\tCtrl+X", L"切り取り(&T)\tCtrl+X"));
+        AppendMenuW(hMenu, MF_STRING, 50002, i18n.Pick(L"复制(&C)\tCtrl+C", L"複製(&C)\tCtrl+C", L"Copy(&C)\tCtrl+C", L"コピー(&C)\tCtrl+C"));
+        AppendMenuW(hMenu, MF_STRING, 50003, i18n.Pick(L"删除(&D)\tDel", L"刪除(&D)\tDel", L"Delete(&D)\tDel", L"削除(&D)\tDel"));
+        AppendMenuW(hMenu, MF_STRING, 50004, i18n.Pick(L"重命名(&M)\tF2", L"重新命名(&M)\tF2", L"Rename(&M)\tF2", L"名前の変更(&M)\tF2"));
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(hMenu, MF_STRING, 50005, isZh ? L"显示系统完整右键菜单(&S)..." : L"Show System Context Menu(&S)...");
-        AppendMenuW(hMenu, MF_STRING, 50006, isZh ? L"属性(&P)" : L"Properties(&P)");
+        AppendMenuW(hMenu, MF_STRING, 50005, i18n.Pick(L"显示系统完整右键菜单(&S)...", L"顯示系統完整右鍵功能表(&S)...", L"Show System Context Menu(&S)...", L"システム コンテキスト メニューを表示(&S)..."));
+        AppendMenuW(hMenu, MF_STRING, 50006, i18n.Pick(L"属性(&P)", L"內容(&P)", L"Properties(&P)", L"プロパティ(&P)"));
 
         if (GetCapture()) ReleaseCapture();
         int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, ptScreen.x, ptScreen.y, 0, hwnd, nullptr);
@@ -1771,20 +1776,20 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
 
                 HMENU hMenu = CreatePopupMenu();
                 bool isDir = PathIsDirectoryW(firstPath.c_str()) != FALSE;
-                bool isZh = I18n::Get().IsChinese();
+                auto& i18n = I18n::Get();
 
                 // 1. Elevate NeoMDIE Custom Commands TO THE VERY TOP
                 if (isDir) {
-                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, isZh ? L"在新标签页中打开(&T)" : L"Open in New Tab(&T)");
-                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_BG_TAB, isZh ? L"在后台新标签页中打开(&B)" : L"Open in Background Tab(&B)");
-                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_SPLIT, isZh ? L"在新栏中打开(&S)" : L"Open in New Pane(&S)");
+                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, i18n.Pick(L"在新标签页中打开(&T)", L"在新分頁中開啟(&T)", L"Open in New Tab(&T)", L"新しいタブで開く(&T)"));
+                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_BG_TAB, i18n.Pick(L"在后台新标签页中打开(&B)", L"在背景新分頁中開啟(&B)", L"Open in Background Tab(&B)", L"バックグラウンド タブで開く(&B)"));
+                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_SPLIT, i18n.Pick(L"在新栏中打开(&S)", L"在新窗格中開啟(&S)", L"Open in New Pane(&S)", L"新しいペインで開く(&S)"));
                     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_PIN_QUICKACCESS, isZh ? L"固定到快速访问(&P)" : L"Pin to Quick Access(&P)");
+                    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_PIN_QUICKACCESS, i18n.Pick(L"固定到快速访问(&P)", L"釘選至快速存取(&P)", L"Pin to Quick Access(&P)", L"クイック アクセスにピン留め(&P)"));
                 }
-                AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_EXPLORER, isZh ? L"在资源管理器中打开(&E)" : L"Open in File Explorer(&E)");
-                AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, isZh ? L"复制完整路径(&A)" : L"Copy Full Path(&A)");
-                AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, isZh ? L"添加到链接栏(&L)" : L"Add to Links Bar(&L)");
-                AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_TERMINAL, isZh ? L"打开命令CMD(&C)" : L"Open CMD(&C)");
+                AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_EXPLORER, i18n.Pick(L"在资源管理器中打开(&E)", L"在檔案總管中開啟(&E)", L"Open in File Explorer(&E)", L"エクスプローラーで開く(&E)"));
+                AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, i18n.Pick(L"复制完整路径(&A)", L"複製完整路徑(&A)", L"Copy Full Path(&A)", L"フルパスをコピー(&A)"));
+                AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, i18n.Pick(L"添加到链接栏(&L)", L"加入連結列(&L)", L"Add to Links Bar(&L)", L"リンク バーに追加(&L)"));
+                AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_TERMINAL, i18n.Pick(L"打开命令CMD(&C)", L"開啟命令提示字元 CMD(&C)", L"Open CMD(&C)", L"コマンド プロンプトを開く(&C)"));
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
                 int topItemsCount = GetMenuItemCount(hMenu);
@@ -1863,7 +1868,7 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
     // High reliability fallback menu if shell COM failed
     if (!shown) {
         HMENU hMenu = CreatePopupMenu();
-        AppendMenuW(hMenu, MF_STRING, 1, I18n::Get().IsChinese() ? L"打开(&O)" : L"Open(&O)");
+        AppendMenuW(hMenu, MF_STRING, 1, I18n::Get().Pick(L"打开(&O)", L"開啟(&O)", L"Open(&O)", L"開く(&O)"));
         AppendMenuW(hMenu, MF_STRING, 2, I18n::Get().T(StringId::MenuTerminal));
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(hMenu, MF_STRING, 3, I18n::Get().T(StringId::MenuCut));
@@ -1896,28 +1901,28 @@ bool ShowContextMenu(HWND hwnd, const std::vector<std::wstring>& paths, POINT pt
 bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT ptScreen,
                                int currentViewMode, int currentSortCol, bool sortAsc, bool foldersFirst,
                                std::function<void(int neoCmd, const std::wstring& currentDir)> onCustomCommand) {
-    bool isZh = I18n::Get().IsChinese();
+    auto& i18n = I18n::Get();
     HMENU hMenu = CreatePopupMenu();
 
     // 0. Top NeoMDIE shortcuts
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, isZh ? L"新建标签页(&T)\tCtrl+T" : L"New Tab(&T)\tCtrl+T");
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_EXPLORER, isZh ? L"在资源管理器中打开(&E)" : L"Open in File Explorer(&E)");
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, isZh ? L"复制当前路径(&A)" : L"Copy Current Path(&A)");
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_PIN_QUICKACCESS, isZh ? L"固定当前文件夹到快速访问(&P)" : L"Pin Current Folder to Quick Access(&P)");
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, isZh ? L"添加到链接栏(&L)" : L"Add to Links Bar(&L)");
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_CMD, isZh ? L"打开命令CMD(&C)" : L"Open CMD(&C)");
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_NEW_TAB, i18n.Pick(L"新建标签页(&T)\tCtrl+T", L"新增分頁(&T)\tCtrl+T", L"New Tab(&T)\tCtrl+T", L"新しいタブ(&T)\tCtrl+T"));
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_OPEN_EXPLORER, i18n.Pick(L"在资源管理器中打开(&E)", L"在檔案總管中開啟(&E)", L"Open in File Explorer(&E)", L"エクスプローラーで開く(&E)"));
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_COPY_PATH, i18n.Pick(L"复制当前路径(&A)", L"複製目前路徑(&A)", L"Copy Current Path(&A)", L"現在のパスをコピー(&A)"));
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_PIN_QUICKACCESS, i18n.Pick(L"固定当前文件夹到快速访问(&P)", L"釘選目前資料夾至快速存取(&P)", L"Pin Current Folder to Quick Access(&P)", L"現在のフォルダーをクイック アクセスにピン留め(&P)"));
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_ADD_LINKS, i18n.Pick(L"添加到链接栏(&L)", L"加入連結列(&L)", L"Add to Links Bar(&L)", L"リンク バーに追加(&L)"));
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_CMD, i18n.Pick(L"打开命令CMD(&C)", L"開啟命令提示字元 CMD(&C)", L"Open CMD(&C)", L"コマンド プロンプトを開く(&C)"));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
     // 1. View submenu
     HMENU hSubView = CreatePopupMenu();
-    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_XLARGE, isZh ? L"超大图标(&X)" : L"Extra large icons(&X)");
-    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_LARGE, isZh ? L"大图标(&R)" : L"Large icons(&R)");
-    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_MEDIUM, isZh ? L"中等图标(&M)" : L"Medium icons(&M)");
-    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_SMALL, isZh ? L"小图标(&N)" : L"Small icons(&N)");
-    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_LIST, isZh ? L"列表(&L)" : L"List(&L)");
-    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_DETAILS, isZh ? L"详细信息(&D)" : L"Details(&D)");
-    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_TILES, isZh ? L"平铺(&S)" : L"Tiles(&S)");
-    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_CONTENT, isZh ? L"内容(&C)" : L"Content(&C)");
+    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_XLARGE, i18n.Pick(L"超大图标(&X)", L"超大圖示(&X)", L"Extra large icons(&X)", L"特大アイコン(&X)"));
+    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_LARGE, i18n.Pick(L"大图标(&R)", L"大圖示(&R)", L"Large icons(&R)", L"大アイコン(&R)"));
+    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_MEDIUM, i18n.Pick(L"中等图标(&M)", L"中圖示(&M)", L"Medium icons(&M)", L"中アイコン(&M)"));
+    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_SMALL, i18n.Pick(L"小图标(&N)", L"小圖示(&N)", L"Small icons(&N)", L"小アイコン(&N)"));
+    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_LIST, i18n.Pick(L"列表(&L)", L"清單(&L)", L"List(&L)", L"一覧(&L)"));
+    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_DETAILS, i18n.Pick(L"详细信息(&D)", L"詳細資料(&D)", L"Details(&D)", L"詳細(&D)"));
+    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_TILES, i18n.Pick(L"平铺(&S)", L"並排(&S)", L"Tiles(&S)", L"並べて表示(&S)"));
+    AppendMenuW(hSubView, MF_STRING, CMD_BG_VIEW_CONTENT, i18n.Pick(L"内容(&C)", L"內容(&C)", L"Content(&C)", L"コンテンツ(&C)"));
 
     int checkViewCmd = CMD_BG_VIEW_DETAILS;
     switch (currentViewMode) {
@@ -1934,23 +1939,23 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
     CheckMenuRadioItem(hSubView, CMD_BG_VIEW_DETAILS, CMD_BG_VIEW_CONTENT, checkViewCmd, MF_BYCOMMAND);
     AppendMenuW(hSubView, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hSubView, MF_STRING | (Config::Get().showItemCheckBoxes ? MF_CHECKED : MF_UNCHECKED),
-                CMD_BG_VIEW_ITEM_CHECKBOXES, isZh ? L"项目复选框(&X)" : L"Item check boxes(&X)");
-    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSubView, isZh ? L"查看(&V)" : L"View(&V)");
+                CMD_BG_VIEW_ITEM_CHECKBOXES, i18n.Pick(L"项目复选框(&X)", L"項目核取方塊(&X)", L"Item check boxes(&X)", L"項目チェック ボックス(&X)"));
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSubView, i18n.Pick(L"查看(&V)", L"檢視(&V)", L"View(&V)", L"表示(&V)"));
 
     // 2. Sort by submenu
     HMENU hSubSort = CreatePopupMenu();
-    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_NAME, isZh ? L"名称" : L"Name");
-    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_DATE, isZh ? L"修改日期" : L"Date modified");
-    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_TYPE, isZh ? L"类型" : L"Type");
-    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_SIZE, isZh ? L"大小" : L"Size");
+    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_NAME, i18n.Pick(L"名称", L"名稱", L"Name", L"名前"));
+    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_DATE, i18n.Pick(L"修改日期", L"修改日期", L"Date modified", L"更新日時"));
+    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_TYPE, i18n.Pick(L"类型", L"類型", L"Type", L"種類"));
+    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_SIZE, i18n.Pick(L"大小", L"大小", L"Size", L"サイズ"));
     AppendMenuW(hSubSort, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_ASCENDING, isZh ? L"递增" : L"Ascending");
-    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_DESCENDING, isZh ? L"递减" : L"Descending");
+    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_ASCENDING, i18n.Pick(L"递增", L"遞增", L"Ascending", L"昇順"));
+    AppendMenuW(hSubSort, MF_STRING, CMD_BG_SORT_DESCENDING, i18n.Pick(L"递减", L"遞減", L"Descending", L"降順"));
     AppendMenuW(hSubSort, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hSubSort, MF_STRING | (foldersFirst ? MF_CHECKED : MF_UNCHECKED),
-                CMD_BG_SORT_FOLDERS_FIRST, isZh ? L"文件夹在前" : L"Folders first");
+                CMD_BG_SORT_FOLDERS_FIRST, i18n.Pick(L"文件夹在前", L"資料夾優先", L"Folders first", L"フォルダーを先に表示"));
     AppendMenuW(hSubSort, MF_STRING | (!foldersFirst ? MF_CHECKED : MF_UNCHECKED),
-                CMD_BG_SORT_FILES_FIRST, isZh ? L"文件在前" : L"Files first");
+                CMD_BG_SORT_FILES_FIRST, i18n.Pick(L"文件在前", L"檔案優先", L"Files first", L"ファイルを先に表示"));
 
     int checkSortCmd = CMD_BG_SORT_NAME + std::clamp(currentSortCol, 0, 3);
     CheckMenuRadioItem(hSubSort, CMD_BG_SORT_NAME, CMD_BG_SORT_SIZE, checkSortCmd, MF_BYCOMMAND);
@@ -1958,17 +1963,17 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
                        sortAsc ? CMD_BG_SORT_ASCENDING : CMD_BG_SORT_DESCENDING, MF_BYCOMMAND);
     CheckMenuRadioItem(hSubSort, CMD_BG_SORT_FOLDERS_FIRST, CMD_BG_SORT_FILES_FIRST,
                        foldersFirst ? CMD_BG_SORT_FOLDERS_FIRST : CMD_BG_SORT_FILES_FIRST, MF_BYCOMMAND);
-    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSubSort, isZh ? L"排序方式(&O)" : L"Sort by(&O)");
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSubSort, i18n.Pick(L"排序方式(&O)", L"排序方式(&O)", L"Sort by(&O)", L"並べ替え(&O)"));
 
     // 3. Refresh
-    AppendMenuW(hMenu, MF_STRING, CMD_BG_REFRESH, isZh ? L"刷新(&E)\tF5" : L"Refresh(&E)\tF5");
+    AppendMenuW(hMenu, MF_STRING, CMD_BG_REFRESH, i18n.Pick(L"刷新(&E)\tF5", L"重新整理(&E)\tF5", L"Refresh(&E)\tF5", L"最新の情報に更新(&E)\tF5"));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
     // 4. Paste / Paste Shortcut / Undo
     bool canPaste = CanPasteFromClipboard() && currentDir != L"This PC" && currentDir != L"此电脑";
-    AppendMenuW(hMenu, MF_STRING | (canPaste ? 0 : MF_GRAYED), CMD_BG_PASTE, isZh ? L"粘贴(&P)\tCtrl+V" : L"Paste(&P)\tCtrl+V");
-    AppendMenuW(hMenu, MF_STRING | (canPaste ? 0 : MF_GRAYED), CMD_BG_PASTE_SHORTCUT, isZh ? L"粘贴快捷方式(&S)" : L"Paste shortcut(&S)");
-    AppendMenuW(hMenu, MF_STRING | MF_GRAYED, CMD_BG_UNDO, isZh ? L"撤消(&U)\tCtrl+Z" : L"Undo(&U)\tCtrl+Z");
+    AppendMenuW(hMenu, MF_STRING | (canPaste ? 0 : MF_GRAYED), CMD_BG_PASTE, i18n.Pick(L"粘贴(&P)\tCtrl+V", L"貼上(&P)\tCtrl+V", L"Paste(&P)\tCtrl+V", L"貼り付け(&P)\tCtrl+V"));
+    AppendMenuW(hMenu, MF_STRING | (canPaste ? 0 : MF_GRAYED), CMD_BG_PASTE_SHORTCUT, i18n.Pick(L"粘贴快捷方式(&S)", L"貼上捷徑(&S)", L"Paste shortcut(&S)", L"ショートカットの貼り付け(&S)"));
+    AppendMenuW(hMenu, MF_STRING | MF_GRAYED, CMD_BG_UNDO, i18n.Pick(L"撤消(&U)\tCtrl+Z", L"復原(&U)\tCtrl+Z", L"Undo(&U)\tCtrl+Z", L"元に戻す(&U)\tCtrl+Z"));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
     // 5. Complete "新建 (New)" Submenu (Fully synchronized with Windows Explorer + NeoMDIE Markdown)
@@ -1987,13 +1992,13 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
         };
 
         // Standard Top items: Folder & Shortcut
-        addMenuItem(CMD_BG_NEW_FOLDER, isZh ? L"文件夹(&F)\tCtrl+Shift+N" : L"Folder(&F)\tCtrl+Shift+N", GetShellNewFolderBitmap());
-        addMenuItem(CMD_BG_NEW_SHORTCUT, isZh ? L"快捷方式(&S)" : L"Shortcut(&S)", GetShellNewShortcutBitmap());
+        addMenuItem(CMD_BG_NEW_FOLDER, i18n.Pick(L"文件夹(&F)\tCtrl+Shift+N", L"資料夾(&F)\tCtrl+Shift+N", L"Folder(&F)\tCtrl+Shift+N", L"フォルダー(&F)\tCtrl+Shift+N"), GetShellNewFolderBitmap());
+        addMenuItem(CMD_BG_NEW_SHORTCUT, i18n.Pick(L"快捷方式(&S)", L"捷徑(&S)", L"Shortcut(&S)", L"ショートカット(&S)"), GetShellNewShortcutBitmap());
         AppendMenuW(hSubNew, MF_SEPARATOR, 0, nullptr);
 
         // NeoMDIE special item (Markdown) & Standard Text Document
-        addMenuItem(CMD_BG_NEW_MD, isZh ? L"Markdown 文档(&M)" : L"Markdown Document(&M)", GetShellNewMdBitmap());
-        addMenuItem(CMD_BG_NEW_FILE, isZh ? L"TXT文档(&T)" : L"TXT Document(&T)", GetShellNewTextBitmap());
+        addMenuItem(CMD_BG_NEW_MD, i18n.Pick(L"Markdown 文档(&M)", L"Markdown 文件(&M)", L"Markdown Document(&M)", L"Markdown ドキュメント(&M)"), GetShellNewMdBitmap());
+        addMenuItem(CMD_BG_NEW_FILE, i18n.Pick(L"TXT文档(&T)", L"文字文件(&T)", L"TXT Document(&T)", L"テキスト ドキュメント(&T)"), GetShellNewTextBitmap());
 
         // Full system ShellNew items from registry scan (Office docx/xlsx/pptx/pdf, SolidWorks, Zip, etc.)
         if (!shellNewItems.empty()) {
@@ -2004,7 +2009,7 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
             }
         }
 
-        AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSubNew, isZh ? L"新建(&W)" : L"New(&W)");
+        AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSubNew, i18n.Pick(L"新建(&W)", L"新增(&W)", L"New(&W)", L"新規作成(&W)"));
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     }
 
@@ -2069,7 +2074,7 @@ bool ShowBackgroundContextMenu(HWND hwnd, const std::wstring& currentDir, POINT 
 
     // Append NeoMDIE specific commands
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_SETTINGS, isZh ? L"NeoMDIE设置(&S)..." : L"NeoMDIE Settings(&S)...");
+    AppendMenuW(hMenu, MF_STRING, CMD_NEOMDIE_SETTINGS, i18n.Pick(L"NeoMDIE设置(&S)...", L"NeoMDIE 設定(&S)...", L"NeoMDIE Settings(&S)...", L"NeoMDIE 設定(&S)..."));
 
     // Cleanup any consecutive or leading/trailing separators
     bool lastWasSep = true;
@@ -2332,12 +2337,90 @@ void BlendRectWithColor(HDC hdc, const RECT& rc, COLORREF clr, BYTE alpha) {
     DeleteDC(memDC);
 }
 
+static std::atomic<int> s_activeFileOps{0};
+static std::atomic<bool> s_cancelFileOps{false};
+static std::mutex s_fileOpMtx;
+static std::condition_variable s_fileOpCv;
+
+bool HasActiveFileOperations() {
+    return s_activeFileOps.load() > 0;
+}
+
+void CancelAllFileOperations() {
+    s_cancelFileOps.store(true);
+}
+
+bool WaitForActiveFileOperations(DWORD timeoutMs) {
+    std::unique_lock<std::mutex> lk(s_fileOpMtx);
+    return s_fileOpCv.wait_for(lk, std::chrono::milliseconds(timeoutMs), []() {
+        return s_activeFileOps.load() <= 0;
+    });
+}
+
+class CFileOpProgressSink : public IFileOperationProgressSink {
+    LONG m_cRef = 1;
+public:
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IFileOperationProgressSink) {
+            *ppv = static_cast<IFileOperationProgressSink*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_cRef); }
+    STDMETHODIMP_(ULONG) Release() override {
+        LONG c = InterlockedDecrement(&m_cRef);
+        if (c == 0) delete this;
+        return c;
+    }
+    STDMETHODIMP StartOperations() override { return s_cancelFileOps.load() ? E_ABORT : S_OK; }
+    STDMETHODIMP FinishOperations(HRESULT) override { return S_OK; }
+    STDMETHODIMP PreRenameItem(DWORD, IShellItem*, LPCWSTR) override { return s_cancelFileOps.load() ? E_ABORT : S_OK; }
+    STDMETHODIMP PostRenameItem(DWORD, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override { return S_OK; }
+    STDMETHODIMP PreMoveItem(DWORD, IShellItem*, IShellItem*, LPCWSTR) override { return s_cancelFileOps.load() ? E_ABORT : S_OK; }
+    STDMETHODIMP PostMoveItem(DWORD, IShellItem*, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override { return S_OK; }
+    STDMETHODIMP PreCopyItem(DWORD, IShellItem*, IShellItem*, LPCWSTR) override { return s_cancelFileOps.load() ? E_ABORT : S_OK; }
+    STDMETHODIMP PostCopyItem(DWORD, IShellItem*, IShellItem*, LPCWSTR, HRESULT, IShellItem*) override { return S_OK; }
+    STDMETHODIMP PreDeleteItem(DWORD, IShellItem*) override { return S_OK; }
+    STDMETHODIMP PostDeleteItem(DWORD, IShellItem*, HRESULT, IShellItem*) override { return S_OK; }
+    STDMETHODIMP PreNewItem(DWORD, IShellItem*, LPCWSTR) override { return S_OK; }
+    STDMETHODIMP PostNewItem(DWORD, IShellItem*, LPCWSTR, LPCWSTR, DWORD, HRESULT, IShellItem*) override { return S_OK; }
+    STDMETHODIMP UpdateProgress(UINT, UINT) override { return s_cancelFileOps.load() ? E_ABORT : S_OK; }
+    STDMETHODIMP ResetTimer() override { return S_OK; }
+    STDMETHODIMP PauseTimer() override { return S_OK; }
+    STDMETHODIMP ResumeTimer() override { return S_OK; }
+};
+
+struct ActiveFileOpGuard {
+    ActiveFileOpGuard() = default;
+    ~ActiveFileOpGuard() {
+        {
+            std::lock_guard<std::mutex> lk(s_fileOpMtx);
+            s_activeFileOps.fetch_sub(1);
+        }
+        s_fileOpCv.notify_all();
+    }
+};
+
+static void BeginActiveFileOp() {
+    std::lock_guard<std::mutex> lk(s_fileOpMtx);
+    if (s_activeFileOps.fetch_add(1) == 0) {
+        s_cancelFileOps.store(false);
+    }
+}
+
 bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vector<std::wstring>& srcFiles, bool isMove) {
     if (destDir.empty() || srcFiles.empty()) return false;
     if (!IsValidDirectory(destDir)) return false;
 
+    BeginActiveFileOp();
+
     // Launch dedicated background STA thread to execute operations asynchronously so UI is never frozen
     std::thread([hwndOwner, destDir, srcFiles, isMove]() {
+        ActiveFileOpGuard opGuard;
         HRESULT hrCom = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
         std::wstring normDest = Util::NormalizePath(destDir);
@@ -2400,8 +2483,13 @@ bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vec
                             psiSrc->Release();
                         }
                     }
+                    CFileOpProgressSink* pSink = new CFileOpProgressSink();
+                    DWORD dwCookie = 0;
+                    bool advised = SUCCEEDED(pfoSame->Advise(pSink, &dwCookie));
                     HRESULT hr = pfoSame->PerformOperations();
-                    if (SUCCEEDED(hr)) {
+                    if (advised) pfoSame->Unadvise(dwCookie);
+                    pSink->Release();
+                    if (SUCCEEDED(hr) && !s_cancelFileOps.load()) {
                         anySuccess = true;
                     }
                     psiDest->Release();
@@ -2430,8 +2518,13 @@ bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vec
                             psiSrc->Release();
                         }
                     }
+                    CFileOpProgressSink* pSink = new CFileOpProgressSink();
+                    DWORD dwCookie = 0;
+                    bool advised = SUCCEEDED(pfoDiff->Advise(pSink, &dwCookie));
                     HRESULT hr = pfoDiff->PerformOperations();
-                    if (SUCCEEDED(hr)) {
+                    if (advised) pfoDiff->Unadvise(dwCookie);
+                    pSink->Release();
+                    if (SUCCEEDED(hr) && !s_cancelFileOps.load()) {
                         anySuccess = true;
                     }
                     psiDest->Release();
@@ -2525,7 +2618,9 @@ bool PasteFilesFromClipboard(HWND hwnd, const std::wstring& destDir) {
 
     // 2. Shell IDList / Virtual Shell objects (Android MTP devices, remote streams, etc.)
     // Launch dedicated background STA thread to execute operations asynchronously so UI is never frozen
+    BeginActiveFileOp();
     std::thread([hwnd, destDir]() {
+        ActiveFileOpGuard opGuard;
         HRESULT hrCom = OleInitialize(nullptr);
         IDataObject* pDataObj = nullptr;
         if (SUCCEEDED(OleGetClipboard(&pDataObj)) && pDataObj) {
@@ -2548,10 +2643,18 @@ bool PasteFilesFromClipboard(HWND hwnd, const std::wstring& destDir) {
                 IFileOperation* pfo = nullptr;
                 if (SUCCEEDED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&pfo)))) {
                     pfo->SetOperationFlags(FOF_ALLOWUNDO | FOFX_ADDUNDORECORD | FOF_NOCONFIRMMKDIR);
-                    pfo->SetOwnerWindow(hwnd);
+                    pfo->SetOwnerWindow(nullptr);
                     HRESULT hrAction = isMove ? pfo->MoveItems(pDataObj, psiDest) : pfo->CopyItems(pDataObj, psiDest);
-                    if (SUCCEEDED(hrAction) && SUCCEEDED(pfo->PerformOperations())) {
-                        operationDone = true;
+                    if (SUCCEEDED(hrAction)) {
+                        CFileOpProgressSink* pSink = new CFileOpProgressSink();
+                        DWORD dwCookie = 0;
+                        bool advised = SUCCEEDED(pfo->Advise(pSink, &dwCookie));
+                        HRESULT hrPerf = pfo->PerformOperations();
+                        if (advised) pfo->Unadvise(dwCookie);
+                        pSink->Release();
+                        if (SUCCEEDED(hrPerf) && !s_cancelFileOps.load()) {
+                            operationDone = true;
+                        }
                     }
                     pfo->Release();
                 }
@@ -2617,11 +2720,12 @@ bool PasteShortcut(HWND hwnd, const std::wstring& destDir) {
         wcscpy_s(baseName, PathFindFileNameW(src.c_str()));
         PathRemoveExtensionW(baseName);
 
-        std::wstring lnkName = std::wstring(baseName) + (I18n::Get().IsChinese() ? L" - 快捷方式.lnk" : L" - Shortcut.lnk");
+        auto& i18n = I18n::Get();
+        std::wstring lnkName = std::wstring(baseName) + i18n.Pick(L" - 快捷方式.lnk", L" - 捷徑.lnk", L" - Shortcut.lnk", L" - ショートカット.lnk");
         std::wstring lnkPath = destDir + L"\\" + lnkName;
         int suffix = 2;
         while (PathFileExistsW(lnkPath.c_str())) {
-            lnkPath = destDir + L"\\" + baseName + (I18n::Get().IsChinese() ? L" - 快捷方式 (" : L" - Shortcut (") + std::to_wstring(suffix++) + L").lnk";
+            lnkPath = destDir + L"\\" + baseName + i18n.Pick(L" - 快捷方式 (", L" - 捷徑 (", L" - Shortcut (", L" - ショートカット (") + std::to_wstring(suffix++) + L").lnk";
         }
 
         IShellLinkW* psl = nullptr;
@@ -2646,7 +2750,9 @@ bool DeleteFiles(HWND hwnd, const std::vector<std::wstring>& paths, bool permane
     if (SUCCEEDED(hr) && pfo) {
         DWORD flags = permanent ? 0 : (FOF_ALLOWUNDO | FOFX_ADDUNDORECORD);
         pfo->SetOperationFlags(flags);
-        pfo->SetOwnerWindow(hwnd);
+        HWND owner = hwnd ? GetAncestor(hwnd, GA_ROOT) : nullptr;
+        if (!owner) owner = hwnd;
+        pfo->SetOwnerWindow(owner);
 
         for (const auto& p : paths) {
             IShellItem* psi = nullptr;
@@ -3603,7 +3709,7 @@ void CheckForUpdates(HWND hwndParent) {
         std::wstring wTagName = Util::Utf8ToWide(tagName);
         std::wstring wHtmlUrl = Util::Utf8ToWide(htmlUrl);
 
-        const std::wstring currentVer = L"v1.1.4";
+        const std::wstring currentVer = L"v1.1.5";
         if (!wTagName.empty() && wTagName != currentVer) {
             std::wstring msg = isZh
                 ? (L"发现 NeoMDIE 新版本: " + wTagName + L" (当前版本: " + currentVer + L")\n\n下载路径与发布页面:\n" + wHtmlUrl + L"\n\n是否立即前往 GitHub 下载更新？")

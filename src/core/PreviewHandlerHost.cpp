@@ -458,8 +458,11 @@ void PreviewHandlerHost::DrawFallback(HDC hdc, const RECT& rc) {
         RECT rcHint = rcTitle;
         rcHint.top += 34;
         rcHint.bottom += 34;
-        bool isZh = I18n::Get().IsChinese();
-        std::wstring hint = isZh ? L"双击或按回车可在默认应用中打开 PDF" : L"Double-click or press Enter to open PDF in default app";
+        std::wstring hint = I18n::Get().Pick(
+            L"双击或按回车可在默认应用中打开 PDF",
+            L"按兩下或按 Enter 可在預設應用程式中開啟 PDF",
+            L"Double-click or press Enter to open PDF in default app",
+            L"ダブルクリックまたは Enter で既定のアプリで PDF を開きます");
         DrawTextW(hdc, hint.c_str(), -1, &rcHint, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         SelectObject(hdc, oldFont);

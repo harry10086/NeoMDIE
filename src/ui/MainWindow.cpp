@@ -402,7 +402,7 @@ void MainWindow::AddToHistory(const std::wstring& path) {
 void MainWindow::BuildMenu() {
     HMENU hOldMenu = GetMenu(m_hwnd);
     HMENU hMenuBar = CreateMenu();
-    bool isZh = I18n::Get().IsChinese();
+    auto& i18n = I18n::Get();
     FileListView* activeView = m_multiPane.GetActivePane();
 
     // =========================================================================
@@ -412,20 +412,20 @@ void MainWindow::BuildMenu() {
 
     // 打开新窗口 (N)
     HMENU hNewWinSubmenu = CreatePopupMenu();
-    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_SPECIFY, isZh ? L"指定文件夹(&T)..." : L"Specify Folder(&T)...");
-    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_DESKTOP, isZh ? L"桌面(&D)" : L"Desktop(&D)");
-    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_CURRENT, isZh ? L"当前文件夹(&F)" : L"Current Folder(&F)");
-    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_CLIPBOARD, isZh ? L"剪贴板(&C)" : L"Clipboard(&C)");
-    AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hNewWinSubmenu, isZh ? L"打开新窗口(&N)" : L"New Window(&N)");
+    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_SPECIFY, i18n.Pick(L"指定文件夹(&T)...", L"指定資料夾(&T)...", L"Specify Folder(&T)...", L"フォルダーを指定(&T)..."));
+    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_DESKTOP, i18n.Pick(L"桌面(&D)", L"桌面(&D)", L"Desktop(&D)", L"デスクトップ(&D)"));
+    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_CURRENT, i18n.Pick(L"当前文件夹(&F)", L"目前資料夾(&F)", L"Current Folder(&F)", L"現在のフォルダー(&F)"));
+    AppendMenuW(hNewWinSubmenu, MF_STRING, ID_FILE_NEW_WINDOW_CLIPBOARD, i18n.Pick(L"剪贴板(&C)", L"剪貼簿(&C)", L"Clipboard(&C)", L"クリップボード(&C)"));
+    AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hNewWinSubmenu, i18n.Pick(L"打开新窗口(&N)", L"開啟新視窗(&N)", L"New Window(&N)", L"新しいウィンドウ(&N)"));
 
     // 最近关闭的文件夹 (M)
     HMENU hRecentClosedSubmenu = CreatePopupMenu();
     AppendMenuW(hRecentClosedSubmenu, MF_STRING, ID_FILE_REOPEN_CLOSED_TAB,
-                isZh ? L"打开最后关闭的文件夹(&L)\tCtrl+Shift+T" : L"Reopen Last Closed Tab(&L)\tCtrl+Shift+T");
+                i18n.Pick(L"打开最后关闭的文件夹(&L)\tCtrl+Shift+T", L"開啟最後關閉的資料夾(&L)\tCtrl+Shift+T", L"Reopen Last Closed Tab(&L)\tCtrl+Shift+T", L"最後に閉じたタブを開く(&L)\tCtrl+Shift+T"));
     AppendMenuW(hRecentClosedSubmenu, MF_SEPARATOR, 0, nullptr);
     const auto& closedHist = m_tabBar.GetClosedHistory();
     if (closedHist.empty()) {
-        AppendMenuW(hRecentClosedSubmenu, MF_STRING | MF_GRAYED, 0, isZh ? L"(无记录)" : L"(Empty)");
+        AppendMenuW(hRecentClosedSubmenu, MF_STRING | MF_GRAYED, 0, i18n.Pick(L"(无记录)", L"(無紀錄)", L"(Empty)", L"(履歴なし)"));
     } else {
         int count = std::min((int)closedHist.size(), 10);
         for (int i = 0; i < count; ++i) {
@@ -435,49 +435,49 @@ void MainWindow::BuildMenu() {
             AppendMenuW(hRecentClosedSubmenu, MF_STRING, cmd, label.c_str());
         }
     }
-    AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hRecentClosedSubmenu, isZh ? L"最近关闭的文件夹(&M)" : L"Recently Closed Folders(&M)");
+    AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hRecentClosedSubmenu, i18n.Pick(L"最近关闭的文件夹(&M)", L"最近關閉的資料夾(&M)", L"Recently Closed Folders(&M)", L"最近閉じたフォルダー(&M)"));
 
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_NEW_TAB, isZh ? L"新建标签页(&T)\tCtrl+T" : L"New Tab(&T)\tCtrl+T");
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_CLOSE_TAB, isZh ? L"关闭当前标签(&C)\tCtrl+W" : L"Close Tab(&C)\tCtrl+W");
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_NEW_TAB, i18n.Pick(L"新建标签页(&T)\tCtrl+T", L"新增分頁(&T)\tCtrl+T", L"New Tab(&T)\tCtrl+T", L"新しいタブ(&T)\tCtrl+T"));
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_CLOSE_TAB, i18n.Pick(L"关闭当前标签(&C)\tCtrl+W", L"關閉目前分頁(&C)\tCtrl+W", L"Close Tab(&C)\tCtrl+W", L"タブを閉じる(&C)\tCtrl+W"));
     AppendMenuW(hFileMenu, MF_SEPARATOR, 0, nullptr);
 
-    AppendMenuW(hFileMenu, MF_STRING, ID_EDIT_DELETE, isZh ? L"删除(&D)\tDelete" : L"Delete(&D)\tDelete");
-    AppendMenuW(hFileMenu, MF_STRING, ID_EDIT_RENAME, isZh ? L"重命名(&R)\tF2" : L"Rename(&R)\tF2");
+    AppendMenuW(hFileMenu, MF_STRING, ID_EDIT_DELETE, i18n.Pick(L"删除(&D)\tDelete", L"刪除(&D)\tDelete", L"Delete(&D)\tDelete", L"削除(&D)\tDelete"));
+    AppendMenuW(hFileMenu, MF_STRING, ID_EDIT_RENAME, i18n.Pick(L"重命名(&R)\tF2", L"重新命名(&R)\tF2", L"Rename(&R)\tF2", L"名前の変更(&R)\tF2"));
 
     HMENU hNewSubmenu = CreatePopupMenu();
-    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FOLDER, isZh ? L"文件夹(&F)\tCtrl+Shift+N" : L"Folder(&F)\tCtrl+Shift+N");
-    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FILE, isZh ? L"TXT文档(&T)" : L"TXT Document(&T)");
-    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_MD, isZh ? L"Markdown 文档(&M)" : L"Markdown Document(&M)");
-    AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hNewSubmenu, isZh ? L"新建(&W)" : L"New(&W)");
+    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FOLDER, i18n.Pick(L"文件夹(&F)\tCtrl+Shift+N", L"資料夾(&F)\tCtrl+Shift+N", L"Folder(&F)\tCtrl+Shift+N", L"フォルダー(&F)\tCtrl+Shift+N"));
+    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_FILE, i18n.Pick(L"TXT文档(&T)", L"文字文件(&T)", L"TXT Document(&T)", L"テキスト ドキュメント(&T)"));
+    AppendMenuW(hNewSubmenu, MF_STRING, ID_FILE_NEW_MD, i18n.Pick(L"Markdown 文档(&M)", L"Markdown 文件(&M)", L"Markdown Document(&M)", L"Markdown ドキュメント(&M)"));
+    AppendMenuW(hFileMenu, MF_POPUP, (UINT_PTR)hNewSubmenu, i18n.Pick(L"新建(&W)", L"新增(&W)", L"New(&W)", L"新規作成(&W)"));
 
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_CREATE_SHORTCUT, isZh ? L"创建快捷方式(&S)" : L"Create Shortcut(&S)");
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_OPEN_EXPLORER, isZh ? L"用系统资源管理器打开(&O)" : L"Open in Explorer(&O)");
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_PROPERTIES, isZh ? L"属性(&P)\tAlt+Enter" : L"Properties(&P)\tAlt+Enter");
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_CREATE_SHORTCUT, i18n.Pick(L"创建快捷方式(&S)", L"建立捷徑(&S)", L"Create Shortcut(&S)", L"ショートカットの作成(&S)"));
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_OPEN_EXPLORER, i18n.Pick(L"用系统资源管理器打开(&O)", L"用系統檔案總管開啟(&O)", L"Open in Explorer(&O)", L"エクスプローラーで開く(&O)"));
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_PROPERTIES, i18n.Pick(L"属性(&P)\tAlt+Enter", L"內容(&P)\tAlt+Enter", L"Properties(&P)\tAlt+Enter", L"プロパティ(&P)\tAlt+Enter"));
     AppendMenuW(hFileMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_EXIT, isZh ? L"退出(&X)\tAlt+F4" : L"Exit(&X)\tAlt+F4");
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hFileMenu, isZh ? L"文件(&F)" : L"File(&F)");
+    AppendMenuW(hFileMenu, MF_STRING, ID_FILE_EXIT, i18n.Pick(L"退出(&X)\tAlt+F4", L"結束(&X)\tAlt+F4", L"Exit(&X)\tAlt+F4", L"終了(&X)\tAlt+F4"));
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hFileMenu, i18n.Pick(L"文件(&F)", L"檔案(&F)", L"File(&F)", L"ファイル(&F)"));
 
     // =========================================================================
     // 2. 编辑 (E) Edit Menu
     // =========================================================================
     HMENU hEditMenu = CreatePopupMenu();
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_UNDO, isZh ? L"撤销(&U)\tCtrl+Z" : L"Undo(&U)\tCtrl+Z");
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_UNDO, i18n.Pick(L"撤销(&U)\tCtrl+Z", L"復原(&U)\tCtrl+Z", L"Undo(&U)\tCtrl+Z", L"元に戻す(&U)\tCtrl+Z"));
     AppendMenuW(hEditMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_CUT, isZh ? L"剪切(&T)\tCtrl+X" : L"Cut(&T)\tCtrl+X");
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_COPY, isZh ? L"复制(&C)\tCtrl+C" : L"Copy(&C)\tCtrl+C");
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_PASTE, isZh ? L"粘贴(&P)\tCtrl+V" : L"Paste(&P)\tCtrl+V");
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_PASTE_SHORTCUT, isZh ? L"粘贴快捷方式(&S)" : L"Paste Shortcut(&S)");
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_CUT, i18n.Pick(L"剪切(&T)\tCtrl+X", L"剪下(&T)\tCtrl+X", L"Cut(&T)\tCtrl+X", L"切り取り(&T)\tCtrl+X"));
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_COPY, i18n.Pick(L"复制(&C)\tCtrl+C", L"複製(&C)\tCtrl+C", L"Copy(&C)\tCtrl+C", L"コピー(&C)\tCtrl+C"));
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_PASTE, i18n.Pick(L"粘贴(&P)\tCtrl+V", L"貼上(&P)\tCtrl+V", L"Paste(&P)\tCtrl+V", L"貼り付け(&P)\tCtrl+V"));
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_PASTE_SHORTCUT, i18n.Pick(L"粘贴快捷方式(&S)", L"貼上捷徑(&S)", L"Paste Shortcut(&S)", L"ショートカットの貼り付け(&S)"));
     AppendMenuW(hEditMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_SELECT_ALL, isZh ? L"全选(&A)\tCtrl+A" : L"Select All(&A)\tCtrl+A");
-    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_INVERT_SELECTION, isZh ? L"反向选择(&I)\tCtrl+I" : L"Invert Selection(&I)\tCtrl+I");
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_SELECT_ALL, i18n.Pick(L"全选(&A)\tCtrl+A", L"全選(&A)\tCtrl+A", L"Select All(&A)\tCtrl+A", L"すべて選択(&A)\tCtrl+A"));
+    AppendMenuW(hEditMenu, MF_STRING, ID_EDIT_INVERT_SELECTION, i18n.Pick(L"反向选择(&I)\tCtrl+I", L"反向選取(&I)\tCtrl+I", L"Invert Selection(&I)\tCtrl+I", L"選択の切り替え(&I)\tCtrl+I"));
     AppendMenuW(hEditMenu, MF_SEPARATOR, 0, nullptr);
 
     HMENU hCopyPathSubmenu = CreatePopupMenu();
-    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_NAME, isZh ? L"复制选中文件名(&N)\tCtrl+Shift+C" : L"Copy Selected File Name(&N)\tCtrl+Shift+C");
-    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_PATH, isZh ? L"复制完整路径(&P)\tCtrl+Shift+Alt+C" : L"Copy Full Path(&P)\tCtrl+Shift+Alt+C");
-    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_DIR, isZh ? L"复制所在目录(&D)\tCtrl+Alt+C" : L"Copy Directory Path(&D)\tCtrl+Alt+C");
-    AppendMenuW(hEditMenu, MF_POPUP, (UINT_PTR)hCopyPathSubmenu, isZh ? L"复制路径(&Y)" : L"Copy Path(&Y)");
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hEditMenu, isZh ? L"编辑(&E)" : L"Edit(&E)");
+    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_NAME, i18n.Pick(L"复制选中文件名(&N)\tCtrl+Shift+C", L"複製選取檔案名稱(&N)\tCtrl+Shift+C", L"Copy Selected File Name(&N)\tCtrl+Shift+C", L"選択したファイル名をコピー(&N)\tCtrl+Shift+C"));
+    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_PATH, i18n.Pick(L"复制完整路径(&P)\tCtrl+Shift+Alt+C", L"複製完整路徑(&P)\tCtrl+Shift+Alt+C", L"Copy Full Path(&P)\tCtrl+Shift+Alt+C", L"フルパスをコピー(&P)\tCtrl+Shift+Alt+C"));
+    AppendMenuW(hCopyPathSubmenu, MF_STRING, ID_EDIT_COPY_DIR, i18n.Pick(L"复制所在目录(&D)\tCtrl+Alt+C", L"複製所在目錄(&D)\tCtrl+Alt+C", L"Copy Directory Path(&D)\tCtrl+Alt+C", L"フォルダーのパスをコピー(&D)\tCtrl+Alt+C"));
+    AppendMenuW(hEditMenu, MF_POPUP, (UINT_PTR)hCopyPathSubmenu, i18n.Pick(L"复制路径(&Y)", L"複製路徑(&Y)", L"Copy Path(&Y)", L"パスをコピー(&Y)"));
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hEditMenu, i18n.Pick(L"编辑(&E)", L"編輯(&E)", L"Edit(&E)", L"編集(&E)"));
 
     // =========================================================================
     // 3. 查看 (V) View Menu
@@ -487,42 +487,42 @@ void MainWindow::BuildMenu() {
     // 工具栏 (T)
     HMENU hBarsSubmenu = CreatePopupMenu();
     AppendMenuW(hBarsSubmenu, MF_STRING | (Config::Get().showToolbarStandard ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_TB_STANDARD, isZh ? L"标准按钮(&S)" : L"Standard Buttons(&S)");
+                ID_VIEW_TB_STANDARD, i18n.Pick(L"标准按钮(&S)", L"標準按鈕(&S)", L"Standard Buttons(&S)", L"標準ボタン(&S)"));
     AppendMenuW(hBarsSubmenu, MF_STRING | (Config::Get().showToolbarAddress ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_TB_ADDRESS, isZh ? L"地址栏(&A)" : L"Address Bar(&A)");
+                ID_VIEW_TB_ADDRESS, i18n.Pick(L"地址栏(&A)", L"網址列(&A)", L"Address Bar(&A)", L"アドレス バー(&A)"));
     AppendMenuW(hBarsSubmenu, MF_STRING | (m_linksVisible ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_TOGGLE_LINKS, isZh ? L"链接栏(&L)" : L"Links Bar(&L)");
+                ID_VIEW_TOGGLE_LINKS, i18n.Pick(L"链接栏(&L)", L"連結列(&L)", L"Links Bar(&L)", L"リンク バー(&L)"));
     AppendMenuW(hBarsSubmenu, MF_STRING | (Config::Get().showToolbarSearch ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_TB_SEARCH, isZh ? L"搜索栏(&F)" : L"Search Bar(&F)");
+                ID_VIEW_TB_SEARCH, i18n.Pick(L"搜索栏(&F)", L"搜尋列(&F)", L"Search Bar(&F)", L"検索バー(&F)"));
     AppendMenuW(hBarsSubmenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hBarsSubmenu, MF_STRING | (Config::Get().lockToolbars ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LOCK_TOOLBARS, isZh ? L"锁定工具栏" : L"Lock Toolbars");
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hBarsSubmenu, isZh ? L"工具栏(&T)" : L"Toolbars(&T)");
+                ID_VIEW_LOCK_TOOLBARS, i18n.Pick(L"锁定工具栏", L"鎖定工具列", L"Lock Toolbars", L"ツールバーを固定"));
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hBarsSubmenu, i18n.Pick(L"工具栏(&T)", L"工具列(&T)", L"Toolbars(&T)", L"ツールバー(&T)"));
 
     AppendMenuW(hViewMenu, MF_STRING | (Config::Get().showStatusBar ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_STATUSBAR, isZh ? L"状态栏(&B)" : L"Status Bar(&B)");
+                ID_VIEW_STATUSBAR, i18n.Pick(L"状态栏(&B)", L"狀態列(&B)", L"Status Bar(&B)", L"ステータス バー(&B)"));
 
     // 侧边栏 (E)
     HMENU hSideSubmenu = CreatePopupMenu();
     AppendMenuW(hSideSubmenu, MF_STRING | (m_treeVisible ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_TREE_TOGGLE, isZh ? L"文件夹目录树(&O)\tF8" : L"Folders Tree(&O)\tF8");
+                ID_VIEW_TREE_TOGGLE, i18n.Pick(L"文件夹目录树(&O)\tF8", L"資料夾目錄樹(&O)\tF8", L"Folders Tree(&O)\tF8", L"フォルダー ツリー(&O)\tF8"));
     AppendMenuW(hSideSubmenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hSideSubmenu, MF_STRING | (m_previewVisible ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_PREVIEW_TOGGLE, isZh ? L"快速预览窗格(&P)\tAlt+P" : L"Preview Pane(&P)\tAlt+P");
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hSideSubmenu, isZh ? L"侧边栏(&E)" : L"Sidebar(&E)");
+                ID_VIEW_PREVIEW_TOGGLE, i18n.Pick(L"快速预览窗格(&P)\tAlt+P", L"快速預覽窗格(&P)\tAlt+P", L"Preview Pane(&P)\tAlt+P", L"プレビュー ウィンドウ(&P)\tAlt+P"));
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hSideSubmenu, i18n.Pick(L"侧边栏(&E)", L"側邊欄(&E)", L"Sidebar(&E)", L"サイドバー(&E)"));
 
     AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
 
     // 视图样式 (V)
     HMENU hViewStyleSubmenu = CreatePopupMenu();
-    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_ICONS_XLARGE, isZh ? L"超大图标(&X)" : L"Extra large icons(&X)");
-    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_ICONS_LARGE, isZh ? L"大图标(&R)" : L"Large icons(&R)");
-    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_ICONS_MEDIUM, isZh ? L"中等图标(&M)" : L"Medium icons(&M)");
-    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_ICONS_SMALL, isZh ? L"小图标(&N)" : L"Small icons(&N)");
-    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_LIST, isZh ? L"列表(&L)" : L"List(&L)");
-    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_DETAILS, isZh ? L"详细信息(&D)" : L"Details(&D)");
-    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_TILES, isZh ? L"平铺(&S)" : L"Tiles(&S)");
-    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_CONTENT, isZh ? L"内容(&C)" : L"Content(&C)");
+    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_ICONS_XLARGE, i18n.Pick(L"超大图标(&X)", L"超大圖示(&X)", L"Extra large icons(&X)", L"特大アイコン(&X)"));
+    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_ICONS_LARGE, i18n.Pick(L"大图标(&R)", L"大圖示(&R)", L"Large icons(&R)", L"大アイコン(&R)"));
+    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_ICONS_MEDIUM, i18n.Pick(L"中等图标(&M)", L"中圖示(&M)", L"Medium icons(&M)", L"中アイコン(&M)"));
+    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_ICONS_SMALL, i18n.Pick(L"小图标(&N)", L"小圖示(&N)", L"Small icons(&N)", L"小アイコン(&N)"));
+    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_LIST, i18n.Pick(L"列表(&L)", L"清單(&L)", L"List(&L)", L"一覧(&L)"));
+    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_DETAILS, i18n.Pick(L"详细信息(&D)", L"詳細資料(&D)", L"Details(&D)", L"詳細(&D)"));
+    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_TILES, i18n.Pick(L"平铺(&S)", L"並排(&S)", L"Tiles(&S)", L"並べて表示(&S)"));
+    AppendMenuW(hViewStyleSubmenu, MF_STRING, ID_VIEW_CONTENT, i18n.Pick(L"内容(&C)", L"內容(&C)", L"Content(&C)", L"コンテンツ(&C)"));
     int curVm = activeView ? activeView->GetViewMode() : Config::Get().viewMode;
     UINT activeVmId = ID_VIEW_DETAILS;
     switch (curVm) {
@@ -537,109 +537,109 @@ void MainWindow::BuildMenu() {
     default: activeVmId = ID_VIEW_DETAILS; break;
     }
     CheckMenuRadioItem(hViewStyleSubmenu, ID_VIEW_DETAILS, ID_VIEW_CONTENT, activeVmId, MF_BYCOMMAND);
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hViewStyleSubmenu, isZh ? L"视图样式(&V)" : L"View Mode(&V)");
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hViewStyleSubmenu, i18n.Pick(L"视图样式(&V)", L"檢視樣式(&V)", L"View Mode(&V)", L"表示形式(&V)"));
 
     // 排列图标 (I)
     HMENU hSortSubmenu = CreatePopupMenu();
     SortColumn curSortCol = activeView ? activeView->GetSortColumn() : SortColumn::Name;
     bool isAsc = activeView ? activeView->IsSortAscending() : true;
     AppendMenuW(hSortSubmenu, MF_STRING | (curSortCol == SortColumn::Name ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_NAME, isZh ? L"名称" : L"Name");
+                ID_VIEW_SORT_NAME, i18n.Pick(L"名称", L"名稱", L"Name", L"名前"));
     AppendMenuW(hSortSubmenu, MF_STRING | (curSortCol == SortColumn::Size ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_SIZE, isZh ? L"大小" : L"Size");
+                ID_VIEW_SORT_SIZE, i18n.Pick(L"大小", L"大小", L"Size", L"サイズ"));
     AppendMenuW(hSortSubmenu, MF_STRING | (curSortCol == SortColumn::Type ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_TYPE, isZh ? L"类型" : L"Type");
+                ID_VIEW_SORT_TYPE, i18n.Pick(L"类型", L"類型", L"Type", L"種類"));
     AppendMenuW(hSortSubmenu, MF_STRING | (curSortCol == SortColumn::DateModified ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_DATE, isZh ? L"修改日期" : L"Date Modified");
+                ID_VIEW_SORT_DATE, i18n.Pick(L"修改日期", L"修改日期", L"Date Modified", L"更新日時"));
     AppendMenuW(hSortSubmenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hSortSubmenu, MF_STRING | (isAsc ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_ASC, isZh ? L"递增排序(&A)" : L"Ascending(&A)");
+                ID_VIEW_SORT_ASC, i18n.Pick(L"递增排序(&A)", L"遞增排序(&A)", L"Ascending(&A)", L"昇順(&A)"));
     AppendMenuW(hSortSubmenu, MF_STRING | (!isAsc ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_DESC, isZh ? L"递减排序(&D)" : L"Descending(&D)");
+                ID_VIEW_SORT_DESC, i18n.Pick(L"递减排序(&D)", L"遞減排序(&D)", L"Descending(&D)", L"降順(&D)"));
     AppendMenuW(hSortSubmenu, MF_SEPARATOR, 0, nullptr);
     bool foldersFirst = activeView ? activeView->IsFoldersFirst() : Config::Get().foldersFirst;
     AppendMenuW(hSortSubmenu, MF_STRING | (foldersFirst ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_FOLDERS_FIRST, isZh ? L"文件夹在前(&F)" : L"Folders First(&F)");
+                ID_VIEW_SORT_FOLDERS_FIRST, i18n.Pick(L"文件夹在前(&F)", L"資料夾優先(&F)", L"Folders First(&F)", L"フォルダーを先に(&F)"));
     AppendMenuW(hSortSubmenu, MF_STRING | (!foldersFirst ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SORT_FILES_FIRST, isZh ? L"文件在前(&L)" : L"Files First(&L)");
+                ID_VIEW_SORT_FILES_FIRST, i18n.Pick(L"文件在前(&L)", L"檔案優先(&L)", L"Files First(&L)", L"ファイルを先に(&L)"));
     CheckMenuRadioItem(hSortSubmenu, ID_VIEW_SORT_FOLDERS_FIRST, ID_VIEW_SORT_FILES_FIRST,
                        foldersFirst ? ID_VIEW_SORT_FOLDERS_FIRST : ID_VIEW_SORT_FILES_FIRST, MF_BYCOMMAND);
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hSortSubmenu, isZh ? L"排列图标(&I)" : L"Sort By(&I)");
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hSortSubmenu, i18n.Pick(L"排列图标(&I)", L"排序方式(&I)", L"Sort By(&I)", L"並べ替え(&I)"));
 
     AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
 
     // 转到 (M)
     HMENU hGoSubmenu = CreatePopupMenu();
-    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_BACK, isZh ? L"后退(&B)\tAlt+Left" : L"Back(&B)\tAlt+Left");
-    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_FORWARD, isZh ? L"前进(&F)\tAlt+Right" : L"Forward(&F)\tAlt+Right");
-    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_UP, isZh ? L"向上一级(&U)\tAlt+Up" : L"Up(&U)\tAlt+Up");
-    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_UP_NEW_TAB, isZh ? L"在新标签页中打开上一级文件夹(&N)" : L"Open Up in New Tab(&N)");
+    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_BACK, i18n.Pick(L"后退(&B)\tAlt+Left", L"上一頁(&B)\tAlt+Left", L"Back(&B)\tAlt+Left", L"戻る(&B)\tAlt+Left"));
+    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_FORWARD, i18n.Pick(L"前进(&F)\tAlt+Right", L"下一頁(&F)\tAlt+Right", L"Forward(&F)\tAlt+Right", L"進む(&F)\tAlt+Right"));
+    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_UP, i18n.Pick(L"向上一级(&U)\tAlt+Up", L"上一層(&U)\tAlt+Up", L"Up(&U)\tAlt+Up", L"上へ(&U)\tAlt+Up"));
+    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_UP_NEW_TAB, i18n.Pick(L"在新标签页中打开上一级文件夹(&N)", L"在新分頁開啟上一層資料夾(&N)", L"Open Up in New Tab(&N)", L"上のフォルダーを新しいタブで開く(&N)"));
     AppendMenuW(hGoSubmenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_HOME, isZh ? L"转到地址栏(&D)\tAlt+D" : L"Go to Address Bar(&D)\tAlt+D");
+    AppendMenuW(hGoSubmenu, MF_STRING, ID_NAV_HOME, i18n.Pick(L"转到地址栏(&D)\tAlt+D", L"移至網址列(&D)\tAlt+D", L"Go to Address Bar(&D)\tAlt+D", L"アドレス バーへ(&D)\tAlt+D"));
     HMENU hHistSubmenu = CreatePopupMenu();
     if (m_historyPaths.empty()) {
-        AppendMenuW(hHistSubmenu, MF_STRING | MF_GRAYED, 0, isZh ? L"(无历史记录)" : L"(No History)");
+        AppendMenuW(hHistSubmenu, MF_STRING | MF_GRAYED, 0, i18n.Pick(L"(无历史记录)", L"(無歷史紀錄)", L"(No History)", L"(履歴なし)"));
     } else {
         for (size_t i = 0; i < m_historyPaths.size(); ++i) {
             UINT histCmdId = ID_HISTORY_START + (UINT)i;
             AppendMenuW(hHistSubmenu, MF_STRING, histCmdId, m_historyPaths[i].c_str());
         }
     }
-    AppendMenuW(hGoSubmenu, MF_POPUP, (UINT_PTR)hHistSubmenu, isZh ? L"历史记录(&H)" : L"History(&H)");
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hGoSubmenu, isZh ? L"转到(&M)" : L"Go(&M)");
+    AppendMenuW(hGoSubmenu, MF_POPUP, (UINT_PTR)hHistSubmenu, i18n.Pick(L"历史记录(&H)", L"歷史紀錄(&H)", L"History(&H)", L"履歴(&H)"));
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hGoSubmenu, i18n.Pick(L"转到(&M)", L"前往(&M)", L"Go(&M)", L"移動(&M)"));
 
     AppendMenuW(hViewMenu, MF_STRING | (Config::Get().showHidden ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SHOW_HIDDEN, isZh ? L"显示隐藏文件(&H)" : L"Show Hidden Files(&H)");
+                ID_VIEW_SHOW_HIDDEN, i18n.Pick(L"显示隐藏文件(&H)", L"顯示隱藏檔案(&H)", L"Show Hidden Files(&H)", L"隠しファイルを表示(&H)"));
     AppendMenuW(hViewMenu, MF_STRING | (Config::Get().hideDotFiles ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_HIDE_DOTFILES, isZh ? L"隐藏点文件(.开头文件夹)(&F)\tCtrl+H" : L"Hide Dotfiles(.xxx)(&F)\tCtrl+H");
+                ID_VIEW_HIDE_DOTFILES, i18n.Pick(L"隐藏点文件(.开头文件夹)(&F)\tCtrl+H", L"隱藏點開頭檔案(.xxx)(&F)\tCtrl+H", L"Hide Dotfiles(.xxx)(&F)\tCtrl+H", L"ドットファイルを隠す(.xxx)(&F)\tCtrl+H"));
     AppendMenuW(hViewMenu, MF_STRING | (Config::Get().showItemCheckBoxes ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_ITEM_CHECKBOXES, isZh ? L"项目复选框(&X)" : L"Item check boxes(&X)");
+                ID_VIEW_ITEM_CHECKBOXES, i18n.Pick(L"项目复选框(&X)", L"項目核取方塊(&X)", L"Item check boxes(&X)", L"項目チェック ボックス(&X)"));
 
     HMENU hDensitySubmenu = CreatePopupMenu();
     AppendMenuW(hDensitySubmenu, MF_STRING | (Config::Get().listDensity == 0 ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_DENSITY_COMPACT, isZh ? L"紧凑 (Compact)" : L"Compact");
+                ID_VIEW_DENSITY_COMPACT, i18n.Pick(L"紧凑 (Compact)", L"緊湊 (Compact)", L"Compact", L"コンパクト"));
     AppendMenuW(hDensitySubmenu, MF_STRING | (Config::Get().listDensity == 1 ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_DENSITY_COMFORTABLE, isZh ? L"适中 (Normal)" : L"Normal");
+                ID_VIEW_DENSITY_COMFORTABLE, i18n.Pick(L"适中 (Normal)", L"適中 (Normal)", L"Normal", L"標準"));
     AppendMenuW(hDensitySubmenu, MF_STRING | (Config::Get().listDensity == 2 ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_DENSITY_SPACIOUS, isZh ? L"宽松 (Relaxed)" : L"Relaxed");
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hDensitySubmenu, isZh ? L"间距调整(&D)" : L"Spacing Density(&D)");
+                ID_VIEW_DENSITY_SPACIOUS, i18n.Pick(L"宽松 (Relaxed)", L"寬鬆 (Relaxed)", L"Relaxed", L"ゆったり"));
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hDensitySubmenu, i18n.Pick(L"间距调整(&D)", L"間距調整(&D)", L"Spacing Density(&D)", L"行間隔(&D)"));
 
     HMENU hScaleSubmenu = CreatePopupMenu();
     AppendMenuW(hScaleSubmenu, MF_STRING | (Config::Get().listScale == 0 ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SCALE_SMALL, isZh ? L"偏小 (90% / 9pt)" : L"Small (90% / 9pt)");
+                ID_VIEW_SCALE_SMALL, i18n.Pick(L"偏小 (90% / 9pt)", L"偏小 (90% / 9pt)", L"Small (90% / 9pt)", L"小 (90% / 9pt)"));
     AppendMenuW(hScaleSubmenu, MF_STRING | (Config::Get().listScale == 1 ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SCALE_MEDIUM, isZh ? L"标准 (100% / 10pt)" : L"Standard (100% / 10pt)");
+                ID_VIEW_SCALE_MEDIUM, i18n.Pick(L"标准 (100% / 10pt)", L"標準 (100% / 10pt)", L"Standard (100% / 10pt)", L"標準 (100% / 10pt)"));
     AppendMenuW(hScaleSubmenu, MF_STRING | (Config::Get().listScale == 2 ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SCALE_LARGE, isZh ? L"放大 (125% / 12pt)" : L"Large (125% / 12pt)");
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hScaleSubmenu, isZh ? L"放大调整(&Z)" : L"Scale & Zoom(&Z)");
+                ID_VIEW_SCALE_LARGE, i18n.Pick(L"放大 (125% / 12pt)", L"放大 (125% / 12pt)", L"Large (125% / 12pt)", L"大 (125% / 12pt)"));
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hScaleSubmenu, i18n.Pick(L"放大调整(&Z)", L"縮放比例(&Z)", L"Scale & Zoom(&Z)", L"拡大/縮小(&Z)"));
     AppendMenuW(hViewMenu, MF_STRING | (Config::Get().calcFolderSize ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_CALC_FOLDER_SIZE, isZh ? L"计算文件夹大小(&C)" : L"Calculate Folder Sizes(&C)");
+                ID_VIEW_CALC_FOLDER_SIZE, i18n.Pick(L"计算文件夹大小(&C)", L"計算資料夾大小(&C)", L"Calculate Folder Sizes(&C)", L"フォルダー サイズを計算(&C)"));
         // 滚动 (X)
     HMENU hScrollSubmenu = CreatePopupMenu();
-    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_TOP, isZh ? L"列表顶部(&T)\tHome" : L"List Top(&T)\tHome");
-    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_BOTTOM, isZh ? L"列表底部(&B)\tEnd" : L"List Bottom(&B)\tEnd");
-    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_PAGEUP, isZh ? L"向上翻页(&U)\tPage Up" : L"Page Up(&U)\tPage Up");
-    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_PAGEDOWN, isZh ? L"向下翻页(&D)\tPage Down" : L"Page Down(&D)\tPage Down");
-    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hScrollSubmenu, isZh ? L"滚动(&X)" : L"Scroll(&X)");
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_TOP, i18n.Pick(L"列表顶部(&T)\tHome", L"清單頂端(&T)\tHome", L"List Top(&T)\tHome", L"先頭へ(&T)\tHome"));
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_BOTTOM, i18n.Pick(L"列表底部(&B)\tEnd", L"清單底端(&B)\tEnd", L"List Bottom(&B)\tEnd", L"末尾へ(&B)\tEnd"));
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_PAGEUP, i18n.Pick(L"向上翻页(&U)\tPage Up", L"向上捲頁(&U)\tPage Up", L"Page Up(&U)\tPage Up", L"前のページ(&U)\tPage Up"));
+    AppendMenuW(hScrollSubmenu, MF_STRING, ID_SCROLL_PAGEDOWN, i18n.Pick(L"向下翻页(&D)\tPage Down", L"向下捲頁(&D)\tPage Down", L"Page Down(&D)\tPage Down", L"次のページ(&D)\tPage Down"));
+    AppendMenuW(hViewMenu, MF_POPUP, (UINT_PTR)hScrollSubmenu, i18n.Pick(L"滚动(&X)", L"捲動(&X)", L"Scroll(&X)", L"スクロール(&X)"));
     AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hViewMenu, MF_STRING, ID_VIEW_REFRESH, isZh ? L"刷新(&R)\tF5" : L"Refresh(&R)\tF5");
+    AppendMenuW(hViewMenu, MF_STRING, ID_VIEW_REFRESH, i18n.Pick(L"刷新(&R)\tF5", L"重新整理(&R)\tF5", L"Refresh(&R)\tF5", L"最新の情報に更新(&R)\tF5"));
     AppendMenuW(hViewMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hViewMenu, MF_STRING | (Theme::Get().IsDarkMode() ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_DARK_MODE, isZh ? L"深色主题模式(&D)" : L"Dark Theme Mode(&D)");
+                ID_VIEW_DARK_MODE, i18n.Pick(L"深色主题模式(&D)", L"深色佈景主題(&D)", L"Dark Theme Mode(&D)", L"ダーク テーマ(&D)"));
     AppendMenuW(hViewMenu, MF_STRING | (Config::Get().showMenuBar ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_TOGGLE_MENUBAR, isZh ? L"显示传统明文菜单栏(&M)" : L"Show Classic Menu Bar(&M)");
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hViewMenu, isZh ? L"查看(&V)" : L"View(&V)");
+                ID_VIEW_TOGGLE_MENUBAR, i18n.Pick(L"显示传统明文菜单栏(&M)", L"顯示傳統功能表列(&M)", L"Show Classic Menu Bar(&M)", L"クラシック メニュー バーを表示(&M)"));
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hViewMenu, i18n.Pick(L"查看(&V)", L"檢視(&V)", L"View(&V)", L"表示(&V)"));
 
     // =========================================================================
     // 4. 工具 (T) Tools Menu
     // =========================================================================
     HMENU hToolsMenu = CreatePopupMenu();
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_OPEN_CMD, isZh ? L"打开命令行 CMD(&C)" : L"Open Command Prompt CMD(&C)");
+    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_OPEN_CMD, i18n.Pick(L"打开命令行 CMD(&C)", L"開啟命令提示字元 CMD(&C)", L"Open Command Prompt CMD(&C)", L"コマンド プロンプトを開く(&C)"));
     AppendMenuW(hToolsMenu, MF_SEPARATOR, 0, nullptr);
     HMENU hScriptSub = CreatePopupMenu();
-    AppendMenuW(hScriptSub, MF_STRING, ID_TOOLS_RELOAD_SCRIPTS, isZh ? L"重新加载所有脚本(&R)" : L"Reload All Scripts(&R)");
-    AppendMenuW(hScriptSub, MF_STRING, ID_TOOLS_SCRIPT_CONSOLE, isZh ? L"打开脚本控制台(&C)" : L"Script Console(&C)");
-    AppendMenuW(hScriptSub, MF_STRING, ID_TOOLS_OPEN_SCRIPTS_DIR, isZh ? L"打开脚本目录(&D)" : L"Open Scripts Directory(&D)");
+    AppendMenuW(hScriptSub, MF_STRING, ID_TOOLS_RELOAD_SCRIPTS, i18n.Pick(L"重新加载所有脚本(&R)", L"重新載入所有腳本(&R)", L"Reload All Scripts(&R)", L"スクリプトを再読み込み(&R)"));
+    AppendMenuW(hScriptSub, MF_STRING, ID_TOOLS_SCRIPT_CONSOLE, i18n.Pick(L"打开脚本控制台(&C)", L"開啟腳本主控台(&C)", L"Script Console(&C)", L"スクリプト コンソール(&C)"));
+    AppendMenuW(hScriptSub, MF_STRING, ID_TOOLS_OPEN_SCRIPTS_DIR, i18n.Pick(L"打开脚本目录(&D)", L"開啟腳本目錄(&D)", L"Open Scripts Directory(&D)", L"スクリプト フォルダーを開く(&D)"));
 
     const auto& scripts = ScriptEngine::Get().GetScripts();
     if (!scripts.empty()) {
@@ -650,11 +650,20 @@ void MainWindow::BuildMenu() {
             AppendMenuW(hScriptSub, MF_STRING, s.commandId, itemText.c_str());
         }
     }
-    AppendMenuW(hToolsMenu, MF_POPUP, (UINT_PTR)hScriptSub, isZh ? L"脚本扩展(&E)" : L"Scripts(&E)");
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_FOLDER_OPTIONS, isZh ? L"系统文件夹选项(&O)..." : L"Folder Options(&O)...");
+    AppendMenuW(hToolsMenu, MF_POPUP, (UINT_PTR)hScriptSub, i18n.Pick(L"脚本扩展(&E)", L"腳本擴充(&E)", L"Scripts(&E)", L"スクリプト(&E)"));
+    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_FOLDER_OPTIONS, i18n.Pick(L"系统文件夹选项(&O)...", L"系統資料夾選項(&O)...", L"Folder Options(&O)...", L"フォルダー オプション(&O)..."));
+
+    HMENU hLangSub = CreatePopupMenu();
+    Language curLang = i18n.GetLanguage();
+    AppendMenuW(hLangSub, MF_STRING | (curLang == Language::Chinese ? MF_CHECKED : MF_UNCHECKED), ID_LANG_ZH, i18n.T(StringId::MenuLangChinese));
+    AppendMenuW(hLangSub, MF_STRING | (curLang == Language::TraditionalChinese ? MF_CHECKED : MF_UNCHECKED), ID_LANG_ZH_TW, i18n.T(StringId::MenuLangTraditionalChinese));
+    AppendMenuW(hLangSub, MF_STRING | (curLang == Language::English ? MF_CHECKED : MF_UNCHECKED), ID_LANG_EN, i18n.T(StringId::MenuLangEnglish));
+    AppendMenuW(hLangSub, MF_STRING | (curLang == Language::Japanese ? MF_CHECKED : MF_UNCHECKED), ID_LANG_JA, i18n.T(StringId::MenuLangJapanese));
+    AppendMenuW(hToolsMenu, MF_POPUP, (UINT_PTR)hLangSub, i18n.T(StringId::MenuLanguage));
+
     AppendMenuW(hToolsMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_SETTINGS, isZh ? L"NeoMDIE 设置(&S)..." : L"NeoMDIE Settings(&S)...");
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hToolsMenu, isZh ? L"工具(&T)" : L"Tools(&T)");
+    AppendMenuW(hToolsMenu, MF_STRING, ID_TOOLS_SETTINGS, i18n.Pick(L"NeoMDIE 设置(&S)...", L"NeoMDIE 設定(&S)...", L"NeoMDIE Settings(&S)...", L"NeoMDIE 設定(&S)..."));
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hToolsMenu, i18n.Pick(L"工具(&T)", L"工具(&T)", L"Tools(&T)", L"ツール(&T)"));
 
     // =========================================================================
     // 6. 窗口 (W) Window Menu
@@ -663,47 +672,47 @@ void MainWindow::BuildMenu() {
 
     // 标签页操作 (T)
     HMENU hTabOpsSubmenu = CreatePopupMenu();
-    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_TAB_NEXT, isZh ? L"下一个标签(&N)\tCtrl+Tab" : L"Next Tab(&N)\tCtrl+Tab");
-    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_TAB_PREV, isZh ? L"上一个标签(&B)\tCtrl+Shift+Tab" : L"Previous Tab(&B)\tCtrl+Shift+Tab");
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_TAB_NEXT, i18n.Pick(L"下一个标签(&N)\tCtrl+Tab", L"下一個分頁(&N)\tCtrl+Tab", L"Next Tab(&N)\tCtrl+Tab", L"次のタブ(&N)\tCtrl+Tab"));
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_TAB_PREV, i18n.Pick(L"上一个标签(&B)\tCtrl+Shift+Tab", L"上一個分頁(&B)\tCtrl+Shift+Tab", L"Previous Tab(&B)\tCtrl+Shift+Tab", L"前のタブ(&B)\tCtrl+Shift+Tab"));
     AppendMenuW(hTabOpsSubmenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_TAB, isZh ? L"关闭当前标签(&C)\tCtrl+W" : L"Close Current Tab(&C)\tCtrl+W");
-    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_LEFT_TABS, isZh ? L"关闭左侧标签(&L)" : L"Close Left Tabs(&L)");
-    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_RIGHT_TABS, isZh ? L"关闭右侧标签(&R)" : L"Close Right Tabs(&R)");
-    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_OTHER_TABS, isZh ? L"除当前标签外全部关闭(&O)" : L"Close Other Tabs(&O)");
-    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_ALL_TABS, isZh ? L"关闭全部标签(&A)" : L"Close All Tabs(&A)");
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_TAB, i18n.Pick(L"关闭当前标签(&C)\tCtrl+W", L"關閉目前分頁(&C)\tCtrl+W", L"Close Current Tab(&C)\tCtrl+W", L"現在のタブを閉じる(&C)\tCtrl+W"));
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_LEFT_TABS, i18n.Pick(L"关闭左侧标签(&L)", L"關閉左側分頁(&L)", L"Close Left Tabs(&L)", L"左側のタブを閉じる(&L)"));
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_RIGHT_TABS, i18n.Pick(L"关闭右侧标签(&R)", L"關閉右側分頁(&R)", L"Close Right Tabs(&R)", L"右側のタブを閉じる(&R)"));
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_OTHER_TABS, i18n.Pick(L"除当前标签外全部关闭(&O)", L"關閉其他分頁(&O)", L"Close Other Tabs(&O)", L"他のタブを閉じる(&O)"));
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_CLOSE_ALL_TABS, i18n.Pick(L"关闭全部标签(&A)", L"關閉所有分頁(&A)", L"Close All Tabs(&A)", L"すべてのタブを閉じる(&A)"));
     AppendMenuW(hTabOpsSubmenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_DUPLICATE_TAB, isZh ? L"复制当前标签(&D)" : L"Duplicate Tab(&D)");
+    AppendMenuW(hTabOpsSubmenu, MF_STRING, ID_FILE_DUPLICATE_TAB, i18n.Pick(L"复制当前标签(&D)", L"複製目前分頁(&D)", L"Duplicate Tab(&D)", L"タブを複製(&D)"));
     bool isPinned = m_tabBar.IsTabPinned(m_tabBar.GetActiveIndex());
     AppendMenuW(hTabOpsSubmenu, MF_STRING | (isPinned ? MF_CHECKED : MF_UNCHECKED),
-                ID_FILE_PIN_TAB, isPinned ? (isZh ? L"取消固定标签(&P)" : L"Unpin Tab(&P)") : (isZh ? L"固定当前标签(&P)" : L"Pin Tab(&P)"));
-    AppendMenuW(hWindowMenu, MF_POPUP, (UINT_PTR)hTabOpsSubmenu, isZh ? L"标签页操作(&T)" : L"Tab Operations(&T)");
+                ID_FILE_PIN_TAB, isPinned ? i18n.Pick(L"取消固定标签(&P)", L"取消釘選分頁(&P)", L"Unpin Tab(&P)", L"タブの固定を解除(&P)") : i18n.Pick(L"固定当前标签(&P)", L"釘選目前分頁(&P)", L"Pin Tab(&P)", L"タブを固定(&P)"));
+    AppendMenuW(hWindowMenu, MF_POPUP, (UINT_PTR)hTabOpsSubmenu, i18n.Pick(L"标签页操作(&T)", L"分頁操作(&T)", L"Tab Operations(&T)", L"タブ操作(&T)"));
 
     // 窗口操作 (W)
     HMENU hWinOpsSubmenu = CreatePopupMenu();
-    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAXIMIZE, isZh ? L"当前窗格最大化(&M)" : L"Maximize Pane(&M)");
-    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_CLOSE, isZh ? L"关闭当前窗格(&C)" : L"Close Pane(&C)");
+    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAXIMIZE, i18n.Pick(L"当前窗格最大化(&M)", L"目前窗格最大化(&M)", L"Maximize Pane(&M)", L"ペインを最大化(&M)"));
+    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_CLOSE, i18n.Pick(L"关闭当前窗格(&C)", L"關閉目前窗格(&C)", L"Close Pane(&C)", L"ペインを閉じる(&C)"));
     AppendMenuW(hWinOpsSubmenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAIN_MAXIMIZE, isZh ? L"主窗口最大化(&A)" : L"Maximize Main Window(&A)");
-    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAIN_MINIMIZE, isZh ? L"主窗口最小化(&N)" : L"Minimize Main Window(&N)");
-    AppendMenuW(hWindowMenu, MF_POPUP, (UINT_PTR)hWinOpsSubmenu, isZh ? L"窗口操作(&W)" : L"Window Operations(&W)");
+    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAIN_MAXIMIZE, i18n.Pick(L"主窗口最大化(&A)", L"主視窗最大化(&A)", L"Maximize Main Window(&A)", L"メイン ウィンドウを最大化(&A)"));
+    AppendMenuW(hWinOpsSubmenu, MF_STRING, ID_WINDOW_MAIN_MINIMIZE, i18n.Pick(L"主窗口最小化(&N)", L"主視窗最小化(&N)", L"Minimize Main Window(&N)", L"メイン ウィンドウを最小化(&N)"));
+    AppendMenuW(hWindowMenu, MF_POPUP, (UINT_PTR)hWinOpsSubmenu, i18n.Pick(L"窗口操作(&W)", L"視窗操作(&W)", L"Window Operations(&W)", L"ウィンドウ操作(&W)"));
 
     // 窗口模式 (M)
     HMENU hWinModeSubmenu = CreatePopupMenu();
     PaneLayout curLayout = m_multiPane.GetLayout();
     AppendMenuW(hWinModeSubmenu, MF_STRING | (curLayout == PaneLayout::Single ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LAYOUT_1X1, isZh ? L"普通/单屏(&N)" : L"Single Pane(&N)");
+                ID_VIEW_LAYOUT_1X1, i18n.Pick(L"普通/单屏(&N)", L"單欄檢視(&N)", L"Single Pane(&N)", L"単一ペイン(&N)"));
     AppendMenuW(hWinModeSubmenu, MF_STRING | (curLayout == PaneLayout::DualVertical ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LAYOUT_1X2, isZh ? L"垂直两个页面(&V)" : L"Dual Vertical(&V)");
+                ID_VIEW_LAYOUT_1X2, i18n.Pick(L"垂直两个页面(&V)", L"左右雙欄(&V)", L"Dual Vertical(&V)", L"左右2分割(&V)"));
     AppendMenuW(hWinModeSubmenu, MF_STRING | (curLayout == PaneLayout::DualHorizontal ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LAYOUT_2X1, isZh ? L"水平两个页面(&H)" : L"Dual Horizontal(&H)");
+                ID_VIEW_LAYOUT_2X1, i18n.Pick(L"水平两个页面(&H)", L"上下雙欄(&H)", L"Dual Horizontal(&H)", L"上下2分割(&H)"));
     AppendMenuW(hWinModeSubmenu, MF_STRING | (curLayout == PaneLayout::Quad ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LAYOUT_2X2, isZh ? L"四栏(&Q)" : L"Quad 2x2(&Q)");
+                ID_VIEW_LAYOUT_2X2, i18n.Pick(L"四栏(&Q)", L"四欄(&Q)", L"Quad 2x2(&Q)", L"4分割(&Q)"));
     AppendMenuW(hWinModeSubmenu, MF_STRING | (curLayout == PaneLayout::ThreeLeft ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LAYOUT_1P2, isZh ? L"左一右二(&T)" : L"Three Panes (1+2)(&T)");
+                ID_VIEW_LAYOUT_1P2, i18n.Pick(L"左一右二(&T)", L"左一右二(&T)", L"Three Panes (1+2)(&T)", L"左1右2 (3分割)(&T)"));
     AppendMenuW(hWinModeSubmenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hWinModeSubmenu, MF_STRING | (Config::Get().syncNav ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_SYNC_NAV, isZh ? L"多窗格同步浏览(&S)" : L"Sync Navigation(&S)");
-    AppendMenuW(hWindowMenu, MF_POPUP, (UINT_PTR)hWinModeSubmenu, isZh ? L"窗口模式(&M)" : L"Window Mode(&M)");
+                ID_VIEW_SYNC_NAV, i18n.Pick(L"多窗格同步浏览(&S)", L"多窗格同步瀏覽(&S)", L"Sync Navigation(&S)", L"同期ナビゲーション(&S)"));
+    AppendMenuW(hWindowMenu, MF_POPUP, (UINT_PTR)hWinModeSubmenu, i18n.Pick(L"窗口模式(&M)", L"視窗模式(&M)", L"Window Mode(&M)", L"レイアウト(&M)"));
 
     AppendMenuW(hWindowMenu, MF_SEPARATOR, 0, nullptr);
     const auto& allTabs = m_tabBar.GetTabs();
@@ -714,17 +723,17 @@ void MainWindow::BuildMenu() {
         std::wstring itemLabel = std::to_wstring(i + 1) + L" " + title;
         AppendMenuW(hWindowMenu, MF_STRING | (i == (size_t)activeIdx ? MF_CHECKED : MF_UNCHECKED), tabCmdId, itemLabel.c_str());
     }
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hWindowMenu, isZh ? L"窗口(&W)" : L"Window(&W)");
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hWindowMenu, i18n.Pick(L"窗口(&W)", L"視窗(&W)", L"Window(&W)", L"ウィンドウ(&W)"));
 
     // =========================================================================
     // 7. 帮助 (H) Help Menu
     // =========================================================================
     HMENU hHelpMenu = CreatePopupMenu();
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_GITHUB, isZh ? L"NeoMDIE 开源仓库(&G)" : L"NeoMDIE GitHub Repository(&G)");
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_CHECK_UPDATES, isZh ? L"检查更新(&U)..." : L"Check for Updates(&U)...");
+    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_GITHUB, i18n.Pick(L"NeoMDIE 开源仓库(&G)", L"NeoMDIE 開源倉庫(&G)", L"NeoMDIE GitHub Repository(&G)", L"NeoMDIE GitHub リポジトリ(&G)"));
+    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_CHECK_UPDATES, i18n.Pick(L"检查更新(&U)...", L"檢查更新(&U)...", L"Check for Updates(&U)...", L"アップデートの確認(&U)..."));
     AppendMenuW(hHelpMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_ABOUT, isZh ? L"关于 NeoMDIE(&A)..." : L"About NeoMDIE(&A)...");
-    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hHelpMenu, isZh ? L"帮助(&H)" : L"Help(&H)");
+    AppendMenuW(hHelpMenu, MF_STRING, ID_HELP_ABOUT, i18n.Pick(L"关于 NeoMDIE(&A)...", L"關於 NeoMDIE(&A)...", L"About NeoMDIE(&A)...", L"NeoMDIE について(&A)..."));
+    AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hHelpMenu, i18n.Pick(L"帮助(&H)", L"說明(&H)", L"Help(&H)", L"ヘルプ(&H)"));
 
     SetMenu(m_hwnd, Config::Get().showMenuBar ? hMenuBar : nullptr);
     DrawMenuBar(m_hwnd);
@@ -793,15 +802,15 @@ void MainWindow::CreateControls() {
         SendMessageW(m_hwndTooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
     };
 
-    bool isZh = I18n::Get().IsChinese();
-    addTip(m_hwndBtnBack, isZh ? L"后退 (Alt+Left)" : L"Back (Alt+Left)");
-    addTip(m_hwndBtnForward, isZh ? L"前进 (Alt+Right)" : L"Forward (Alt+Right)");
-    addTip(m_hwndBtnUp, isZh ? L"向上一级 (Backspace / Alt+Up)" : L"Up (Backspace / Alt+Up)");
-    addTip(m_hwndBtnRefresh, isZh ? L"刷新 (F5)" : L"Refresh (F5)");
-    addTip(m_hwndBtnTree, isZh ? L"文件夹目录树 (F8)" : L"Directory Tree (F8)");
-    addTip(m_hwndBtnSplit, isZh ? L"多栏布局 (F4)" : L"Split View (F4)");
-    addTip(m_hwndBtnPreview, isZh ? L"快速预览 (Alt+P)" : L"Preview Pane (Alt+P)");
-    addTip(m_hwndBtnMenu, isZh ? L"主菜单 (≡ / Alt+M)" : L"Main Menu (≡ / Alt+M)");
+    auto& i18n = I18n::Get();
+    addTip(m_hwndBtnBack, i18n.Pick(L"后退 (Alt+Left)", L"上一頁 (Alt+Left)", L"Back (Alt+Left)", L"戻る (Alt+Left)"));
+    addTip(m_hwndBtnForward, i18n.Pick(L"前进 (Alt+Right)", L"下一頁 (Alt+Right)", L"Forward (Alt+Right)", L"進む (Alt+Right)"));
+    addTip(m_hwndBtnUp, i18n.Pick(L"向上一级 (Backspace / Alt+Up)", L"上一層 (Backspace / Alt+Up)", L"Up (Backspace / Alt+Up)", L"上へ (Backspace / Alt+Up)"));
+    addTip(m_hwndBtnRefresh, i18n.Pick(L"刷新 (F5)", L"重新整理 (F5)", L"Refresh (F5)", L"最新の情報に更新 (F5)"));
+    addTip(m_hwndBtnTree, i18n.Pick(L"文件夹目录树 (F8)", L"資料夾目錄樹 (F8)", L"Directory Tree (F8)", L"フォルダー ツリー (F8)"));
+    addTip(m_hwndBtnSplit, i18n.Pick(L"多栏布局 (F4)", L"多欄版面 (F4)", L"Split View (F4)", L"分割表示 (F4)"));
+    addTip(m_hwndBtnPreview, i18n.Pick(L"快速预览 (Alt+P)", L"快速預覽 (Alt+P)", L"Preview Pane (Alt+P)", L"プレビュー (Alt+P)"));
+    addTip(m_hwndBtnMenu, i18n.Pick(L"主菜单 (≡ / Alt+M)", L"主功能表 (≡ / Alt+M)", L"Main Menu (≡ / Alt+M)", L"メイン メニュー (≡ / Alt+M)"));
 
     // 3. Breadcrumb & FilterBar
     m_breadcrumb.Create(m_hwnd, 102);
@@ -1394,6 +1403,10 @@ void MainWindow::CreateControls() {
                 m_multiPane.onCustomCommand(cmd, path);
             }
         };
+
+        view.onBeforeDelete = [this]() {
+            m_preview.Clear();
+        };
     };
 
     for (int i = 0; i < 4; ++i) {
@@ -1685,21 +1698,22 @@ void MainWindow::UpdateStatus(int itemCount, uint64_t totalSize) {
 
     FileListView* activeView = m_multiPane.GetActivePane();
     int selCount = (activeView && activeView->GetHwnd()) ? (int)ListView_GetSelectedCount(activeView->GetHwnd()) : 0;
-    bool isZh = I18n::Get().IsChinese();
-
+    auto& i18n = I18n::Get();
     wchar_t buf[128];
     if (selCount > 0) {
-        if (isZh) {
-            StringCchPrintfW(buf, 128, L"已选择 %d 个项目    大小: %s", selCount, Util::FormatBytes(totalSize).c_str());
-        } else {
-            StringCchPrintfW(buf, 128, L"%d item(s) selected    Size: %s", selCount, Util::FormatBytes(totalSize).c_str());
-        }
+        StringCchPrintfW(buf, 128,
+            i18n.Pick(L"已选择 %d 个项目    大小: %s",
+                      L"已選取 %d 個項目    大小: %s",
+                      L"%d item(s) selected    Size: %s",
+                      L"%d 個の項目を選択    サイズ: %s"),
+            selCount, Util::FormatBytes(totalSize).c_str());
     } else {
-        if (isZh) {
-            StringCchPrintfW(buf, 128, L"%d 个项目    大小: %s", itemCount, Util::FormatBytes(totalSize).c_str());
-        } else {
-            StringCchPrintfW(buf, 128, L"%d items    Size: %s", itemCount, Util::FormatBytes(totalSize).c_str());
-        }
+        StringCchPrintfW(buf, 128,
+            i18n.Pick(L"%d 个项目    大小: %s",
+                      L"%d 個項目    大小: %s",
+                      L"%d items    Size: %s",
+                      L"%d 個の項目    サイズ: %s"),
+            itemCount, Util::FormatBytes(totalSize).c_str());
     }
     SendMessageW(m_hwndStatusBar, SB_SETTEXTW, 0, (LPARAM)buf);
 }
@@ -1845,21 +1859,19 @@ MainWindow::SplitDropAction MainWindow::CalculateDropAction(int dragIndex, int h
     int ry = ptScreen.y - rc.top;
 
     PaneLayout curLayout = m_multiPane.GetLayout();
-    bool isZh = I18n::Get().IsChinese();
-
+    auto& i18n = I18n::Get();
     std::wstring dragTitle = (dragIndex >= 0 && dragIndex < m_tabBar.GetTabCount())
         ? m_tabBar.GetTabItem(dragIndex).title : L"";
     std::wstring hostTitle = (hostTabIndex >= 0 && hostTabIndex < m_tabBar.GetTabCount())
         ? m_tabBar.GetTabItem(hostTabIndex).title : L"";
-    if (dragTitle.empty()) dragTitle = isZh ? L"标签页" : L"Tab";
-    if (hostTitle.empty()) hostTitle = isZh ? L"当前标签页" : L"Current Tab";
+    if (dragTitle.empty()) dragTitle = i18n.Pick(L"标签页", L"分頁", L"Tab", L"タブ");
+    if (hostTitle.empty()) hostTitle = i18n.Pick(L"当前标签页", L"目前分頁", L"Current Tab", L"現在のタブ");
 
     auto fmtMerge = [&](const std::wstring& posZh, const std::wstring& posEn) -> std::wstring {
-        if (isZh) {
-            return L"将【" + dragTitle + L"】合并到【" + hostTitle + L"】(" + posZh + L")";
-        } else {
+        if (i18n.GetLanguage() == Language::English) {
             return L"Merge [" + dragTitle + L"] into [" + hostTitle + L"] (" + posEn + L")";
         }
+        return L"【" + dragTitle + L"】 -> 【" + hostTitle + L"】 (" + posZh + L")";
     };
 
     if (curLayout == PaneLayout::Single) {
@@ -2120,7 +2132,6 @@ MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POIN
     RECT rcMulti;
     GetWindowRect(hMulti, &rcMulti);
 
-    bool isZh = I18n::Get().IsChinese();
     std::wstring curPanePath = m_multiPane.GetPane(paneIdx).GetCurrentPath();
     std::wstring curPaneTitle = ShellUtils::GetDisplayName(curPanePath);
     if (curPaneTitle.empty()) curPaneTitle = curPanePath;
@@ -2129,8 +2140,7 @@ MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POIN
     if (ptScreen.y <= rcTab.bottom + 20) {
         act.type = PaneDragActionType::DetachToTab;
         act.overlayRect = rcTab;
-        act.overlayText = isZh ? (L"还原为独立标签页: 【" + curPaneTitle + L"】")
-                               : (L"Detach as Tab: [" + curPaneTitle + L"]");
+        act.overlayText = std::wstring(I18n::Get().Pick(L"还原为独立标签页: ", L"還原為獨立分頁: ", L"Detach as Tab: ", L"タブとして分離: ")) + L"[" + curPaneTitle + L"]";
         return act;
     }
 
@@ -2152,10 +2162,11 @@ MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POIN
         RECT rcLeft = { rcMulti.left, rcMulti.top, midX, rcMulti.bottom };
         RECT rcRight = { midX, rcMulti.top, rcMulti.right, rcMulti.bottom };
 
+        auto& i18n = I18n::Get();
         std::wstring title0 = ShellUtils::GetDisplayName(m_multiPane.GetPane(0).GetCurrentPath());
         std::wstring title1 = ShellUtils::GetDisplayName(m_multiPane.GetPane(1).GetCurrentPath());
-        if (title0.empty()) title0 = isZh ? L"左侧分栏" : L"Left Pane";
-        if (title1.empty()) title1 = isZh ? L"右侧分栏" : L"Right Pane";
+        if (title0.empty()) title0 = i18n.Pick(L"左侧分栏", L"左側分欄", L"Left Pane", L"左ペイン");
+        if (title1.empty()) title1 = i18n.Pick(L"右侧分栏", L"右側分欄", L"Right Pane", L"右ペイン");
 
         if (paneIdx == 0) {
             // Dragging left pane
@@ -2163,19 +2174,18 @@ MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POIN
                 if (ry > totalH * 0.75) {
                     act.type = PaneDragActionType::DualVertical_To_DualHorizontal;
                     act.overlayRect = { rcMulti.left, rcMulti.top + totalH / 2, rcMulti.right, rcMulti.bottom };
-                    act.overlayText = isZh ? L"转换为上下双栏 (下方)" : L"Convert to Dual Horizontal (Bottom)";
+                    act.overlayText = i18n.Pick(L"转换为上下双栏 (下方)", L"轉換為上下雙欄 (下方)", L"Convert to Dual Horizontal (Bottom)", L"上下2分割へ変換 (下)");
                 } else {
                     act.type = PaneDragActionType::SwapPanes;
                     act.targetPaneIdx = 1;
                     act.overlayRect = rcRight;
-                    act.overlayText = isZh ? (L"互换左右分栏: 【" + title0 + L"】⇄【" + title1 + L"】")
-                                           : (L"Swap Left/Right: [" + title0 + L"] <-> [" + title1 + L"]");
+                    act.overlayText = std::wstring(i18n.Pick(L"互换左右分栏: ", L"互換左右分欄: ", L"Swap Left/Right: ", L"左右ペイン入替: ")) + L"[" + title0 + L"] <-> [" + title1 + L"]";
                 }
             } else {
                 if (ry > totalH * 0.75) {
                     act.type = PaneDragActionType::DualVertical_To_DualHorizontal;
                     act.overlayRect = { rcMulti.left, rcMulti.top + totalH / 2, rcMulti.right, rcMulti.bottom };
-                    act.overlayText = isZh ? L"转换为上下双栏 (下方)" : L"Convert to Dual Horizontal (Bottom)";
+                    act.overlayText = i18n.Pick(L"转换为上下双栏 (下方)", L"轉換為上下雙欄 (下方)", L"Convert to Dual Horizontal (Bottom)", L"上下2分割へ変換 (下)");
                 }
             }
         } else if (paneIdx == 1) {
@@ -2184,19 +2194,18 @@ MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POIN
                 if (ry > totalH * 0.75) {
                     act.type = PaneDragActionType::DualVertical_To_DualHorizontal;
                     act.overlayRect = { rcMulti.left, rcMulti.top + totalH / 2, rcMulti.right, rcMulti.bottom };
-                    act.overlayText = isZh ? L"转换为上下双栏 (下方)" : L"Convert to Dual Horizontal (Bottom)";
+                    act.overlayText = i18n.Pick(L"转换为上下双栏 (下方)", L"轉換為上下雙欄 (下方)", L"Convert to Dual Horizontal (Bottom)", L"上下2分割へ変換 (下)");
                 } else {
                     act.type = PaneDragActionType::SwapPanes;
                     act.targetPaneIdx = 0;
                     act.overlayRect = rcLeft;
-                    act.overlayText = isZh ? (L"互换左右分栏: 【" + title1 + L"】⇄【" + title0 + L"】")
-                                           : (L"Swap Left/Right: [" + title1 + L"] <-> [" + title0 + L"]");
+                    act.overlayText = std::wstring(i18n.Pick(L"互换左右分栏: ", L"互換左右分欄: ", L"Swap Left/Right: ", L"左右ペイン入替: ")) + L"[" + title1 + L"] <-> [" + title0 + L"]";
                 }
             } else {
                 if (ry > totalH * 0.75) {
                     act.type = PaneDragActionType::SplitThreeRightBottom;
                     act.overlayRect = { midX, rcMulti.top + totalH / 2, rcMulti.right, rcMulti.bottom };
-                    act.overlayText = isZh ? L"拆分为三分栏 (右下)" : L"Split to 3 Panes (Bottom-Right)";
+                    act.overlayText = i18n.Pick(L"拆分为三分栏 (右下)", L"拆分為三分欄 (右下)", L"Split to 3 Panes (Bottom-Right)", L"3ペインに分割 (右下)");
                 }
             }
         }
@@ -2205,10 +2214,11 @@ MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POIN
         RECT rcTop = { rcMulti.left, rcMulti.top, rcMulti.right, midY };
         RECT rcBottom = { rcMulti.left, midY, rcMulti.right, rcMulti.bottom };
 
+        auto& i18n = I18n::Get();
         std::wstring title0 = ShellUtils::GetDisplayName(m_multiPane.GetPane(0).GetCurrentPath());
         std::wstring title1 = ShellUtils::GetDisplayName(m_multiPane.GetPane(1).GetCurrentPath());
-        if (title0.empty()) title0 = isZh ? L"上方分栏" : L"Top Pane";
-        if (title1.empty()) title1 = isZh ? L"下方分栏" : L"Bottom Pane";
+        if (title0.empty()) title0 = i18n.Pick(L"上方分栏", L"上方分欄", L"Top Pane", L"上ペイン");
+        if (title1.empty()) title1 = i18n.Pick(L"下方分栏", L"下方分欄", L"Bottom Pane", L"下ペイン");
 
         if (paneIdx == 0) {
             // Dragging top pane
@@ -2216,19 +2226,18 @@ MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POIN
                 if (rx > totalW * 0.75) {
                     act.type = PaneDragActionType::DualHorizontal_To_DualVertical;
                     act.overlayRect = { rcMulti.left + totalW / 2, rcMulti.top, rcMulti.right, rcMulti.bottom };
-                    act.overlayText = isZh ? L"转换为左右双栏 (右侧)" : L"Convert to Dual Vertical (Right)";
+                    act.overlayText = i18n.Pick(L"转换为左右双栏 (右侧)", L"轉換為左右雙欄 (右側)", L"Convert to Dual Vertical (Right)", L"左右2分割へ変換 (右)");
                 } else {
                     act.type = PaneDragActionType::SwapPanes;
                     act.targetPaneIdx = 1;
                     act.overlayRect = rcBottom;
-                    act.overlayText = isZh ? (L"互换上下分栏: 【" + title0 + L"】⇄【" + title1 + L"】")
-                                           : (L"Swap Top/Bottom: [" + title0 + L"] <-> [" + title1 + L"]");
+                    act.overlayText = std::wstring(i18n.Pick(L"互换上下分栏: ", L"互換上下分欄: ", L"Swap Top/Bottom: ", L"上下ペイン入替: ")) + L"[" + title0 + L"] <-> [" + title1 + L"]";
                 }
             } else {
                 if (rx > totalW * 0.75) {
                     act.type = PaneDragActionType::DualHorizontal_To_DualVertical;
                     act.overlayRect = { rcMulti.left + totalW / 2, rcMulti.top, rcMulti.right, rcMulti.bottom };
-                    act.overlayText = isZh ? L"转换为左右双栏 (右侧)" : L"Convert to Dual Vertical (Right)";
+                    act.overlayText = i18n.Pick(L"转换为左右双栏 (右侧)", L"轉換為左右雙欄 (右側)", L"Convert to Dual Vertical (Right)", L"左右2分割へ変換 (右)");
                 }
             }
         } else if (paneIdx == 1) {
@@ -2237,23 +2246,23 @@ MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POIN
                 if (rx > totalW * 0.75) {
                     act.type = PaneDragActionType::DualHorizontal_To_DualVertical;
                     act.overlayRect = { rcMulti.left + totalW / 2, rcMulti.top, rcMulti.right, rcMulti.bottom };
-                    act.overlayText = isZh ? L"转换为左右双栏 (右侧)" : L"Convert to Dual Vertical (Right)";
+                    act.overlayText = i18n.Pick(L"转换为左右双栏 (右侧)", L"轉換為左右雙欄 (右側)", L"Convert to Dual Vertical (Right)", L"左右2分割へ変換 (右)");
                 } else {
                     act.type = PaneDragActionType::SwapPanes;
                     act.targetPaneIdx = 0;
                     act.overlayRect = rcTop;
-                    act.overlayText = isZh ? (L"互换上下分栏: 【" + title1 + L"】⇄【" + title0 + L"】")
-                                           : (L"Swap Top/Bottom: [" + title1 + L"] <-> [" + title0 + L"]");
+                    act.overlayText = std::wstring(i18n.Pick(L"互换上下分栏: ", L"互換上下分欄: ", L"Swap Top/Bottom: ", L"上下ペイン入替: ")) + L"[" + title1 + L"] <-> [" + title0 + L"]";
                 }
             } else {
                 if (rx > totalW * 0.75) {
                     act.type = PaneDragActionType::SplitQuad;
                     act.overlayRect = { rcMulti.left + totalW / 2, rcMulti.top, rcMulti.right, rcMulti.bottom };
-                    act.overlayText = isZh ? L"拆分为四分栏网格" : L"Split to 4 Panes Grid";
+                    act.overlayText = i18n.Pick(L"拆分为四分栏网格", L"拆分為四分欄網格", L"Split to 4 Panes Grid", L"4分割ペインへ分割");
                 }
             }
         }
     } else if (curLayout == PaneLayout::ThreeLeft) {
+        auto& i18n = I18n::Get();
         int midX = rcMulti.left + totalW / 2;
         int midY = rcMulti.top + totalH / 2;
         if (paneIdx == 0) {
@@ -2263,35 +2272,35 @@ MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POIN
                 act.overlayRect = (ptScreen.y < midY)
                     ? RECT{ midX, rcMulti.top, rcMulti.right, midY }
                     : RECT{ midX, midY, rcMulti.right, rcMulti.bottom };
-                act.overlayText = isZh ? L"交换左侧分栏与右侧分栏" : L"Swap Left Pane with Right Pane";
+                act.overlayText = i18n.Pick(L"交换左侧分栏与右侧分栏", L"交換左側分欄與右側分欄", L"Swap Left Pane with Right Pane", L"左右のペインを入れ替え");
             } else if (ry > totalH * 0.75) {
                 act.type = PaneDragActionType::SplitQuad;
                 act.overlayRect = { rcMulti.left, rcMulti.top + totalH / 2, midX, rcMulti.bottom };
-                act.overlayText = isZh ? L"扩展为四分栏 (左下)" : L"Expand to 4 Panes (Bottom-Left)";
+                act.overlayText = i18n.Pick(L"扩展为四分栏 (左下)", L"擴展為四分欄 (左下)", L"Expand to 4 Panes (Bottom-Left)", L"4分割ペインへ拡張 (左下)");
             }
         } else if (paneIdx == 1) {
             if (ptScreen.x < midX) {
                 act.type = PaneDragActionType::SwapPanes;
                 act.targetPaneIdx = 0;
                 act.overlayRect = { rcMulti.left, rcMulti.top, midX, rcMulti.bottom };
-                act.overlayText = isZh ? L"交换右上分栏与左侧主分栏" : L"Swap Top-Right with Main Pane";
+                act.overlayText = i18n.Pick(L"交换右上分栏与左侧主分栏", L"交換右上分欄與左側主分欄", L"Swap Top-Right with Main Pane", L"右上とメイン ペインを入れ替え");
             } else if (ptScreen.y >= midY) {
                 act.type = PaneDragActionType::SwapPanes;
                 act.targetPaneIdx = 2;
                 act.overlayRect = { midX, midY, rcMulti.right, rcMulti.bottom };
-                act.overlayText = isZh ? L"互换右上与右下分栏" : L"Swap Top-Right and Bottom-Right";
+                act.overlayText = i18n.Pick(L"互换右上与右下分栏", L"互換右上與右下分欄", L"Swap Top-Right and Bottom-Right", L"右上と右下のペインを入れ替え");
             }
         } else if (paneIdx == 2) {
             if (ptScreen.x < midX) {
                 act.type = PaneDragActionType::SwapPanes;
                 act.targetPaneIdx = 0;
                 act.overlayRect = { rcMulti.left, rcMulti.top, midX, rcMulti.bottom };
-                act.overlayText = isZh ? L"交换右下分栏与左侧主分栏" : L"Swap Bottom-Right with Main Pane";
+                act.overlayText = i18n.Pick(L"交换右下分栏与左侧主分栏", L"交換右下分欄與左側主分欄", L"Swap Bottom-Right with Main Pane", L"右下とメイン ペインを入れ替え");
             } else if (ptScreen.y < midY) {
                 act.type = PaneDragActionType::SwapPanes;
                 act.targetPaneIdx = 1;
                 act.overlayRect = { midX, rcMulti.top, rcMulti.right, midY };
-                act.overlayText = isZh ? L"互换右上与右下分栏" : L"Swap Top-Right and Bottom-Right";
+                act.overlayText = i18n.Pick(L"互换右上与右下分栏", L"互換右上與右下分欄", L"Swap Top-Right and Bottom-Right", L"右上と右下のペインを入れ替え");
             }
         }
     } else if (curLayout == PaneLayout::Quad) {
@@ -2319,8 +2328,7 @@ MainWindow::PaneDragAction MainWindow::CalculatePaneDropAction(int paneIdx, POIN
             act.overlayRect = rcQ;
             std::wstring tA = ShellUtils::GetDisplayName(m_multiPane.GetPane(paneIdx).GetCurrentPath());
             std::wstring tB = ShellUtils::GetDisplayName(m_multiPane.GetPane(hoverQ).GetCurrentPath());
-            act.overlayText = isZh ? (L"互换分栏位置: 【" + tA + L"】⇄【" + tB + L"】")
-                                   : (L"Swap Panes: [" + tA + L"] <-> [" + tB + L"]");
+            act.overlayText = std::wstring(I18n::Get().Pick(L"互换分栏位置: ", L"互換分欄位置: ", L"Swap Panes: ", L"ペイン入替: ")) + L"[" + tA + L"] <-> [" + tB + L"]";
         }
     }
 
@@ -2441,31 +2449,31 @@ void MainWindow::ToggleLinksBar() {
 }
 
 void MainWindow::ShowToolbarContextMenu(POINT ptScreen) {
-    bool isZh = I18n::Get().IsChinese();
+    auto& i18n = I18n::Get();
     HMENU hMenu = CreatePopupMenu();
     AppendMenuW(hMenu, MF_STRING | (Config::Get().lockToolbars ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_LOCK_TOOLBARS, isZh ? L"锁定工具栏(&L)" : L"Lock Toolbars(&L)");
+                ID_VIEW_LOCK_TOOLBARS, i18n.Pick(L"锁定工具栏(&L)", L"鎖定工具列(&L)", L"Lock Toolbars(&L)", L"ツールバーを固定(&L)"));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
     // Toolbar arrangement
     HMENU hArrSub = CreatePopupMenu();
     AppendMenuW(hArrSub, MF_STRING | (!Config::Get().searchBarFirst ? MF_CHECKED : MF_UNCHECKED),
-                1101, isZh ? L"地址栏在前，搜索栏在后" : L"Address Bar First, Search Bar Second");
+                1101, i18n.Pick(L"地址栏在前，搜索栏在后", L"網址列在前，搜尋列在後", L"Address Bar First, Search Bar Second", L"アドレス バーを左、検索バーを右"));
     AppendMenuW(hArrSub, MF_STRING | (Config::Get().searchBarFirst ? MF_CHECKED : MF_UNCHECKED),
-                1102, isZh ? L"搜索栏在前，地址栏在后" : L"Search Bar First, Address Bar Second");
+                1102, i18n.Pick(L"搜索栏在前，地址栏在后", L"搜尋列在前，網址列在後", L"Search Bar First, Address Bar Second", L"検索バーを左、アドレス バーを右"));
     AppendMenuW(hArrSub, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hArrSub, MF_STRING, 1103, isZh ? L"重置工具栏默认位置与宽度(&R)" : L"Reset Toolbar Layout(&R)");
-    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hArrSub, isZh ? L"排列方式(&A)" : L"Arrangement(&A)");
+    AppendMenuW(hArrSub, MF_STRING, 1103, i18n.Pick(L"重置工具栏默认位置与宽度(&R)", L"重設工具列預設位置與寬度(&R)", L"Reset Toolbar Layout(&R)", L"ツールバーの配置をリセット(&R)"));
+    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hArrSub, i18n.Pick(L"排列方式(&A)", L"排列方式(&A)", L"Arrangement(&A)", L"配置(&A)"));
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING | (m_linksVisible ? MF_CHECKED : MF_UNCHECKED),
-                1001, isZh ? L"显示链接栏(&K)" : L"Show Links Bar(&K)");
+                1001, i18n.Pick(L"显示链接栏(&K)", L"顯示連結列(&K)", L"Show Links Bar(&K)", L"リンク バーを表示(&K)"));
     AppendMenuW(hMenu, MF_STRING | (m_treeVisible ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_TREE_TOGGLE, isZh ? L"显示文件夹目录树(&T)\tF8" : L"Show Directory Tree(&T)\tF8");
+                ID_VIEW_TREE_TOGGLE, i18n.Pick(L"显示文件夹目录树(&T)\tF8", L"顯示資料夾目錄樹(&T)\tF8", L"Show Directory Tree(&T)\tF8", L"フォルダー ツリーを表示(&T)\tF8"));
     AppendMenuW(hMenu, MF_STRING | (m_previewVisible ? MF_CHECKED : MF_UNCHECKED),
-                ID_VIEW_PREVIEW_TOGGLE, isZh ? L"显示快速预览窗格(&P)\tAlt+P" : L"Show Preview Pane(&P)\tAlt+P");
+                ID_VIEW_PREVIEW_TOGGLE, i18n.Pick(L"显示快速预览窗格(&P)\tAlt+P", L"顯示快速預覽窗格(&P)\tAlt+P", L"Show Preview Pane(&P)\tAlt+P", L"プレビュー ウィンドウを表示(&P)\tAlt+P"));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hMenu, MF_STRING, ID_TOOLS_SETTINGS, isZh ? L"选项设置(&O)..." : L"Options(&O)...");
+    AppendMenuW(hMenu, MF_STRING, ID_TOOLS_SETTINGS, i18n.Pick(L"选项设置(&O)...", L"選項設定(&O)...", L"Options(&O)...", L"オプション(&O)..."));
 
     int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, ptScreen.x, ptScreen.y, 0, m_hwnd, nullptr);
     DestroyMenu(hMenu);
@@ -2608,7 +2616,6 @@ void MainWindow::OnCommand(UINT cmdId) {
         RECT rcBtn;
         GetWindowRect(m_hwndBtnMenu, &rcBtn);
         HMENU hPopup = CreatePopupMenu();
-        bool isZh = I18n::Get().IsChinese();
 
         if (m_hMenuBar) {
             int count = GetMenuItemCount(m_hMenuBar);
@@ -2623,7 +2630,7 @@ void MainWindow::OnCommand(UINT cmdId) {
         }
         AppendMenuW(hPopup, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(hPopup, MF_STRING | (Config::Get().showMenuBar ? MF_CHECKED : MF_UNCHECKED),
-                    ID_VIEW_TOGGLE_MENUBAR, isZh ? L"显示传统明文菜单栏(&M)" : L"Show Classic Menu Bar(&M)");
+                    ID_VIEW_TOGGLE_MENUBAR, I18n::Get().Pick(L"显示传统明文菜单栏(&M)", L"顯示傳統功能表列(&M)", L"Show Classic Menu Bar(&M)", L"クラシック メニュー バーを表示(&M)"));
 
         TrackPopupMenu(hPopup, TPM_LEFTALIGN | TPM_TOPALIGN, rcBtn.left, rcBtn.bottom, 0, m_hwnd, nullptr);
 
@@ -2651,8 +2658,16 @@ void MainWindow::OnCommand(UINT cmdId) {
         I18n::Get().SetLanguage(Language::Chinese);
         UpdateLanguageUI();
         break;
+    case ID_LANG_ZH_TW:
+        I18n::Get().SetLanguage(Language::TraditionalChinese);
+        UpdateLanguageUI();
+        break;
     case ID_LANG_EN:
         I18n::Get().SetLanguage(Language::English);
+        UpdateLanguageUI();
+        break;
+    case ID_LANG_JA:
+        I18n::Get().SetLanguage(Language::Japanese);
         UpdateLanguageUI();
         break;
 
@@ -2921,12 +2936,13 @@ void MainWindow::OnCommand(UINT cmdId) {
         break;
     }
     case ID_FILE_NEW_MD: {
-        bool isZh = I18n::Get().IsChinese();
-        std::wstring baseName = isZh ? L"新建 Markdown 文档.md" : L"New Markdown Document.md";
+        auto& i18n = I18n::Get();
+        std::wstring baseName = i18n.Pick(L"新建 Markdown 文档.md", L"新增 Markdown 文件.md", L"New Markdown Document.md", L"新しい Markdown ドキュメント.md");
+        std::wstring prefix = i18n.Pick(L"\\新建 Markdown 文档 (", L"\\新增 Markdown 文件 (", L"\\New Markdown (", L"\\新しい Markdown ドキュメント (");
         std::wstring newFile = activeView->GetCurrentPath() + L"\\" + baseName;
         int idx = 2;
         while (PathFileExistsW(newFile.c_str())) {
-            newFile = activeView->GetCurrentPath() + (isZh ? (L"\\新建 Markdown 文档 (" + std::to_wstring(idx++) + L").md") : (L"\\New Markdown (" + std::to_wstring(idx++) + L").md"));
+            newFile = activeView->GetCurrentPath() + prefix + std::to_wstring(idx++) + L").md";
         }
         HANDLE hF = CreateFileW(newFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hF != INVALID_HANDLE_VALUE) {
@@ -3210,11 +3226,13 @@ void MainWindow::OnCommand(UINT cmdId) {
         break;
     case ID_TOOLS_RESTORE_EXPLORER: {
         ShellUtils::SetExplorerReplaced(false);
-        bool isZh = I18n::Get().IsChinese();
+        auto& i18n = I18n::Get();
         MessageBoxW(m_hwnd,
-            isZh ? L"已成功恢复系统默认资源管理器关联。\nWindows 将恢复使用原生资源管理器打开文件夹。"
-                 : L"Windows Explorer default associations restored successfully.",
-            isZh ? L"恢复默认关联" : L"Restore Explorer Defaults",
+            i18n.Pick(L"已成功恢复系统默认资源管理器关联。\nWindows 将恢复使用原生资源管理器打开文件夹。",
+                      L"已成功還原系統預設檔案總管關聯。\nWindows 將恢復使用原生檔案總管開啟資料夾。",
+                      L"Windows Explorer default associations restored successfully.",
+                      L"エクスプローラーの既定の関連付けを復元しました。"),
+            i18n.Pick(L"恢复默认关联", L"還原預設關聯", L"Restore Explorer Defaults", L"既定の関連付けを復元"),
             MB_OK | MB_ICONINFORMATION);
         break;
     }
@@ -3801,10 +3819,10 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             POINT pt;
             GetCursorPos(&pt);
             HMENU hMenu = CreatePopupMenu();
-            bool isZh = I18n::Get().IsChinese();
-            AppendMenuW(hMenu, MF_STRING, 5001, isZh ? L"显示主界面(&O)" : L"Show NeoMDIE(&O)");
+            auto& i18n = I18n::Get();
+            AppendMenuW(hMenu, MF_STRING, 5001, i18n.Pick(L"显示主界面(&O)", L"顯示主視窗(&O)", L"Show NeoMDIE(&O)", L"NeoMDIE を表示(&O)"));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, 5002, isZh ? L"退出(&X)" : L"Exit(&X)");
+            AppendMenuW(hMenu, MF_STRING, 5002, i18n.Pick(L"退出(&X)", L"結束(&X)", L"Exit(&X)", L"終了(&X)"));
             SetForegroundWindow(hwnd);
             int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
             DestroyMenu(hMenu);
@@ -3894,6 +3912,22 @@ LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             AddTrayIcon();
             ShowWindow(hwnd, SW_HIDE);
             return 0;
+        }
+        if (ShellUtils::HasActiveFileOperations()) {
+            auto& i18n = I18n::Get();
+            int res = MessageBoxW(
+                hwnd,
+                i18n.Pick(L"当前仍有文件正在复制或移动中。\n\n如果现在关闭，将中止传输并自动清理未完成的文件。\n是否确认中止传输并退出？\n（点击“否”可继续等待传输完成）",
+                          L"目前仍有檔案正在複製或移動中。\n\n如果現在關閉，將中止傳輸並自動清理未完成的檔案。\n是否確認中止傳輸並結束？\n（點擊「否」可繼續等待傳輸完成）",
+                          L"A file copy or move operation is still in progress.\n\nClosing now will abort the transfer and clean up incomplete files.\nDo you want to abort and exit?\n(Click No to continue waiting)",
+                          L"ファイルのコピーまたは移動が実行中です。\n\n今すぐ閉じると転送を中止し、未完了のファイルを自動的に削除します。\n中止して終了しますか？\n（「いいえ」で転送の完了を待ちます）"),
+                L"NeoMDIE",
+                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+            if (res != IDYES) {
+                return 0;
+            }
+            ShellUtils::CancelAllFileOperations();
+            ShellUtils::WaitForActiveFileOperations(5000);
         }
         bool wasHiddenInTray = m_hasTrayIcon || !IsWindowVisible(hwnd);
         bool wasMaximized = wasHiddenInTray ? m_wasMaximizedBeforeTray : (IsZoomed(hwnd) != FALSE);

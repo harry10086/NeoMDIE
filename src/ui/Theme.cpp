@@ -219,7 +219,7 @@ HFONT Theme::GetUIFont(HWND hwnd) {
         if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0) && ncm.lfMessageFont.lfFaceName[0] != L'\0') {
             StringCchCopyW(lf.lfFaceName, LF_FACESIZE, ncm.lfMessageFont.lfFaceName);
         } else {
-            StringCchCopyW(lf.lfFaceName, LF_FACESIZE, I18n::Get().IsChinese() ? L"Microsoft YaHei UI" : L"Segoe UI");
+            StringCchCopyW(lf.lfFaceName, LF_FACESIZE, I18n::Get().Pick(L"Microsoft YaHei UI", L"Microsoft JhengHei UI", L"Segoe UI", L"Yu Gothic UI"));
         }
 
         // Upgrade legacy Microsoft YaHei to Microsoft YaHei UI for clean, crisp rendering without stroke artifacts

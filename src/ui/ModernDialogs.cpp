@@ -15,7 +15,7 @@
 
 namespace ModernDialogs {
 
-static const wchar_t* CURRENT_VERSION = L"v1.1.4";
+static const wchar_t* CURRENT_VERSION = L"v1.1.5";
 static const wchar_t* REPO_URL = L"https://github.com/harry10086/NeoMDIE";
 static const wchar_t* RELEASES_URL = L"https://github.com/harry10086/NeoMDIE/releases";
 static const wchar_t* AUTHOR_URL = L"https://mianao.info";
@@ -165,7 +165,7 @@ static LRESULT CALLBACK AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         FillRect(memDC, &rcClient, Theme::Get().BrushBackground());
         SetBkMode(memDC, TRANSPARENT);
 
-        bool isZh = I18n::Get().IsChinese();
+        auto& i18n = I18n::Get();
         bool isDark = Theme::Get().IsDarkMode();
         int pad = Theme::Get().Scale(22, hwnd);
         int iconSz = Theme::Get().Scale(48, hwnd);
@@ -199,14 +199,16 @@ static LRESULT CALLBACK AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         Theme::DrawSmoothRoundRect(memDC, rcPill, Theme::Get().Scale(11, hwnd), pillBg, Theme::Get().ClrAccent(), 1.0f);
         SelectObject(memDC, hBoldFont);
         SetTextColor(memDC, Theme::Get().ClrAccent());
-        DrawTextW(memDC, L"v1.1.4 (x64)", -1, &rcPill, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(memDC, L"v1.1.5 (x64)", -1, &rcPill, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
         // Subtitle
         SelectObject(memDC, hUiFont);
         SetTextColor(memDC, Theme::Get().ClrTextSecondary());
         RECT rcSub = { textX, pad + Theme::Get().Scale(28, hwnd), rcClient.right - pad, pad + Theme::Get().Scale(48, hwnd) };
-        DrawTextW(memDC, isZh ? L"现代化原生 Win32 多标签多栏文件管理器"
-                              : L"Modern Native Win32 Tabbed & Multi-Pane File Manager",
+        DrawTextW(memDC, i18n.Pick(L"现代化原生 Win32 多标签多栏文件管理器",
+                                   L"現代化原生 Win32 多分頁多欄檔案管理員",
+                                   L"Modern Native Win32 Tabbed & Multi-Pane File Manager",
+                                   L"モダン ネイティブ Win32 タブ＆マルチペイン ファイラー"),
                   -1, &rcSub, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         // 2. Rounded Info Card (cleanly encloses all 5 rows)
@@ -250,11 +252,11 @@ static LRESULT CALLBACK AboutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             rowY += rowH;
         };
 
-        drawRow(isZh ? L"作    者" : L"Author", L"Harry (https://mianao.info)", true, st ? st->hoverAuthor : false, st ? &st->rcAuthorLink : nullptr);
-        drawRow(isZh ? L"开源仓库" : L"GitHub", L"https://github.com/harry10086/NeoMDIE", true, st ? st->hoverRepo : false, st ? &st->rcRepoLink : nullptr);
-        drawRow(isZh ? L"致敬经典" : L"Inspired", L"MDIE (Multiple Document Interface Explorer)", false, false, nullptr);
-        drawRow(isZh ? L"技术架构" : L"Tech", L"Pure C++17 / Native Win32 / Shell COM", false, false, nullptr);
-        drawRow(isZh ? L"开源协议" : L"License", L"GNU General Public License v3 (GPLv3)", false, false, nullptr);
+        drawRow(i18n.Pick(L"作    者", L"作    者", L"Author", L"作者"), L"Harry (https://mianao.info)", true, st ? st->hoverAuthor : false, st ? &st->rcAuthorLink : nullptr);
+        drawRow(i18n.Pick(L"开源仓库", L"開源倉庫", L"GitHub", L"GitHub"), L"https://github.com/harry10086/NeoMDIE", true, st ? st->hoverRepo : false, st ? &st->rcRepoLink : nullptr);
+        drawRow(i18n.Pick(L"致敬经典", L"致敬經典", L"Inspired", L"リスペクト"), L"MDIE (Multiple Document Interface Explorer)", false, false, nullptr);
+        drawRow(i18n.Pick(L"技术架构", L"技術架構", L"Tech", L"技術構成"), L"Pure C++17 / Native Win32 / Shell COM", false, false, nullptr);
+        drawRow(i18n.Pick(L"开源协议", L"開源授權", L"License", L"ライセンス"), L"GNU General Public License v3 (GPLv3)", false, false, nullptr);
 
         SelectObject(memDC, oldFont);
         DeleteObject(hTitleFont);
@@ -298,7 +300,6 @@ void ShowAbout(HWND hwndParent) {
         RegisterClassExW(&wc);
     }
 
-    bool isZh = I18n::Get().IsChinese();
     AboutState st;
     st.hwndParent = hwndParent;
 
@@ -308,7 +309,7 @@ void ShowAbout(HWND hwndParent) {
 
     HWND hwndDlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME, ABOUT_CLASS,
-        isZh ? L"关于 NeoMDIE" : L"About NeoMDIE",
+        I18n::Get().Pick(L"关于 NeoMDIE", L"關於 NeoMDIE", L"About NeoMDIE", L"NeoMDIE について"),
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
         0, 0, 100, 100, hwndParent, nullptr, hInst, &st);
     if (!hwndDlg) return;
@@ -361,13 +362,22 @@ struct UpdateDialogState {
 };
 
 static void StartAsyncUpdateCheck(HWND hwndDlg, std::shared_ptr<std::atomic<bool>> alive) {
-    bool isZh = I18n::Get().IsChinese();
-    std::thread([hwndDlg, alive, isZh]() {
+    std::wstring errInit = I18n::Get().Pick(
+        L"无法初始化网络连接，请检查系统网络设置。",
+        L"無法初始化網路連線，請檢查系統網路設定。",
+        L"Failed to initialize internet connection.",
+        L"ネットワーク接続の初期化に失敗しました。");
+    std::wstring errConnect = I18n::Get().Pick(
+        L"无法连接到 GitHub 服务器，请稍后重试或访问 Releases。",
+        L"無法連線至 GitHub 伺服器，請稍後重試或前往 Releases。",
+        L"Unable to connect to GitHub. Retry or open Releases.",
+        L"GitHub サーバーに接続できません。後でもう一度お試しください。");
+    std::thread([hwndDlg, alive, errInit, errConnect]() {
         auto* pRes = new UpdateCheckResult();
         HINTERNET hInternet = InternetOpenW(L"NeoMDIE-UpdateChecker", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
         if (!hInternet) {
             pRes->status = UpdateCheckStatus::Error;
-            pRes->errorMsg = isZh ? L"无法初始化网络连接，请检查系统网络设置。" : L"Failed to initialize internet connection.";
+            pRes->errorMsg = errInit;
         } else {
             DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_SECURE;
             HINTERNET hUrl = InternetOpenUrlW(hInternet,
@@ -377,8 +387,7 @@ static void StartAsyncUpdateCheck(HWND hwndDlg, std::shared_ptr<std::atomic<bool
             if (!hUrl) {
                 InternetCloseHandle(hInternet);
                 pRes->status = UpdateCheckStatus::Error;
-                pRes->errorMsg = isZh ? L"无法连接到 GitHub 服务器，请稍后重试或访问 Releases。"
-                                      : L"Unable to connect to GitHub. Retry or open Releases.";
+                pRes->errorMsg = errConnect;
             } else {
                 std::string json;
                 char buffer[2048];
@@ -434,7 +443,7 @@ static void StartAsyncUpdateCheck(HWND hwndDlg, std::shared_ptr<std::atomic<bool
 
 static void LayoutUpdateButtons(HWND hwnd, UpdateDialogState* st) {
     if (!st) return;
-    bool isZh = I18n::Get().IsChinese();
+    auto& i18n = I18n::Get();
     RECT rcClient = { 0 };
     GetClientRect(hwnd, &rcClient);
     int cw = rcClient.right - rcClient.left;
@@ -450,13 +459,13 @@ static void LayoutUpdateButtons(HWND hwnd, UpdateDialogState* st) {
         ShowWindow(st->hBtnPrimary, SW_HIDE);
         ShowWindow(st->hBtnSecondary, SW_SHOW);
         int btnW = Theme::Get().Scale(136, hwnd);
-        SetWindowTextW(st->hBtnSecondary, isZh ? L"访问 Releases" : L"Open Releases");
+        SetWindowTextW(st->hBtnSecondary, i18n.Pick(L"访问 Releases", L"前往 Releases", L"Open Releases", L"Releases を開く"));
         MoveWindow(st->hBtnSecondary, (cw - btnW) / 2, btnY, btnW, btnH, TRUE);
     } else if (st->status == UpdateCheckStatus::UpdateAvailable) {
         ShowWindow(st->hBtnSecondary, SW_HIDE);
         ShowWindow(st->hBtnPrimary, SW_SHOW);
         int btnW = Theme::Get().Scale(136, hwnd);
-        SetWindowTextW(st->hBtnPrimary, isZh ? L"前往下载" : L"Download");
+        SetWindowTextW(st->hBtnPrimary, i18n.Pick(L"前往下载", L"前往下載", L"Download", L"ダウンロード"));
         MoveWindow(st->hBtnPrimary, (cw - btnW) / 2, btnY, btnW, btnH, TRUE);
     } else { // Error: centered pair [Retry] [Open Releases]
         ShowWindow(st->hBtnSecondary, SW_SHOW);
@@ -464,9 +473,9 @@ static void LayoutUpdateButtons(HWND hwnd, UpdateDialogState* st) {
         int w1 = Theme::Get().Scale(96, hwnd);
         int w2 = Theme::Get().Scale(132, hwnd);
         int startX = (cw - (w1 + gap + w2)) / 2;
-        SetWindowTextW(st->hBtnSecondary, isZh ? L"重试" : L"Retry");
+        SetWindowTextW(st->hBtnSecondary, i18n.Pick(L"重试", L"重試", L"Retry", L"再試行"));
         MoveWindow(st->hBtnSecondary, startX, btnY, w1, btnH, TRUE);
-        SetWindowTextW(st->hBtnPrimary, isZh ? L"打开 Releases" : L"Open Releases");
+        SetWindowTextW(st->hBtnPrimary, i18n.Pick(L"打开 Releases", L"開啟 Releases", L"Open Releases", L"Releases を開く"));
         MoveWindow(st->hBtnPrimary, startX + w1 + gap, btnY, w2, btnH, TRUE);
     }
 }
@@ -532,7 +541,7 @@ static LRESULT CALLBACK UpdateWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         FillRect(memDC, &rcClient, Theme::Get().BrushBackground());
         SetBkMode(memDC, TRANSPARENT);
 
-        bool isZh = I18n::Get().IsChinese();
+        auto& i18n = I18n::Get();
         bool isDark = Theme::Get().IsDarkMode();
         int pad = Theme::Get().Scale(22, hwnd);
 
@@ -547,24 +556,24 @@ static LRESULT CALLBACK UpdateWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         if (curStatus == UpdateCheckStatus::Checking) {
             glyph[0] = (wchar_t)0xE895;
             badgeClr = Theme::Get().ClrAccent();
-            heading = isZh ? L"正在检查更新..." : L"Checking for Updates...";
-            subHeading = isZh ? L"正在连接 GitHub 获取最新发布版本信息" : L"Connecting to GitHub Releases API";
+            heading = i18n.Pick(L"正在检查更新...", L"正在檢查更新...", L"Checking for Updates...", L"更新を確認中...");
+            subHeading = i18n.Pick(L"正在连接 GitHub 获取最新发布版本信息", L"正在連線至 GitHub 取得最新版本資訊", L"Connecting to GitHub Releases API", L"GitHub Releases API に接続しています");
         } else if (curStatus == UpdateCheckStatus::UpToDate) {
             glyph[0] = (wchar_t)0xE73E;
             badgeClr = RGB(16, 152, 72);
-            heading = isZh ? L"当前已是最新版本" : L"You Are Up to Date";
-            subHeading = isZh ? L"您的 NeoMDIE 已是官方最新稳定版本，无需更新" : L"No newer updates are currently available";
+            heading = i18n.Pick(L"当前已是最新版本", L"目前已是最新版本", L"You Are Up to Date", L"最新バージョンです");
+            subHeading = i18n.Pick(L"您的 NeoMDIE 已是官方最新稳定版本，无需更新", L"您的 NeoMDIE 已是官方最新穩定版本，無需更新", L"No newer updates are currently available", L"お使いの NeoMDIE は最新バージョンです");
         } else if (curStatus == UpdateCheckStatus::UpdateAvailable) {
             glyph[0] = (wchar_t)0xE896;
             badgeClr = Theme::Get().ClrAccent();
-            heading = isZh ? (L"发现新版本: " + st->tagName) : (L"New Version Available: " + st->tagName);
-            subHeading = isZh ? L"点击“前往下载”即可打开 GitHub 发布页获取最新版" : L"Click Download to open the GitHub Release page";
+            heading = std::wstring(i18n.Pick(L"发现新版本: ", L"發現新版本: ", L"New Version Available: ", L"新しいバージョン: ")) + st->tagName;
+            subHeading = i18n.Pick(L"点击“前往下载”即可打开 GitHub 发布页获取最新版", L"點擊「前往下載」即可開啟 GitHub 發佈頁面取得最新版", L"Click Download to open the GitHub Release page", L"「ダウンロード」をクリックして GitHub ページを開きます");
         } else {
             glyph[0] = (wchar_t)0xE7BA;
             badgeClr = RGB(216, 128, 16);
-            heading = isZh ? L"检查更新失败" : L"Update Check Failed";
+            heading = i18n.Pick(L"检查更新失败", L"檢查更新失敗", L"Update Check Failed", L"更新の確認に失敗しました");
             subHeading = (st && !st->detailMsg.empty()) ? st->detailMsg
-                       : (isZh ? L"无法连接到 GitHub 服务器" : L"Unable to connect to GitHub");
+                       : i18n.Pick(L"无法连接到 GitHub 服务器", L"無法連線至 GitHub 伺服器", L"Unable to connect to GitHub", L"GitHub サーバーに接続できません");
         }
 
         COLORREF badgeBg = isDark ? RGB(
@@ -626,15 +635,15 @@ static LRESULT CALLBACK UpdateWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             rowY += rowH;
         };
 
-        drawInfo(isZh ? L"当前版本" : L"Current", std::wstring(CURRENT_VERSION) + L" (x64 Release)", Theme::Get().ClrTextPrimary());
+        drawInfo(i18n.Pick(L"当前版本", L"目前版本", L"Current", L"現在の版"), std::wstring(CURRENT_VERSION) + L" (x64 Release)", Theme::Get().ClrTextPrimary());
         if (curStatus == UpdateCheckStatus::Checking) {
-            drawInfo(isZh ? L"最新版本" : L"Latest", isZh ? L"正在查询..." : L"Checking...", Theme::Get().ClrTextSecondary());
+            drawInfo(i18n.Pick(L"最新版本", L"最新版本", L"Latest", L"最新版"), i18n.Pick(L"正在查询...", L"正在查詢...", L"Checking...", L"確認中..."), Theme::Get().ClrTextSecondary());
         } else if (curStatus == UpdateCheckStatus::UpToDate) {
-            drawInfo(isZh ? L"最新版本" : L"Latest", st->tagName.empty() ? std::wstring(CURRENT_VERSION) : st->tagName, RGB(16, 152, 72));
+            drawInfo(i18n.Pick(L"最新版本", L"最新版本", L"Latest", L"最新版"), st->tagName.empty() ? std::wstring(CURRENT_VERSION) : st->tagName, RGB(16, 152, 72));
         } else if (curStatus == UpdateCheckStatus::UpdateAvailable) {
-            drawInfo(isZh ? L"最新版本" : L"Latest", st->tagName, Theme::Get().ClrAccent());
+            drawInfo(i18n.Pick(L"最新版本", L"最新版本", L"Latest", L"最新版"), st->tagName, Theme::Get().ClrAccent());
         } else {
-            drawInfo(isZh ? L"发布地址" : L"Releases", RELEASES_URL, Theme::Get().ClrTextSecondary());
+            drawInfo(i18n.Pick(L"发布地址", L"發佈位址", L"Releases", L"配布先"), RELEASES_URL, Theme::Get().ClrTextSecondary());
         }
 
         SelectObject(memDC, oldFont);
@@ -703,7 +712,6 @@ void ShowCheckUpdates(HWND hwndParent) {
         RegisterClassExW(&wc);
     }
 
-    bool isZh = I18n::Get().IsChinese();
     UpdateDialogState st;
     st.hwndParent = hwndParent;
 
@@ -713,7 +721,7 @@ void ShowCheckUpdates(HWND hwndParent) {
 
     HWND hwndDlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME, UPDATE_CLASS,
-        isZh ? L"检查更新" : L"Check for Updates",
+        I18n::Get().Pick(L"检查更新", L"檢查更新", L"Check for Updates", L"アップデートの確認"),
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
         0, 0, 100, 100, hwndParent, nullptr, hInst, &st);
     if (!hwndDlg) return;

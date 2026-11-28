@@ -151,15 +151,16 @@ bool ScriptEngine::ExecuteCommand(UINT cmdId, const std::wstring& activePath, co
 }
 
 bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstring& activePath, const std::vector<std::wstring>& selectedFiles, const std::vector<std::wstring>& panePaths) {
-    bool isZh = I18n::Get().IsChinese();
-
     // Validate active directory
     std::wstring workingDir = activePath;
     if (workingDir.empty() || workingDir == L"This PC" || workingDir == L"此电脑" || !PathFileExistsW(workingDir.c_str())) {
         MessageBoxW(m_hwndMain,
-            isZh ? L"请先在标签页中进入一个具体的本地磁盘或文件夹目录（而不是“此电脑”），再执行该扩展脚本。"
-                 : L"Please navigate to a valid local directory before running this script.",
-            isZh ? L"脚本执行提示" : L"Script Execution Notice",
+            I18n::Get().Pick(
+                L"请先在标签页中进入一个具体的本地磁盘或文件夹目录（而不是“此电脑”），再执行该扩展脚本。",
+                L"請先在分頁中進入一個具體的本機磁碟或資料夾目錄（而不是「本機」），再執行該擴充腳本。",
+                L"Please navigate to a valid local directory before running this script.",
+                L"有効なローカル ディレクトリに移動してからスクリプトを実行してください。"),
+            I18n::Get().Pick(L"脚本执行提示", L"腳本執行提示", L"Script Execution Notice", L"スクリプト実行通知"),
             MB_OK | MB_ICONINFORMATION);
         return false;
     }
@@ -305,7 +306,7 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
                           wOutput.find(L"Fail") != std::wstring::npos ||
                           wOutput.find(L"fail") != std::wstring::npos);
             if (isErr) {
-                MessageBoxW(m_hwndMain, wOutput.c_str(), isZh ? L"脚本提示" : L"Script Notice",
+                MessageBoxW(m_hwndMain, wOutput.c_str(), I18n::Get().Pick(L"脚本提示", L"腳本提示", L"Script Notice", L"スクリプト通知"),
                             MB_OK | MB_ICONWARNING);
             }
         } else {
@@ -313,9 +314,9 @@ bool ScriptEngine::ExecuteScript(const std::wstring& filePath, const std::wstrin
         }
     } else {
         DWORD err = GetLastError();
-        std::wstring errText = isZh ? (L"脚本启动失败，错误代码: " + std::to_wstring(err)) : (L"Failed to start script, error code: " + std::to_wstring(err));
+        std::wstring errText = std::wstring(I18n::Get().Pick(L"脚本启动失败，错误代码: ", L"腳本啟動失敗，錯誤代碼: ", L"Failed to start script, error code: ", L"スクリプトの起動に失敗しました。エラーコード: ")) + std::to_wstring(err);
         Log(errText);
-        MessageBoxW(m_hwndMain, errText.c_str(), isZh ? L"脚本错误" : L"Script Error", MB_OK | MB_ICONERROR);
+        MessageBoxW(m_hwndMain, errText.c_str(), I18n::Get().Pick(L"脚本错误", L"腳本錯誤", L"Script Error", L"スクリプト エラー"), MB_OK | MB_ICONERROR);
 
         if (!tempScriptPath.empty()) {
             DeleteFileW(tempScriptPath.c_str());

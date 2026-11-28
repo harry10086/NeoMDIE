@@ -234,18 +234,18 @@ HWND FileListView::Create(HWND hwndParent, int id) {
 }
 
 static std::wstring GetColumnTitle(ColumnId id) {
-    bool isZh = I18n::Get().IsChinese();
+    auto& i18n = I18n::Get();
     switch (id) {
-    case ColumnId::Name:         return isZh ? L"名称" : L"Name";
-    case ColumnId::DateModified: return isZh ? L"修改日期" : L"Date modified";
-    case ColumnId::Type:         return isZh ? L"类型" : L"Type";
-    case ColumnId::Size:         return isZh ? L"大小" : L"Size";
-    case ColumnId::DateCreated:  return isZh ? L"创建日期" : L"Date created";
-    case ColumnId::Attributes:   return isZh ? L"属性" : L"Attributes";
-    case ColumnId::Authors:      return isZh ? L"作者" : L"Authors";
-    case ColumnId::Title:        return isZh ? L"标题" : L"Title";
-    case ColumnId::Tags:         return isZh ? L"标记" : L"Tags";
-    case ColumnId::Path:         return isZh ? L"文件夹路径" : L"Folder path";
+    case ColumnId::Name:         return i18n.Pick(L"名称", L"名稱", L"Name", L"名前");
+    case ColumnId::DateModified: return i18n.Pick(L"修改日期", L"修改日期", L"Date modified", L"更新日時");
+    case ColumnId::Type:         return i18n.Pick(L"类型", L"類型", L"Type", L"種類");
+    case ColumnId::Size:         return i18n.Pick(L"大小", L"大小", L"Size", L"サイズ");
+    case ColumnId::DateCreated:  return i18n.Pick(L"创建日期", L"建立日期", L"Date created", L"作成日時");
+    case ColumnId::Attributes:   return i18n.Pick(L"属性", L"屬性", L"Attributes", L"属性");
+    case ColumnId::Authors:      return i18n.Pick(L"作者", L"作者", L"Authors", L"作成者");
+    case ColumnId::Title:        return i18n.Pick(L"标题", L"標題", L"Title", L"タイトル");
+    case ColumnId::Tags:         return i18n.Pick(L"标记", L"標記", L"Tags", L"タグ");
+    case ColumnId::Path:         return i18n.Pick(L"文件夹路径", L"資料夾路徑", L"Folder path", L"フォルダー パス");
     default:                     return L"";
     }
 }
@@ -280,11 +280,14 @@ static LRESULT CALLBACK ChooseDetailsWndProc(HWND hwnd, UINT msg, WPARAM wParam,
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
     case WM_CREATE: {
-        bool isZh = I18n::Get().IsChinese();
+        auto& i18n = I18n::Get();
         HFONT hFont = Theme::Get().GetUIFont(hwnd);
 
         HWND hLabel = CreateWindowExW(0, WC_STATICW,
-            isZh ? L"选择要在该文件夹中为此窗口显示的详细信息(&S):" : L"Select the details you want to display for the items in this folder(&S):",
+            i18n.Pick(L"选择要在该文件夹中为此窗口显示的详细信息(&S):",
+                      L"選擇要在此資料夾中為此視窗顯示的詳細資料(&S):",
+                      L"Select the details you want to display for the items in this folder(&S):",
+                      L"このフォルダーの項目に表示する詳細を選択してください(&S):"),
             WS_CHILD | WS_VISIBLE, 15, 15, 340, 20, hwnd, nullptr, nullptr, nullptr);
         SendMessageW(hLabel, WM_SETFONT, (WPARAM)hFont, TRUE);
 
@@ -318,12 +321,12 @@ static LRESULT CALLBACK ChooseDetailsWndProc(HWND hwnd, UINT msg, WPARAM wParam,
             ListView_SetCheckState(hList, i, checked ? TRUE : FALSE);
         }
 
-        HWND hBtnOk = CreateWindowExW(0, WC_BUTTONW, isZh ? L"确定" : L"OK",
+        HWND hBtnOk = CreateWindowExW(0, WC_BUTTONW, i18n.T(StringId::SettingsBtnOK),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
             185, 375, 80, 28, hwnd, (HMENU)IDOK, nullptr, nullptr);
         SendMessageW(hBtnOk, WM_SETFONT, (WPARAM)hFont, TRUE);
 
-        HWND hBtnCancel = CreateWindowExW(0, WC_BUTTONW, isZh ? L"取消" : L"Cancel",
+        HWND hBtnCancel = CreateWindowExW(0, WC_BUTTONW, i18n.T(StringId::SettingsBtnCancel),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
             275, 375, 80, 28, hwnd, (HMENU)IDCANCEL, nullptr, nullptr);
         SendMessageW(hBtnCancel, WM_SETFONT, (WPARAM)hFont, TRUE);
@@ -359,7 +362,6 @@ static LRESULT CALLBACK ChooseDetailsWndProc(HWND hwnd, UINT msg, WPARAM wParam,
 }
 
 void FileListView::ShowChooseColumnsDialog() {
-    bool isZh = I18n::Get().IsChinese();
     WNDCLASSEXW wc = { sizeof(wc) };
     HINSTANCE hInst = GetModuleHandleW(nullptr);
     if (!GetClassInfoExW(hInst, L"NeoMDIE_ChooseDetails", &wc)) {
@@ -384,7 +386,7 @@ void FileListView::ShowChooseColumnsDialog() {
 
     HWND hDlg = CreateWindowExW(
         WS_EX_DLGMODALFRAME, L"NeoMDIE_ChooseDetails",
-        isZh ? L"选择详细信息" : L"Choose Details",
+        I18n::Get().Pick(L"选择详细信息", L"選擇詳細資料", L"Choose Details", L"詳細表示の設定"),
         WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         x, y, dlgW, dlgH,
         m_hwndParent ? m_hwndParent : m_hwnd,
@@ -549,7 +551,7 @@ void FileListView::ApplyItemCheckBoxes() {
 }
 
 void FileListView::ShowColumnHeaderMenu(POINT ptScreen) {
-    bool isZh = I18n::Get().IsChinese();
+    auto& i18n = I18n::Get();
     HMENU hMenu = CreatePopupMenu();
 
     for (int i = 0; i < (int)ColumnId::Count; ++i) {
@@ -568,8 +570,8 @@ void FileListView::ShowColumnHeaderMenu(POINT ptScreen) {
     }
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(hMenu, MF_STRING, 10, isZh ? L"自动调整所有列宽(&A)" : L"Size All Columns to Fit(&A)");
-    AppendMenuW(hMenu, MF_STRING, 20, isZh ? L"其他(&M)..." : L"More(&M)...");
+    AppendMenuW(hMenu, MF_STRING, 10, i18n.Pick(L"自动调整所有列宽(&A)", L"自動調整所有欄寬(&A)", L"Size All Columns to Fit(&A)", L"すべての列のサイズを合わせる(&A)"));
+    AppendMenuW(hMenu, MF_STRING, 20, i18n.Pick(L"其他(&M)...", L"其他(&M)...", L"More(&M)...", L"その他(&M)..."));
 
     int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, ptScreen.x, ptScreen.y, 0, m_hwnd, nullptr);
     DestroyMenu(hMenu);
@@ -924,6 +926,8 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
         if (isVirtual && ShellUtils::GetCachedShellNamespace(normalized, m_showHidden, cachedItems, m_hideDotFiles)) {
             // Instant cache hit! No UI freeze, no repeated USB MTP queries
             m_isNavLoading = false;
+            m_showNavLoadingCard = false;
+            KillTimer(m_hwnd, 706);
             m_allItems = std::move(cachedItems);
             SortItems();
             UpdateHeaderSortArrow();
@@ -948,15 +952,18 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
         }
 
         m_isNavLoading = true;
+        m_showNavLoadingCard = false;
+        SetTimer(m_hwnd, 706, 250, nullptr);
         m_allItems.clear();
         m_filteredIndices.clear();
         ListView_SetItemCountEx(m_hwnd, 0, 0);
         ListView_SetItemState(m_hwnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
 
         if (onStatusText) {
+            auto& i18n = I18n::Get();
             onStatusText(isVirtual
-                ? (I18n::Get().IsChinese() ? L"正在读取便携设备..." : L"Reading portable device...")
-                : (I18n::Get().IsChinese() ? L"正在连接网络共享目录..." : L"Connecting to network share..."));
+                ? i18n.Pick(L"正在读取便携设备...", L"正在讀取可攜式裝置...", L"Reading portable device...", L"ポータブル デバイスを読み取り中...")
+                : i18n.Pick(L"正在连接网络共享目录...", L"正在連線網路共用目錄...", L"Connecting to network share...", L"ネットワーク共有に接続中..."));
         }
 
         if (onPathChanged) {
@@ -981,6 +988,8 @@ bool FileListView::NavigateTo(const std::wstring& path, bool recordHistory, cons
     }
 
     m_isNavLoading = false;
+    m_showNavLoadingCard = false;
+    KillTimer(m_hwnd, 706);
     std::vector<NeoShellItem> items;
     if (!ShellUtils::EnumerateDirectory(normalized, m_showHidden, items, m_hideDotFiles)) {
         return false;
@@ -1058,10 +1067,13 @@ void FileListView::Refresh() {
             ShellUtils::InvalidateVirtualShellCache(m_currentPath);
         }
         m_isNavLoading = true;
+        m_showNavLoadingCard = false;
+        SetTimer(m_hwnd, 706, 250, nullptr);
         if (onStatusText) {
+            auto& i18n = I18n::Get();
             onStatusText(isVirtual
-                ? (I18n::Get().IsChinese() ? L"正在刷新便携设备..." : L"Refreshing portable device...")
-                : (I18n::Get().IsChinese() ? L"正在刷新网络共享目录..." : L"Refreshing network share..."));
+                ? i18n.Pick(L"正在刷新便携设备...", L"正在重新整理可攜式裝置...", L"Refreshing portable device...", L"ポータブル デバイスを更新中...")
+                : i18n.Pick(L"正在刷新网络共享目录...", L"正在重新整理網路共用目錄...", L"Refreshing network share...", L"ネットワーク共有を更新中..."));
         }
         InvalidateRect(m_hwnd, nullptr, TRUE);
         int gen = ++m_navGeneration;
@@ -1870,7 +1882,7 @@ void FileListView::RestoreViewState(const PaneViewState& state) {
 void FileListView::NotifyStatus() {
     if (m_isNavLoading) {
         if (onStatusText) {
-            onStatusText(I18n::Get().IsChinese() ? L"正在连接网络共享目录..." : L"Connecting to network share...");
+            onStatusText(I18n::Get().Pick(L"正在连接网络共享目录...", L"正在連線網路共用目錄...", L"Connecting to network share...", L"ネットワーク共有に接続中..."));
         }
         return;
     }
@@ -1944,6 +1956,7 @@ void FileListView::SetFoldersFirst(bool foldersFirst) {
 void FileListView::DeleteSelected(bool permanent) {
     auto sel = GetSelectedPaths();
     if (!sel.empty()) {
+        if (onBeforeDelete) onBeforeDelete();
         if (ShellUtils::DeleteFiles(m_hwnd, sel, permanent)) {
             Refresh();
         }
@@ -1953,6 +1966,8 @@ void FileListView::DeleteSelected(bool permanent) {
 void FileListView::StartRename() {
     int selected = ListView_GetNextItem(m_hwnd, -1, LVNI_SELECTED);
     if (selected != -1) {
+        m_preventRenameOnActivate = false;
+        KillRenameTimer();
         SetFocus(m_hwnd);
         ListView_EditLabel(m_hwnd, selected);
     }
@@ -2145,12 +2160,13 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
             break;
         }
         case CMD_BG_NEW_FILE: {
-            bool isZh = I18n::Get().IsChinese();
-            std::wstring baseName = isZh ? L"新建 TXT 文档.txt" : L"New TXT Document.txt";
+            auto& i18n = I18n::Get();
+            std::wstring baseName = i18n.Pick(L"新建 TXT 文档.txt", L"新增文字文件.txt", L"New TXT Document.txt", L"新しいテキスト ドキュメント.txt");
+            std::wstring prefix = i18n.Pick(L"新建 TXT 文档 (", L"新增文字文件 (", L"New TXT Document (", L"新しいテキスト ドキュメント (");
             std::wstring newFile = Util::CombinePath(m_currentPath, baseName);
             int idx = 2;
             while (PathFileExistsW(newFile.c_str())) {
-                newFile = Util::CombinePath(m_currentPath, (isZh ? L"新建 TXT 文档 (" : L"New TXT Document (") + std::to_wstring(idx++) + L").txt");
+                newFile = Util::CombinePath(m_currentPath, prefix + std::to_wstring(idx++) + L").txt");
             }
             HANDLE hF = CreateFileW(newFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hF != INVALID_HANDLE_VALUE) {
@@ -2162,12 +2178,13 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
             break;
         }
         case CMD_BG_NEW_MD: {
-            bool isZh = I18n::Get().IsChinese();
-            std::wstring baseName = isZh ? L"新建 Markdown 文档.md" : L"New Markdown Document.md";
+            auto& i18n = I18n::Get();
+            std::wstring baseName = i18n.Pick(L"新建 Markdown 文档.md", L"新增 Markdown 文件.md", L"New Markdown Document.md", L"新しい Markdown ドキュメント.md");
+            std::wstring prefix = i18n.Pick(L"新建 Markdown 文档 (", L"新增 Markdown 文件 (", L"New Markdown Document (", L"新しい Markdown ドキュメント (");
             std::wstring newMd = Util::CombinePath(m_currentPath, baseName);
             int idx = 2;
             while (PathFileExistsW(newMd.c_str())) {
-                newMd = Util::CombinePath(m_currentPath, (isZh ? L"新建 Markdown 文档 (" : L"New Markdown Document (") + std::to_wstring(idx++) + L").md");
+                newMd = Util::CombinePath(m_currentPath, prefix + std::to_wstring(idx++) + L").md");
             }
             HANDLE hF = CreateFileW(newMd.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hF != INVALID_HANDLE_VALUE) {
@@ -2182,19 +2199,24 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
             break;
         }
         case CMD_BG_NEW_CSV: {
-            bool isZh = I18n::Get().IsChinese();
-            std::wstring baseName = isZh ? L"新建表格.csv" : L"New Spreadsheet.csv";
+            auto& i18n = I18n::Get();
+            std::wstring baseName = i18n.Pick(L"新建表格.csv", L"新增表格.csv", L"New Spreadsheet.csv", L"新しいスプレッドシート.csv");
+            std::wstring prefix = i18n.Pick(L"新建表格 (", L"新增表格 (", L"New Spreadsheet (", L"新しいスプレッドシート (");
             std::wstring newCsv = Util::CombinePath(m_currentPath, baseName);
             int idx = 2;
             while (PathFileExistsW(newCsv.c_str())) {
-                newCsv = Util::CombinePath(m_currentPath, (isZh ? L"新建表格 (" : L"New Spreadsheet (") + std::to_wstring(idx++) + L").csv");
+                newCsv = Util::CombinePath(m_currentPath, prefix + std::to_wstring(idx++) + L").csv");
             }
             HANDLE hF = CreateFileW(newCsv.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hF != INVALID_HANDLE_VALUE) {
                 const unsigned char bom[] = { 0xEF, 0xBB, 0xBF };
                 DWORD written = 0;
                 WriteFile(hF, bom, sizeof(bom), &written, nullptr);
-                std::string header = isZh ? "序号,项目名称,创建时间,备注\r\n" : "ID,Name,CreatedTime,Notes\r\n";
+                std::string header = Util::WideToUtf8(i18n.Pick(
+                    L"序号,项目名称,创建时间,备注\r\n",
+                    L"序號,項目名稱,建立時間,備註\r\n",
+                    L"ID,Name,CreatedTime,Notes\r\n",
+                    L"番号,項目名,作成日時,備考\r\n"));
                 WriteFile(hF, header.c_str(), (DWORD)header.length(), &written, nullptr);
                 CloseHandle(hF);
                 Refresh();
@@ -2204,12 +2226,13 @@ void FileListView::OnItemRightClicked(POINT ptScreen) {
             break;
         }
         case CMD_BG_NEW_RTF: {
-            bool isZh = I18n::Get().IsChinese();
-            std::wstring baseName = isZh ? L"新建富文本文档.rtf" : L"New Rich Text.rtf";
+            auto& i18n = I18n::Get();
+            std::wstring baseName = i18n.Pick(L"新建富文本文档.rtf", L"新增 RTF 文件.rtf", L"New Rich Text.rtf", L"新しいリッチ テキスト.rtf");
+            std::wstring prefix = i18n.Pick(L"新建富文本文档 (", L"新增 RTF 文件 (", L"New Rich Text (", L"新しいリッチ テキスト (");
             std::wstring newRtf = Util::CombinePath(m_currentPath, baseName);
             int idx = 2;
             while (PathFileExistsW(newRtf.c_str())) {
-                newRtf = Util::CombinePath(m_currentPath, (isZh ? L"新建富文本文档 (" : L"New Rich Text (") + std::to_wstring(idx++) + L").rtf");
+                newRtf = Util::CombinePath(m_currentPath, prefix + std::to_wstring(idx++) + L").rtf");
             }
             HANDLE hF = CreateFileW(newRtf.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (hF != INVALID_HANDLE_VALUE) {
@@ -2658,7 +2681,7 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
     }
     case WM_PAINT: {
         LRESULT res = DefSubclassProc(hwnd, msg, wParam, lParam);
-        if (pThis && pThis->m_isNavLoading) {
+        if (pThis && pThis->m_isNavLoading && pThis->m_showNavLoadingCard) {
             HDC hdc = GetDC(hwnd);
             if (hdc) {
                 RECT rcClient;
@@ -2707,9 +2730,11 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
                 HFONT hFont = Theme::Get().GetUIFont(hwnd);
                 HGDIOBJ oldFont = SelectObject(hdc, hFont);
                 SetTextColor(hdc, Theme::Get().ClrTextPrimary());
-                std::wstring prompt = I18n::Get().IsChinese()
-                    ? L"正在连接网络共享目录，请稍候..."
-                    : L"Connecting to network share, please wait...";
+                std::wstring prompt = I18n::Get().Pick(
+                    L"正在连接网络共享目录，请稍候...",
+                    L"正在連線網路共用目錄，請稍候...",
+                    L"Connecting to network share, please wait...",
+                    L"ネットワーク共有に接続しています...");
                 DrawTextW(hdc, prompt.c_str(), -1, &rcText, DT_CENTER | DT_TOP | DT_SINGLELINE);
                 SelectObject(hdc, oldFont);
 
@@ -3298,6 +3323,14 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         break;
     }
     case WM_TIMER: {
+        if (wParam == 706) {
+            KillTimer(hwnd, 706);
+            if (pThis && pThis->m_isNavLoading) {
+                pThis->m_showNavLoadingCard = true;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (wParam == 705) {
             KillTimer(hwnd, 705);
             if (pThis && pThis->m_renameTargetItem >= 0) {
@@ -3309,6 +3342,10 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         }
         if (wParam == 701 || wParam == 702 || wParam == 703) {
             KillTimer(hwnd, wParam);
+            if (pThis && ListView_GetEditControl(hwnd) != nullptr) {
+                pThis->m_pendingRefreshAfterRename = true;
+                return 0;
+            }
             pThis->Refresh();
             return 0;
         }
@@ -3343,8 +3380,13 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
         auto* pResult = (FileListView::AsyncNavResult*)lParam;
         if (pResult) {
             if (pResult->generation == pThis->m_navGeneration && pResult->path == pThis->m_currentPath) {
+                KillTimer(pThis->m_hwnd, 706);
+                bool wasShowingCard = pThis->m_showNavLoadingCard;
                 pThis->m_isNavLoading = false;
-                InvalidateRect(pThis->m_hwnd, nullptr, TRUE);
+                pThis->m_showNavLoadingCard = false;
+                if (wasShowingCard) {
+                    InvalidateRect(pThis->m_hwnd, nullptr, TRUE);
+                }
                 if (pResult->success) {
                     pThis->m_allItems = std::move(pResult->items);
                     pThis->SortItems();
@@ -3376,7 +3418,7 @@ LRESULT CALLBACK FileListView::ListSubclassProc(HWND hwnd, UINT msg, WPARAM wPar
                     pThis->m_allItems.clear();
                     pThis->ApplyFilter();
                     if (pThis->onStatusText) {
-                        pThis->onStatusText(I18n::Get().IsChinese() ? L"无法访问网络共享路径" : L"Cannot access network share");
+                        pThis->onStatusText(I18n::Get().Pick(L"无法访问网络共享路径", L"無法存取網路共用路徑", L"Cannot access network share", L"ネットワーク共有にアクセスできません"));
                     }
                 }
             }
@@ -3610,15 +3652,22 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
 
             case LVN_ENDLABELEDITW: {
                 NMLVDISPINFOW* pDisp = (NMLVDISPINFOW*)lParam;
+                bool didRefresh = false;
                 if (pDisp->item.pszText && wcslen(pDisp->item.pszText) > 0) {
                     int row = pDisp->item.iItem;
                     if (row >= 0 && row < (int)pThis->m_filteredIndices.size()) {
                         int idx = pThis->m_filteredIndices[row];
                         const auto& item = pThis->m_allItems[idx];
                         if (ShellUtils::RenameItem(pThis->m_hwnd, item.fullPath, pDisp->item.pszText)) {
+                            pThis->m_pendingRefreshAfterRename = false;
                             pThis->Refresh();
+                            didRefresh = true;
                         }
                     }
+                }
+                if (!didRefresh && pThis->m_pendingRefreshAfterRename) {
+                    pThis->m_pendingRefreshAfterRename = false;
+                    SetTimer(pThis->m_hwnd, 703, 50, nullptr);
                 }
                 return FALSE;
             }
@@ -4154,8 +4203,13 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
         auto* pResult = (FileListView::AsyncNavResult*)lParam;
         if (pResult) {
             if (pResult->generation == pThis->m_navGeneration && pResult->path == pThis->m_currentPath) {
+                KillTimer(pThis->m_hwnd, 706);
+                bool wasShowingCard = pThis->m_showNavLoadingCard;
                 pThis->m_isNavLoading = false;
-                InvalidateRect(pThis->m_hwnd, nullptr, TRUE);
+                pThis->m_showNavLoadingCard = false;
+                if (wasShowingCard) {
+                    InvalidateRect(pThis->m_hwnd, nullptr, TRUE);
+                }
                 if (pResult->success) {
                     pThis->m_allItems = std::move(pResult->items);
                     pThis->SortItems();
@@ -4187,7 +4241,7 @@ LRESULT CALLBACK FileListView::ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wP
                     pThis->m_allItems.clear();
                     pThis->ApplyFilter();
                     if (pThis->onStatusText) {
-                        pThis->onStatusText(I18n::Get().IsChinese() ? L"无法访问网络共享路径" : L"Cannot access network share");
+                        pThis->onStatusText(I18n::Get().Pick(L"无法访问网络共享路径", L"無法存取網路共用路徑", L"Cannot access network share", L"ネットワーク共有にアクセスできません"));
                     }
                 }
             }

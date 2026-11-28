@@ -412,34 +412,34 @@ void TabBar::ShowTabContextMenu(int index, POINT ptScreen) {
 
   HMENU hMenu = CreatePopupMenu();
   bool pinned = m_tabs[index].isPinned;
-  bool isZh = I18n::Get().IsChinese();
+  auto& i18n = I18n::Get();
 
   AppendMenuW(hMenu, MF_STRING | (pinned ? MF_GRAYED : 0), 1,
-              I18n::Get().T(StringId::TabMenuClose));
-  AppendMenuW(hMenu, MF_STRING, 2, I18n::Get().T(StringId::TabMenuCloseOthers));
-  AppendMenuW(hMenu, MF_STRING, 3, I18n::Get().T(StringId::TabMenuCloseRight));
+              i18n.T(StringId::TabMenuClose));
+  AppendMenuW(hMenu, MF_STRING, 2, i18n.T(StringId::TabMenuCloseOthers));
+  AppendMenuW(hMenu, MF_STRING, 3, i18n.T(StringId::TabMenuCloseRight));
   AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(hMenu, MF_STRING, 4,
-              pinned ? I18n::Get().T(StringId::TabMenuUnpin)
-                     : I18n::Get().T(StringId::TabMenuPin));
-  AppendMenuW(hMenu, MF_STRING, 5, I18n::Get().T(StringId::TabMenuDuplicate));
+              pinned ? i18n.T(StringId::TabMenuUnpin)
+                     : i18n.T(StringId::TabMenuPin));
+  AppendMenuW(hMenu, MF_STRING, 5, i18n.T(StringId::TabMenuDuplicate));
 
   // Tab Color submenu
   HMENU hColorSub = CreatePopupMenu();
-  AppendMenuW(hColorSub, MF_STRING, 101, isZh ? L"天蓝色" : L"Azure Blue");
-  AppendMenuW(hColorSub, MF_STRING, 102, isZh ? L"翡翠绿" : L"Emerald Green");
-  AppendMenuW(hColorSub, MF_STRING, 103, isZh ? L"珊瑚红" : L"Coral Red");
-  AppendMenuW(hColorSub, MF_STRING, 104, isZh ? L"高雅紫" : L"Purple");
-  AppendMenuW(hColorSub, MF_STRING, 105, isZh ? L"活力橙" : L"Orange");
-  AppendMenuW(hColorSub, MF_STRING, 106, isZh ? L"薄荷青" : L"Teal");
-  AppendMenuW(hColorSub, MF_STRING, 107, isZh ? L"蔷薇粉" : L"Pink");
+  AppendMenuW(hColorSub, MF_STRING, 101, i18n.Pick(L"天蓝色", L"天藍色", L"Azure Blue", L"スカイブルー"));
+  AppendMenuW(hColorSub, MF_STRING, 102, i18n.Pick(L"翡翠绿", L"翡翠綠", L"Emerald Green", L"エメラルド"));
+  AppendMenuW(hColorSub, MF_STRING, 103, i18n.Pick(L"珊瑚红", L"珊瑚紅", L"Coral Red", L"コーラルレッド"));
+  AppendMenuW(hColorSub, MF_STRING, 104, i18n.Pick(L"高雅紫", L"高雅紫", L"Purple", L"パープル"));
+  AppendMenuW(hColorSub, MF_STRING, 105, i18n.Pick(L"活力橙", L"活力橙", L"Orange", L"オレンジ"));
+  AppendMenuW(hColorSub, MF_STRING, 106, i18n.Pick(L"薄荷青", L"薄荷青", L"Teal", L"ティール"));
+  AppendMenuW(hColorSub, MF_STRING, 107, i18n.Pick(L"蔷薇粉", L"薔薇粉", L"Pink", L"ピンク"));
   AppendMenuW(hColorSub, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(hColorSub, MF_STRING, 110,
-              isZh ? L"随机新颜色(&R)" : L"Random Color(&R)");
+              i18n.Pick(L"随机新颜色(&R)", L"隨機新顏色(&R)", L"Random Color(&R)", L"ランダムな色(&R)"));
   AppendMenuW(hColorSub, MF_STRING, 120,
-              isZh ? L"自定义颜色(&O)..." : L"Choose Custom Color(&O)...");
+              i18n.Pick(L"自定义颜色(&O)...", L"自訂顏色(&O)...", L"Choose Custom Color(&O)...", L"カスタムカラー(&O)..."));
   AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hColorSub,
-              isZh ? L"标签颜色(&C)" : L"Tab Color(&C)");
+              i18n.Pick(L"标签颜色(&C)", L"分頁顏色(&C)", L"Tab Color(&C)", L"タブの色(&C)"));
 
   AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(hMenu, MF_STRING, 6, I18n::Get().T(StringId::TabMenuCopyPath));
@@ -1349,23 +1349,24 @@ LRESULT TabBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam,
     POINT ptScreen = pt;
     ClientToScreen(hwnd, &ptScreen);
     HMENU hMenu = CreatePopupMenu();
-    bool isZh = I18n::Get().IsChinese();
+    auto& i18n = I18n::Get();
     AppendMenuW(hMenu, MF_STRING, 1,
-                isZh ? L"新建标签页(&T)\tCtrl+T" : L"New Tab(&T)\tCtrl+T");
+                i18n.Pick(L"新建标签页(&T)\tCtrl+T", L"新增分頁(&T)\tCtrl+T", L"New Tab(&T)\tCtrl+T", L"新しいタブ(&T)\tCtrl+T"));
     AppendMenuW(hMenu, MF_STRING | (m_closedHistory.empty() ? MF_GRAYED : 0), 2,
-                isZh ? L"恢复关闭的标签页(&R)\tCtrl+Shift+T"
-                     : L"Reopen Closed Tab(&R)\tCtrl+Shift+T");
+                i18n.Pick(L"恢复关闭的标签页(&R)\tCtrl+Shift+T",
+                          L"還原已關閉的分頁(&R)\tCtrl+Shift+T",
+                          L"Reopen Closed Tab(&R)\tCtrl+Shift+T",
+                          L"閉じたタブを再度開く(&R)\tCtrl+Shift+T"));
     AppendMenuW(hMenu, MF_STRING, 3,
-                isZh ? L"关闭其他标签页(&O)" : L"Close Other Tabs(&O)");
+                i18n.Pick(L"关闭其他标签页(&O)", L"關閉其他分頁(&O)", L"Close Other Tabs(&O)", L"他のタブを閉じる(&O)"));
     AppendMenuW(hMenu, MF_STRING, 4,
-                isZh ? L"关闭当前标签页(&W)\tCtrl+W"
-                     : L"Close Current Tab(&W)\tCtrl+W");
+                i18n.Pick(L"关闭当前标签页(&W)\tCtrl+W", L"關閉目前分頁(&W)\tCtrl+W", L"Close Current Tab(&W)\tCtrl+W", L"現在のタブを閉じる(&W)\tCtrl+W"));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, 5,
-                isZh ? L"打开命令CMD(&C)" : L"Open CMD(&C)");
+                i18n.Pick(L"打开命令CMD(&C)", L"開啟命令提示字元 CMD(&C)", L"Open CMD(&C)", L"コマンド プロンプトを開く(&C)"));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, 6,
-                isZh ? L"NeoMDIE 设置(&S)..." : L"NeoMDIE Settings(&S)...");
+                i18n.Pick(L"NeoMDIE 设置(&S)...", L"NeoMDIE 設定(&S)...", L"NeoMDIE Settings(&S)...", L"NeoMDIE 設定(&S)..."));
 
     int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, ptScreen.x,
                              ptScreen.y, 0, hwnd, nullptr);

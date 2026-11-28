@@ -132,6 +132,9 @@ namespace ShellUtils {
     bool HasCutFiles();
     void BlendRectWithColor(HDC hdc, const RECT& rc, COLORREF clr, BYTE alpha);
     bool CopyOrMoveFiles(HWND hwndOwner, const std::wstring& destDir, const std::vector<std::wstring>& srcFiles, bool isMove);
+    bool HasActiveFileOperations();
+    void CancelAllFileOperations();
+    bool WaitForActiveFileOperations(DWORD timeoutMs);
 
     // Undo Operations
     bool ExecuteUndo(HWND hwnd);

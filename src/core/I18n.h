@@ -3,7 +3,9 @@
 
 enum class Language {
     Chinese = 0,
-    English = 1
+    English = 1,
+    TraditionalChinese = 2,
+    Japanese = 3
 };
 
 enum class StringId {
@@ -107,6 +109,8 @@ enum class StringId {
     MenuLanguage,
     MenuLangChinese,
     MenuLangEnglish,
+    MenuLangTraditionalChinese,
+    MenuLangJapanese,
     MenuHelp,
     MenuAbout,
     MenuHelpShortcuts,
@@ -156,7 +160,10 @@ public:
     void SetLanguage(Language lang);
     Language GetLanguage() const { return m_lang; }
     bool IsChinese() const { return m_lang == Language::Chinese; }
+    bool IsTraditionalChinese() const { return m_lang == Language::TraditionalChinese; }
+    bool IsJapanese() const { return m_lang == Language::Japanese; }
 
+    const wchar_t* Pick(const wchar_t* zhCN, const wchar_t* zhTW, const wchar_t* en, const wchar_t* ja) const;
     const wchar_t* T(StringId id) const;
 
     // Callback when language changes

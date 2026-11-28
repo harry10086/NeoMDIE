@@ -225,7 +225,7 @@ STDMETHODIMP DropTarget::Drop(IDataObject* pDataObj, DWORD grfKeyState, POINTL p
                 std::wstring fn = PathFindFileNameW(f.c_str());
                 std::wstring linkPath = targetDir;
                 if (linkPath.back() != L'\\') linkPath += L'\\';
-                linkPath += fn + (I18n::Get().IsChinese() ? L" - 快捷方式.lnk" : L" - Shortcut.lnk");
+                linkPath += fn + I18n::Get().Pick(L" - 快捷方式.lnk", L" - 捷徑.lnk", L" - Shortcut.lnk", L" - ショートカット.lnk");
                 ShellUtils::CreateShortcut(linkPath, f);
             }
             SHChangeNotify(SHCNE_UPDATEDIR, SHCNF_PATHW, targetDir.c_str(), nullptr);

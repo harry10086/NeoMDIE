@@ -113,6 +113,7 @@ public:
   std::function<void(const std::wstring &statusText)> onStatusText;
   std::function<void(GestureAction action)> onGestureAction;
   std::function<void(int neoCmd, const std::wstring &path)> onCustomCommand;
+  std::function<void()> onBeforeDelete;
 
 private:
   static LRESULT CALLBACK ParentSubclassProc(HWND hwnd, UINT msg, WPARAM wParam,
@@ -175,6 +176,7 @@ private:
 
   int m_dropHighlightItem = -1;
   bool m_preventRenameOnActivate = false;
+  bool m_pendingRefreshAfterRename = false;
   DropTarget *m_pDropTarget = nullptr;
   void StartDragDrop(int itemIndex);
 
@@ -195,6 +197,7 @@ private:
 
   std::atomic<int> m_navGeneration{0};
   bool m_isNavLoading = false;
+  bool m_showNavLoadingCard = false;
 
   std::atomic<int> m_iconNavGeneration{0};
   std::thread m_iconThread;

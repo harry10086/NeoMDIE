@@ -110,7 +110,7 @@ void LinksBar::UpdateTooltip(int index) {
 
     if (index == -2) {
         ti.uFlags = TTF_SUBCLASS;
-        std::wstring tip = I18n::Get().IsChinese() ? L"快捷链接" : L"Quick Links";
+        std::wstring tip = I18n::Get().Pick(L"快捷链接", L"快速連結", L"Quick Links", L"クイック リンク");
         ti.lpszText = (LPWSTR)tip.c_str();
         ti.rect = m_rcIcon;
 
@@ -519,22 +519,22 @@ LRESULT LinksBar::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
         }
 
-        bool isZh = I18n::Get().IsChinese();
+        auto& i18n = I18n::Get();
         HMENU hMenu = CreatePopupMenu();
 
         if (hitIndex >= 0) {
-            AppendMenuW(hMenu, MF_STRING, 1, isZh ? L"打开(&O)" : L"Open(&O)");
-            AppendMenuW(hMenu, MF_STRING, 2, isZh ? L"在新标签页中打开(&T)" : L"Open in New Tab(&T)");
-            AppendMenuW(hMenu, MF_STRING, 7, isZh ? L"在后台新标签页中打开(&B)" : L"Open in Background Tab(&B)");
-            AppendMenuW(hMenu, MF_STRING, 3, isZh ? L"在新栏中打开(&S)" : L"Open in New Pane(&S)");
+            AppendMenuW(hMenu, MF_STRING, 1, i18n.Pick(L"打开(&O)", L"開啟(&O)", L"Open(&O)", L"開く(&O)"));
+            AppendMenuW(hMenu, MF_STRING, 2, i18n.Pick(L"在新标签页中打开(&T)", L"在新分頁中開啟(&T)", L"Open in New Tab(&T)", L"新しいタブで開く(&T)"));
+            AppendMenuW(hMenu, MF_STRING, 7, i18n.Pick(L"在后台新标签页中打开(&B)", L"在背景新分頁中開啟(&B)", L"Open in Background Tab(&B)", L"バックグラウンド タブで開く(&B)"));
+            AppendMenuW(hMenu, MF_STRING, 3, i18n.Pick(L"在新栏中打开(&S)", L"在新窗格中開啟(&S)", L"Open in New Pane(&S)", L"新しいペインで開く(&S)"));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, 4, isZh ? L"复制路径(&C)" : L"Copy Path(&C)");
-            AppendMenuW(hMenu, MF_STRING, 6, isZh ? L"自定义文字颜色(&K)..." : L"Set Custom Color(&K)...");
+            AppendMenuW(hMenu, MF_STRING, 4, i18n.Pick(L"复制路径(&C)", L"複製路徑(&C)", L"Copy Path(&C)", L"パスをコピー(&C)"));
+            AppendMenuW(hMenu, MF_STRING, 6, i18n.Pick(L"自定义文字颜色(&K)...", L"自訂文字顏色(&K)...", L"Set Custom Color(&K)...", L"文字色を設定(&K)..."));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, 5, isZh ? L"从链接栏移除(&D)" : L"Remove from Links Bar(&D)");
+            AppendMenuW(hMenu, MF_STRING, 5, i18n.Pick(L"从链接栏移除(&D)", L"從連結列移除(&D)", L"Remove from Links Bar(&D)", L"リンク バーから削除(&D)"));
         } else {
-            AppendMenuW(hMenu, MF_STRING, 10, isZh ? L"添加当前目录到链接栏(&A)" : L"Add Current Folder(&A)");
-            AppendMenuW(hMenu, MF_STRING, 11, isZh ? L"重置为默认链接(&R)" : L"Reset to Default Links(&R)");
+            AppendMenuW(hMenu, MF_STRING, 10, i18n.Pick(L"添加当前目录到链接栏(&A)", L"將目前目錄加入連結列(&A)", L"Add Current Folder(&A)", L"現在のフォルダーを追加(&A)"));
+            AppendMenuW(hMenu, MF_STRING, 11, i18n.Pick(L"重置为默认链接(&R)", L"重設為預設連結(&R)", L"Reset to Default Links(&R)", L"既定のリンクにリセット(&R)"));
         }
 
         int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON, ptScreen.x, ptScreen.y, 0, hwnd, nullptr);

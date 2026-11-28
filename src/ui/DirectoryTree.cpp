@@ -1015,13 +1015,13 @@ LRESULT CALLBACK DirectoryTree::TreeSubclassProc(HWND hwnd, UINT msg,
         TreeNodeData *pData = (TreeNodeData *)item.lParam;
         if (pData) {
           if (pData->path == L"QuickAccess") {
-            bool isZh = I18n::Get().IsChinese();
+            auto& i18n = I18n::Get();
             bool isExpanded = (item.state & TVIS_EXPANDED) != 0;
             HMENU hMenu = CreatePopupMenu();
-            AppendMenuW(hMenu, MF_STRING, 201, isExpanded ? (isZh ? L"折叠(&C)" : L"展开(&O)") : (isZh ? L"展开(&O)" : L"Expand(&O)"));
-            AppendMenuW(hMenu, MF_STRING, 202, isZh ? L"刷新快速访问(&R)" : L"Refresh Quick Access(&R)");
+            AppendMenuW(hMenu, MF_STRING, 201, isExpanded ? i18n.Pick(L"折叠(&C)", L"摺疊(&C)", L"Collapse(&C)", L"折りたたむ(&C)") : i18n.Pick(L"展开(&O)", L"展開(&O)", L"Expand(&O)", L"展開(&O)"));
+            AppendMenuW(hMenu, MF_STRING, 202, i18n.Pick(L"刷新快速访问(&R)", L"重新整理快速存取(&R)", L"Refresh Quick Access(&R)", L"クイック アクセスを更新(&R)"));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, 203, isZh ? L"恢复默认快速访问列表(&D)" : L"Restore Default Quick Access(&D)");
+            AppendMenuW(hMenu, MF_STRING, 203, i18n.Pick(L"恢复默认快速访问列表(&D)", L"還原預設快速存取清單(&D)", L"Restore Default Quick Access(&D)", L"既定のクイック アクセスに戻す(&D)"));
 
             int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                      ptScreen.x, ptScreen.y, 0, hwnd, nullptr);
@@ -1045,32 +1045,32 @@ LRESULT CALLBACK DirectoryTree::TreeSubclassProc(HWND hwnd, UINT msg,
                     ? L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
                     : pData->path;
 
-            bool isZh = I18n::Get().IsChinese();
+            auto& i18n = I18n::Get();
             bool isExpanded = (item.state & TVIS_EXPANDED) != 0;
             HTREEITEM hParent = TreeView_GetParent(hwnd, hSel);
             bool isQuickAccessChild = (hParent == pThis->m_hQuickAccess);
 
             HMENU hMenu = CreatePopupMenu();
-            AppendMenuW(hMenu, MF_STRING, 101, isZh ? L"在新标签页中打开(&T)" : L"Open in New Tab(&T)");
-            AppendMenuW(hMenu, MF_STRING, 102, isZh ? L"在后台新标签页中打开(&B)" : L"Open in Background Tab(&B)");
-            AppendMenuW(hMenu, MF_STRING, 103, isZh ? L"在新栏中打开(&S)" : L"Open in New Pane(&S)");
+            AppendMenuW(hMenu, MF_STRING, 101, i18n.Pick(L"在新标签页中打开(&T)", L"在新分頁中開啟(&T)", L"Open in New Tab(&T)", L"新しいタブで開く(&T)"));
+            AppendMenuW(hMenu, MF_STRING, 102, i18n.Pick(L"在后台新标签页中打开(&B)", L"在背景新分頁中開啟(&B)", L"Open in Background Tab(&B)", L"バックグラウンド タブで開く(&B)"));
+            AppendMenuW(hMenu, MF_STRING, 103, i18n.Pick(L"在新栏中打开(&S)", L"在新窗格中開啟(&S)", L"Open in New Pane(&S)", L"新しいペインで開く(&S)"));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
             if (isQuickAccessChild) {
-              AppendMenuW(hMenu, MF_STRING, 114, isZh ? L"从快速访问中取消固定(&U)" : L"Unpin from Quick Access(&U)");
+              AppendMenuW(hMenu, MF_STRING, 114, i18n.Pick(L"从快速访问中取消固定(&U)", L"從快速存取取消釘選(&U)", L"Unpin from Quick Access(&U)", L"クイック アクセスからピン留めを外す(&U)"));
             } else if (pData->path != L"This PC") {
-              AppendMenuW(hMenu, MF_STRING, 115, isZh ? L"固定到快速访问(&P)" : L"Pin to Quick Access(&P)");
+              AppendMenuW(hMenu, MF_STRING, 115, i18n.Pick(L"固定到快速访问(&P)", L"釘選至快速存取(&P)", L"Pin to Quick Access(&P)", L"クイック アクセスにピン留め(&P)"));
             }
-            AppendMenuW(hMenu, MF_STRING, 108, isZh ? L"添加到链接栏(&L)" : L"Add to Links Bar(&L)");
+            AppendMenuW(hMenu, MF_STRING, 108, i18n.Pick(L"添加到链接栏(&L)", L"加入連結列(&L)", L"Add to Links Bar(&L)", L"リンク バーに追加(&L)"));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, 104, isExpanded ? (isZh ? L"折叠(&C)" : L"Collapse(&C)") : (isZh ? L"展开(&O)" : L"Expand(&O)"));
-            AppendMenuW(hMenu, MF_STRING, 105, isZh ? L"刷新该节点(&R)" : L"Refresh Node(&R)");
+            AppendMenuW(hMenu, MF_STRING, 104, isExpanded ? i18n.Pick(L"折叠(&C)", L"摺疊(&C)", L"Collapse(&C)", L"折りたたむ(&C)") : i18n.Pick(L"展开(&O)", L"展開(&O)", L"Expand(&O)", L"展開(&O)"));
+            AppendMenuW(hMenu, MF_STRING, 105, i18n.Pick(L"刷新该节点(&R)", L"重新整理此節點(&R)", L"Refresh Node(&R)", L"ノードを更新(&R)"));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, 106, isZh ? L"在资源管理器中打开(&E)" : L"Open in File Explorer(&E)");
-            AppendMenuW(hMenu, MF_STRING, 107, isZh ? L"复制完整路径(&A)" : L"Copy Full Path(&A)");
-            AppendMenuW(hMenu, MF_STRING, 109, isZh ? L"打开命令CMD(&D)" : L"Open CMD(&D)");
+            AppendMenuW(hMenu, MF_STRING, 106, i18n.Pick(L"在资源管理器中打开(&E)", L"在檔案總管中開啟(&E)", L"Open in File Explorer(&E)", L"エクスプローラーで開く(&E)"));
+            AppendMenuW(hMenu, MF_STRING, 107, i18n.Pick(L"复制完整路径(&A)", L"複製完整路徑(&A)", L"Copy Full Path(&A)", L"フルパスをコピー(&A)"));
+            AppendMenuW(hMenu, MF_STRING, 109, i18n.Pick(L"打开命令CMD(&D)", L"開啟命令提示字元 CMD(&D)", L"Open CMD(&D)", L"コマンド プロンプトを開く(&D)"));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuW(hMenu, MF_STRING, 110, isZh ? L"显示系统右键菜单(&M)..." : L"Show System Context Menu(&M)...");
-            AppendMenuW(hMenu, MF_STRING, 111, isZh ? L"属性(&P)" : L"Properties(&P)");
+            AppendMenuW(hMenu, MF_STRING, 110, i18n.Pick(L"显示系统右键菜单(&M)...", L"顯示系統右鍵功能表(&M)...", L"Show System Context Menu(&M)...", L"システム コンテキスト メニューを表示(&M)..."));
+            AppendMenuW(hMenu, MF_STRING, 111, i18n.Pick(L"属性(&P)", L"內容(&P)", L"Properties(&P)", L"プロパティ(&P)"));
 
             int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                      ptScreen.x, ptScreen.y, 0, hwnd, nullptr);

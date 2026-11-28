@@ -154,6 +154,8 @@
 // Language
 #define ID_LANG_ZH                      40070
 #define ID_LANG_EN                      40071
+#define ID_LANG_ZH_TW                   40200
+#define ID_LANG_JA                      40201
 
 // Layouts
 #define ID_VIEW_LAYOUT_1X1              40081

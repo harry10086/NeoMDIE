@@ -55,8 +55,7 @@ HWND FilterBar::Create(HWND hwndParent, int id) {
 
 void FilterBar::UpdateLanguage() {
     if (m_hwndEdit) {
-        bool isZh = I18n::Get().IsChinese();
-        SendMessageW(m_hwndEdit, EM_SETCUEBANNER, TRUE, (LPARAM)(isZh ? L"搜索过滤..." : L"Search & Filter..."));
+        SendMessageW(m_hwndEdit, EM_SETCUEBANNER, TRUE, (LPARAM)I18n::Get().Pick(L"搜索过滤...", L"搜尋篩選...", L"Search & Filter...", L"検索・フィルター..."));
     }
 }
 
@@ -121,13 +120,13 @@ void FilterBar::UpdateLayout(int x, int y, int width, int height) {
 }
 
 void FilterBar::ShowOptionsMenu() {
-    bool isZh = I18n::Get().IsChinese();
+    auto& i18n = I18n::Get();
     HMENU hMenu = CreatePopupMenu();
 
     AppendMenuW(hMenu, MF_STRING | (m_searchSubfolders ? MF_CHECKED : MF_UNCHECKED),
-                1, isZh ? L"包含子文件夹 (递归搜索)" : L"Include Subfolders (Recursive)");
+                1, i18n.Pick(L"包含子文件夹 (递归搜索)", L"包含子資料夾 (遞迴搜尋)", L"Include Subfolders (Recursive)", L"サブフォルダーを含める (再帰検索)"));
     AppendMenuW(hMenu, MF_STRING | (m_matchCase ? MF_CHECKED : MF_UNCHECKED),
-                2, isZh ? L"区分大小写" : L"Match Case");
+                2, i18n.Pick(L"区分大小写", L"區分大小寫", L"Match Case", L"大文字と小文字を区別する"));
 
     RECT rcBtn;
     GetWindowRect(m_hwndOptBtn, &rcBtn);
